@@ -84,17 +84,26 @@ def draw(kind: str, name: str, photos: list, out_dir: Path, *,
     """Draw the sheet from the element's real photos into out_dir.
 
     Never raises: {"ok", "path", "generation_id", "error"}. `photos` are
-    the uploads on disk (the sheet itself is skipped if it is among
-    them, so redrawing never grounds on the last drawing).
+    the uploads: paths on disk, or `(filename, bytes)` pairs for a photo
+    that lives in the bucket and not on this machine (2026-10-04 -- the
+    deployed API has no folder, so the route fetches them). The sheet
+    itself is skipped if it is among them, so redrawing never grounds on
+    the last drawing.
     """
     from . import nano_banana
     try:
         refs = []
-        for i, photo in enumerate(photos):
-            photo = Path(photo)
-            if is_sheet(photo.name) or not photo.is_file():
-                continue
-            refs.append((f"{name} — photo {len(refs) + 1}", photo.read_bytes()))
+        for photo in photos:
+            if isinstance(photo, tuple):
+                filename, data = photo
+                if is_sheet(str(filename)) or not data:
+                    continue
+            else:
+                photo = Path(photo)
+                if is_sheet(photo.name) or not photo.is_file():
+                    continue
+                data = photo.read_bytes()
+            refs.append((f"{name} — photo {len(refs) + 1}", data))
             if len(refs) >= MAX_REFERENCES:
                 break
         if not refs:

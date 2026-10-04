@@ -216,7 +216,8 @@ export const organizeGenerated = (id: number, body: { folder?: string; starred?:
   });
 
 /* ── the board and the queue ── */
-export type KeyframeQuote = { stills: number; each: number; credits: number };
+/** `part` is set when the quote is for ONE shot of a timed scene (2026-10-04) */
+export type KeyframeQuote = { stills: number; each: number; credits: number; part?: number };
 export type Concept = {
   id: number;
   n: string;
@@ -534,9 +535,12 @@ export const queueCount = (brand?: string) =>
 /** The priced approve for a scene's keyframes (2026-09-29): nothing is
  *  drawn until this is pressed. 402 out_of_credits when the whole strip
  *  does not fit the balance. */
-export const drawKeyframes = (id: number) =>
+export const drawKeyframes = (id: number, part?: number) =>
   apiFetch<{ ok: boolean; job_id: number | null; keyframes: KeyframeQuote }>(`/concepts/${id}/keyframes`, {
     method: "POST",
+    // `part` draws ONE shot's still (the composer's per-card approve,
+    // 2026-10-04); no body means the whole strip, as the Queue card asks
+    ...(part != null ? { body: JSON.stringify({ part }) } : {}),
   });
 
 export const pickConcept = (id: number, picked = true) =>

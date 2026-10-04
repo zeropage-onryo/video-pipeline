@@ -644,10 +644,65 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .zc .zc-tilewrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+}
+/* the per-card approve, over the tile's top-left corner (2026-10-04) */
+.zc .zc-approve {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  height: 26px;
+  padding: 0 9px 0 7px;
+  border-radius: 7px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(0 0 0 / 0.78);
+  color: var(--zc-ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zc .zc-approve svg {
+  width: 12px;
+  height: 12px;
+  color: var(--signal);
+}
+.zc .zc-approve:hover:enabled {
+  border-color: var(--signal);
+  background: rgb(0 0 0 / 0.92);
+}
+.zc .zc-approve:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zc .zc-tile.drawing {
+  cursor: progress;
+}
+.zc .zc-drawing {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: rgb(0 0 0 / 0.78);
+  color: var(--zc-ink-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .zc .zc-tile {
   position: relative;
@@ -793,6 +848,12 @@
 .zc .zc-act:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.zc .zc-act.on {
+  border-color: var(--signal);
+}
+.zc .zc-act.on svg {
+  color: var(--signal);
 }
 .zc .zc-act svg {
   width: 14px;

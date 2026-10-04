@@ -1835,6 +1835,28 @@ is yours, in Resolve, by hand.
   `EMPTY_DRAFT.mode` is `create` now. Verified in the Browser pane against a stubbed
   API (real routes, real rows, every model call replaced): send, slash, drop, Guide,
   reload, resume, Stop, New session, 390px.
+- **THE CUE CARDS GET IMAGES AND APPROVALS (2026-10-04, Mike's call).** A VIDEO send's
+  shot tiles in the composer (`turns.tsx`) carry a per-card priced approve -- "Draw · 10"
+  -- which posts `POST /api/concepts/{id}/keyframes {"part": n}`: the Queue's keyframe
+  approve, now able to draw ONE shot of a timed scene (`scene_chain.pick_skip_reason`,
+  `stills_to_draw`, `keyframe_quote`, `draw_on_pick`, `keyframe_scene` all take `part`;
+  `_keyframe_timeline(only=)` leaves every other shot as it is and sets the scene's own
+  `reference_image` only from SHOT 1's still, so drawing shot 3 first never makes the
+  card's frame a mid-scene one). The still lands on the tile when the job does; "Draw all
+  N" under the strip is the whole-strip approve, as before; no body means the whole strip,
+  so the Queue card is byte for byte what it was. `Made` carries the card's `keyframes`
+  quote and `picked`, read off `GET /api/concepts/{id}` after every draw and once per
+  visit (a still drawn in the Queue shows here too), and **Pick is real on the card**
+  (`POST /concepts/{id}/pick`), so a scene reaches the Queue without a trip to Pipeline.
+  **Element sheets never drew on the deployed site, and now do (same day, Mike: "I'm
+  still not able to have the model come up with element sheets").** `_start_sheet_job`
+  read the element's folder on disk, and Fly has no folder (characters/ props/ locations/
+  are gitignored AND dockerignored, every photo lives in R2): the create hook started no
+  job, the card's button answered "add a photo first", and the live `generations` table
+  held not one sheet attempt. The photos now come off `_sheet_sources` -- the gallery's
+  own listing, disk first else the bucket under the account's keys -- fetched through
+  `_photo_bytes` and handed to `element_sheet.draw` as `(filename, bytes)` pairs (paths
+  still work; a sheet already drawn is never a source for the next one).
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

@@ -67,11 +67,13 @@ import {
   announceBalanceChange,
   announceQueueChange,
   cancelJob,
+  drawKeyframes,
   getAssets,
   getCapabilities,
   getConceptDetail,
   getPresets,
   getProject,
+  pickConcept,
   recallActiveProject,
   rememberActiveProject,
   runCreativeGuide,
@@ -117,7 +119,8 @@ import {
   type Output,
   type SlashCommand,
 } from "@/lib/composer";
-import { ComposerStream, type Live } from "@/components/studio/composer/turns";
+import { ComposerStream, type Drawing, type Live } from "@/components/studio/composer/turns";
+import { creditsText } from "@/lib/render-choice";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
 import "@/components/studio/composer/composer.css";
 
@@ -208,7 +211,7 @@ const imageFiles = (list: FileList | File[] | null | undefined) =>
   Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
 
 function Composer() {
-  const { brand, toast } = useShell();
+  const { brand, balance, toast } = useShell();
   const params = useSearchParams();
   const attachId = params.get("attach");
   // An idea typed into the landing page's hero arrives as ?spark= and the
@@ -286,6 +289,12 @@ function Composer() {
   // progress per running send, by made id -- page state, never saved: a
   // save per tick would be a PUT a second
   const [live, setLive] = useState<Record<string, Live>>({});
+  // which shot each send is drawing a still for (the cue cards' approve,
+  // 2026-10-04) -- page state, like `live`
+  const [drawing, setDrawing] = useState<Drawing>({});
+  // done video turns re-read once per visit, so a still drawn in the
+  // Queue (or a pick made on Pipeline) shows on the cards here
+  const refreshed = useRef(false);
   // the send this page is waiting on (one at a time), and every made id
   // this page has a poll running for, so a resume never doubles one up
   const running = useRef<{ madeId: string; jobId?: number; stopped: boolean } | null>(null);
@@ -509,6 +518,10 @@ function Composer() {
           title: detail?.title,
           parts: timeline?.parts ?? [],
           seconds: timeline?.seconds ?? detail?.duration ?? null,
+          // the cards' approvals: what the missing stills cost, and the pick
+          keyframes: detail?.keyframes ?? null,
+          picked: !!detail?.picked,
+          image: detail?.reference_image || null,
         });
         // the conversation did its job: the scene is on the board with its
         // prompt and references, so the Guide talk, the brief and the box
@@ -548,6 +561,83 @@ function Composer() {
         });
     }
   }, [ready, thread, patchMade, tick, finish]);
+
+  /* The cue cards, read back off the concept: its stills, its price for
+     the ones still missing, and whether it is picked. After a draw here,
+     and once per visit for every finished video turn (a still drawn in
+     the Queue, a pick made on Pipeline). Never a model call. */
+  const refreshMade = useCallback(
+    async (madeId: string, conceptId: number) => {
+      const detail = await getConceptDetail(conceptId).catch(() => null);
+      if (!detail) return;
+      const timeline = detail.timeline ?? detail.shots?.[0]?.timeline ?? null;
+      patchMade(madeId, {
+        parts: timeline?.parts ?? [],
+        keyframes: detail.keyframes ?? null,
+        picked: !!detail.picked,
+        image: detail.reference_image || null,
+        title: detail.title,
+      });
+    },
+    [patchMade],
+  );
+  useEffect(() => {
+    if (!ready || refreshed.current) return;
+    refreshed.current = true;
+    for (const t of thread) {
+      const m = t.made;
+      if (m && m.output === "video" && m.status === "done" && m.conceptId) void refreshMade(m.id, m.conceptId);
+    }
+  }, [ready, thread, refreshMade]);
+
+  /* The priced approve on a cue card (2026-10-04): one shot's still, or
+     every missing one with `part` left out. The click IS the approval,
+     the 2026-09-29 rule; a balance that cannot pay comes back as the
+     server's 402 and is said on a toast, never drawn half-way. */
+  const drawStills = async (m: Made, part?: number) => {
+    if (!m.conceptId || !m.keyframes || drawing[m.id] != null) return;
+    const conceptId = m.conceptId;
+    const credits = part != null ? m.keyframes.each : m.keyframes.credits;
+    setDrawing((d) => ({ ...d, [m.id]: part ?? "all" }));
+    try {
+      const res = await drawKeyframes(conceptId, part);
+      toast(
+        part != null
+          ? `Drawing shot ${String(part).padStart(2, "0")} — ${creditsText(credits, !!balance?.exempt)}`
+          : `Drawing ${res.keyframes.stills} stills — ${creditsText(credits, !!balance?.exempt)}`,
+      );
+      announceBalanceChange();
+      if (res.job_id) {
+        const job = await waitForJob(res.job_id);
+        if (job.status === "failed") toast(job.error || "The still did not draw", "err");
+      }
+      announceBalanceChange();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "That did not go through", "err");
+    } finally {
+      await refreshMade(m.id, conceptId);
+      setDrawing((d) => {
+        const n = { ...d };
+        delete n[m.id];
+        return n;
+      });
+    }
+  };
+
+  /* Pick, from the card: the board's own label (picked_at, the Queue's
+     door), posted from here so a scene worth rendering need not be found
+     again on Pipeline first. Spends nothing. */
+  const pick = async (m: Made) => {
+    if (!m.conceptId || m.picked) return;
+    try {
+      await pickConcept(m.conceptId, true);
+      patchMade(m.id, { picked: true });
+      toast("Picked · it is in the Queue to approve");
+      announceQueueChange();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "That did not go through", "err");
+    }
+  };
 
   /* Stop: the wait ends at once and the turn says so. The server is
      asked to cancel too, but nothing waits on its answer -- a job that
@@ -951,14 +1041,18 @@ function Composer() {
             <ComposerStream
               turns={thread}
               live={live}
+              drawing={drawing}
               choices={choices}
               working={guideWorking}
               handlers={{
                 busy,
+                exempt: !!balance?.exempt,
                 onAnimate: animate,
                 onUseAsRef: attachResult,
                 onReuse: reuse,
                 onSelect: select,
+                onDraw: (m, part) => void drawStills(m, part),
+                onPick: (m) => void pick(m),
                 onChip: (c) => {
                   setMode("guide");
                   setIdea(c);

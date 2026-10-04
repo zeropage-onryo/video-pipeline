@@ -110,3 +110,23 @@ def test_literal_skips_the_still_frame_wrapper_and_bank_false_keeps_it_off_the_w
     assert seen["prompt"] == "Five panels, FACE CLOSE UP first"
     assert seen["params"]["framing"] == "literal" and seen["params"]["source"] == "element_sheet"
     assert "banked" not in seen and out["asset_id"] is None
+
+
+def test_draw_takes_photos_as_bytes_when_they_live_in_the_bucket(tmp_path, monkeypatch):
+    """The deployed API has no folder: the route fetches the photos and
+    hands (filename, bytes) pairs, which ground the sheet exactly as the
+    files on disk do -- the sheet itself and an empty fetch skipped."""
+    rendered = tmp_path / "wf.png"
+    rendered.write_bytes(b"png")
+    calls = []
+    monkeypatch.setattr(nano_banana, "generate_from_prompt",
+                        lambda prompt, **kw: calls.append(kw) or
+                        {"ok": True, "path": str(rendered), "generation_id": 3})
+    out = tmp_path / "michael"
+    result = element_sheet.draw("character", "Michael",
+                                [("a.jpg", b"photo-a"), ("sheet.jpg", b"old"), ("c.jpg", None),
+                                 ("b.jpg", b"photo-b")], out)
+    assert result["ok"] and result["path"] == out / "sheet.jpg"
+    assert [data for _, data in calls[0]["reference_image"]] == [b"photo-a", b"photo-b"]
+    assert element_sheet.draw("prop", "x", [("sheet.jpg", b"old")], out)["error"] == \
+        "no photos to draw the sheet from"

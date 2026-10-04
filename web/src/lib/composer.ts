@@ -23,7 +23,7 @@
    Progress ticks stay in page state (a save per tick would be a PUT a
    second); only the result and the status changes are saved. */
 import { API_URL } from "@/lib/api";
-import { getJob, type Job, type TimelinePart } from "@/lib/studio-api";
+import { getJob, type Job, type KeyframeQuote, type TimelinePart } from "@/lib/studio-api";
 
 export type Output = "image" | "video";
 
@@ -51,7 +51,8 @@ export type Made = {
   /** the server job, so a run left mid-way is picked up on return */
   jobId?: number;
   conceptId?: number | null;
-  /** IMAGE: the rendered still (absolute or /refs path) */
+  /** IMAGE: the rendered still (absolute or /refs path); VIDEO: the
+   *  scene's own still (shot 1's) once one is drawn */
   image?: string | null;
   /** VIDEO: the scene's title and its timed shots, when it planned any */
   title?: string;
@@ -61,6 +62,11 @@ export type Made = {
   frame?: string;
   /** the shot (or image) the person selected; Director opens on it */
   shot?: number;
+  /** VIDEO: what drawing the shots still without a still would cost
+   *  (the concept card's quote, 2026-10-04); null when every shot has one */
+  keyframes?: KeyframeQuote | null;
+  /** VIDEO: picked for the Queue from here (or on Pipeline), read back */
+  picked?: boolean;
 };
 
 export const newMadeId = () =>

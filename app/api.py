@@ -1624,7 +1624,26 @@ def _start_sheet_job(plural: str, slug: str, name: str, *, detail: str = "",
     def work(job):
         jobs.progress(job, 0.1, "reading the photos")
         directory = base_dir / slug
-        photos = [directory / n for n in _photo_names(base_dir, slug)]
+        # THE PHOTOS COME OFF THE SAME LISTING THE GALLERY READS (2026-10-04,
+        # Mike: "I'm still not able to have the model come up with element
+        # sheets"). This used to read the folder on disk, and the deployed
+        # API has no folder: characters/ props/ locations/ are gitignored
+        # AND dockerignored, so on Fly every element's photos live in R2
+        # only, the folder scan answered [], and the draw never reached the
+        # image model -- the live generations table holds not one sheet
+        # attempt. Disk first (the Mac reads its own files), else the
+        # bucket under this account's keys, fetched through _photo_bytes;
+        # the sheet itself is never a source for the next sheet.
+        photos = []
+        for url in _sheet_sources(kind, base_dir, slug, account_id):
+            filename = str(url).split("?")[0].rsplit("/", 1)[-1]
+            local = directory / filename
+            try:
+                data = local.read_bytes() if local.is_file() else _photo_bytes(url)
+            except OSError:
+                data = None
+            if data:
+                photos.append((filename, data))
         jobs.progress(job, 0.3, "drawing the sheet")
         result = element_sheet.draw(kind, name, photos, directory,
                                     detail=detail, notes=notes,
@@ -1640,6 +1659,15 @@ def _start_sheet_job(plural: str, slug: str, name: str, *, detail: str = "",
                       account_id=account_id)
 
 
+def _sheet_sources(kind: str, base_dir: Path, slug: str,
+                   account_id: Optional[int]) -> list:
+    """The real photos a sheet is drawn from: the element's listing (disk
+    first, else the bucket -- _asset_photo_urls' rule) minus any sheet
+    already drawn, so a redraw never grounds on the last drawing."""
+    return [u for u in _asset_photo_urls(kind, base_dir, slug, account_id)
+            if not element_sheet.is_sheet(str(u).split("?")[0].rsplit("/", 1)[-1])]
+
+
 def _maybe_sheet_job(form, plural: str, slug: str, name: str, *,
                      detail: str = "", notes: str = "",
                      account_id: int) -> Optional[int]:
@@ -1648,7 +1676,8 @@ def _maybe_sheet_job(form, plural: str, slug: str, name: str, *,
     an error, because the element itself saved fine."""
     if not _sheet_wanted(form) or not _gemini_key(account_id):
         return None
-    if not _photo_names(_sheet_kind(plural)[1], slug):
+    kind, base_dir = _sheet_kind(plural)
+    if not _sheet_sources(kind, base_dir, slug, account_id):
         return None
     return _start_sheet_job(plural, slug, name, detail=detail, notes=notes,
                             account_id=account_id)["id"]
@@ -1677,7 +1706,7 @@ def asset_draw_sheet(plural: str, item_id: int,
     if row is None:
         return _error(404, "not_found", f"no such {kind}")
     slug = _slug(row["name"])
-    if not [n for n in _photo_names(base_dir, slug) if not element_sheet.is_sheet(n)]:
+    if not _sheet_sources(kind, base_dir, slug, account_id):
         return _error(400, "no_photos", "add a photo first -- a sheet is drawn from the real ones")
     job = _start_sheet_job(plural, slug, row["name"], detail=detail,
                            notes=row.get("notes") or "", account_id=account_id)
@@ -1793,14 +1822,15 @@ def _ref_sources(refs: list, sources: Optional[dict]) -> list:
     return out
 
 
-def _keyframe_quote(concept: dict) -> Optional[dict]:
+def _keyframe_quote(concept: dict, part: Optional[int] = None) -> Optional[dict]:
     """{stills, each, credits} for drawing this scene's keyframes, or None
     when there is nothing to draw. Priced for the image model THIS server
     draws keyframes with (nano_banana.MODEL), so the label never quotes the
     other model. Whether the account is actually charged is the balance's
-    `exempt`, which the card reads beside it."""
+    `exempt`, which the card reads beside it. `part` prices ONE shot of a
+    timed scene (the composer's per-card approve, 2026-10-04)."""
     from src import scene_chain
-    return scene_chain.keyframe_quote(concept)
+    return scene_chain.keyframe_quote(concept, part)
 
 
 def _concept_card(c: dict, subscription_ids: Optional[set] = None,
@@ -2613,10 +2643,11 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
     return {"job_id": job["id"], "brand": brand}
 
 
-def _keyframe_on_pick(concept: dict, account_id: int):
+def _keyframe_on_pick(concept: dict, account_id: int, part: Optional[int] = None):
     """Render the picked scene's still(s), in the background. Returns a
     job id, or None when there is nothing to do. Called by the priced
     approve (`concept_keyframes`), not by the pick, since 2026-09-29.
+    `part` draws one shot of a timed scene (2026-10-04).
 
     WHY HERE AND NOT IN THE NIGHT (2026-09-08, Mike's call). The nightly
     graph's keyframe step is off (`ZEROPAGE_KEYFRAME=0`, a deliberate
@@ -2647,10 +2678,12 @@ def _keyframe_on_pick(concept: dict, account_id: int):
     # The guard is scene_chain's, asked here so a skip costs no job at
     # all, and asked again inside draw_on_pick so the MCP door cannot
     # drift away from this one.
-    if scene_chain.pick_skip_reason(concept):
+    if scene_chain.pick_skip_reason(concept, part):
         return None
     concept_id = concept.get("id")
     title = (concept.get("title") or f"concept {concept_id}")[:60]
+    if part is not None:
+        title = f"{title} · shot {part}"
 
     def work(job):
         from google import genai
@@ -2661,7 +2694,7 @@ def _keyframe_on_pick(concept: dict, account_id: int):
         result = scene_chain.draw_on_pick(
             concept_id, db_path=None, account_id=account_id,
             resolve_photo=_resolve_asset_photo,
-            gemini_client=genai.Client(api_key=api_key))
+            gemini_client=genai.Client(api_key=api_key), part=part)
         if result.get("skipped"):
             return {"detail": result["skipped"]}
         if not result.get("ok"):
@@ -2719,8 +2752,15 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
             "pick": preprod.pick_rate(account_id=account_id)}
 
 
+class KeyframesBody(BaseModel):
+    """`part`: draw ONE shot of a timed scene (the composer's per-card
+    approve, 2026-10-04); absent means the whole strip, as before."""
+    part: Optional[int] = None
+
+
 @router.post("/concepts/{concept_id}/keyframes")
-def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_account_id)):
+def concept_keyframes(concept_id: int, body: Optional[KeyframesBody] = None,
+                      account_id: int = Depends(auth.current_account_id)):
     """The priced approve for a scene's keyframes (2026-09-29, Mike's call:
     "an approve button before each render that spends credits"). The card
     shows `keyframes` -- how many stills, what they cost -- and nothing is
@@ -2730,15 +2770,21 @@ def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_ac
     that runs dry halfway leaves a scene half-anchored, so it is refused
     with "top up" instead (402 out_of_credits). Each still still holds and
     settles its own credit inside nano_banana, exactly as before; this is
-    the check in front of them. Exempt accounts are never refused."""
+    the check in front of them. Exempt accounts are never refused.
+
+    With `{"part": n}` (2026-10-04, Mike: the composer's cue cards get
+    images and approvals) ONE shot's still is drawn and priced, and the
+    scene's other shots are left exactly as they are -- so a person can
+    approve the shots one card at a time instead of the strip at once."""
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
-    quote = _keyframe_quote(concept)
+    part = body.part if body is not None else None
+    quote = _keyframe_quote(concept, part)
     if not quote:
         from src import scene_chain
         return _error(409, "nothing_to_draw",
-                      scene_chain.pick_skip_reason(concept) or "nothing to draw")
+                      scene_chain.pick_skip_reason(concept, part) or "nothing to draw")
     if not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     from src import accounts, ledger
@@ -2750,7 +2796,7 @@ def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_ac
             return _out_of_credits(
                 ledger.InsufficientCredit(account_id, quote["credits"], have),
                 f"{quote['stills']} keyframe{'s' if quote['stills'] != 1 else ''}")
-    job_id = _keyframe_on_pick(concept, account_id)
+    job_id = _keyframe_on_pick(concept, account_id, part=part)
     return {"ok": True, "job_id": job_id, "keyframes": quote}
 
 

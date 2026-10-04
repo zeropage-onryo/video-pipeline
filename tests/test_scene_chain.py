@@ -462,3 +462,83 @@ def test_ground_honours_an_explicit_pick(tmp_db, cast_photo_dirs, monkeypatch):
                                   refs=["/characters/mike/photo/a.png"])
 
     assert "Mike" in grounded["cast"]
+
+
+# --- the cue cards' per-shot approve (2026-10-04) ----------------------------
+
+def _timed(path, parts=3, drawn=()):
+    """A one-shot scene whose CURRENT timeline has `parts` shots; the
+    parts numbered in `drawn` already carry a still."""
+    from src import timeline
+    shot = {"n": 1, "type": "BROLL", "source": "AI", "tool": "LTX",
+            "prompt": "(0-3s) a. (3-6s) b. (6-9s) c.", "refs": [SEED_REF]}
+    shot["timeline"] = {
+        "seconds": 9, "planner": "split", "continuity": "",
+        "source": timeline.source_hash(shot["prompt"], shot["refs"]),
+        "parts": [{"n": i + 1, "start": 3 * i, "end": 3 * i + 3, "seconds": 3,
+                   "text": f"shot {i + 1}", "prompt": f"shot {i + 1}", "refs": [SEED_REF],
+                   **({"reference_image": f"https://cdn/had-{i + 1}.png"}
+                      if i + 1 in drawn else {})}
+                  for i in range(parts)]}
+    return preprod.save_concept({"title": "T", "hook": "", "logline": "", "shots": [shot]},
+                                brand="zeropage", prompt_template="T", dsn=path,
+                                account_id=None)
+
+
+def _parts(path, cid):
+    return preprod.get_concept(cid, dsn=path, account_id=None)["shots"][0]["timeline"]["parts"]
+
+
+def test_a_part_draws_one_shot_and_leaves_the_rest(tmp_db, seams, monkeypatch):
+    """Shot 2 approved from its card: one still, on part 2 only, and the
+    scene's own frame (shot 1's) is NOT set from a mid-scene still."""
+    monkeypatch.setattr(imagery, "image_bytes_for_gemini",
+                        lambda value, resolve_photo=None: b"\xff\xd8ok")
+    cid = _timed(tmp_db)
+    assert scene_chain.pick_skip_reason(
+        preprod.get_concept(cid, dsn=tmp_db, account_id=None), part=2) is None
+    assert scene_chain.stills_to_draw(
+        preprod.get_concept(cid, dsn=tmp_db, account_id=None), part=2) == 1
+
+    result = scene_chain.keyframe_scene(cid, 1, db_path=tmp_db, part=2)
+    assert result["ok"], result
+    assert len(seams["nano"]) == 1
+    assert "SHOT 2 OF 3" in seams["nano"][0]["prompt"]
+    parts = _parts(tmp_db, cid)
+    assert [bool(p.get("reference_image")) for p in parts] == [False, True, False]
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+    assert not shot.get("reference_image")        # shot 1 is still the card's frame
+
+    # the quote now prices the two still missing, and part 2 is a skip
+    concept = preprod.get_concept(cid, dsn=tmp_db, account_id=None)
+    assert scene_chain.stills_to_draw(concept) == 2
+    assert scene_chain.pick_skip_reason(concept, part=2) == "already has a still"
+    assert scene_chain.pick_skip_reason(concept, part=9) == "no shot 9"
+
+    # shot 1 next: drawn alone, and it IS the scene's frame
+    assert scene_chain.keyframe_scene(cid, 1, db_path=tmp_db, part=1)["ok"]
+    assert len(seams["nano"]) == 2
+    shot = preprod.get_concept(cid, dsn=tmp_db, account_id=None)["shots"][0]
+    assert shot["reference_image"] == f"https://cdn/key-{cid}.png"
+    assert [bool(p.get("reference_image")) for p in _parts(tmp_db, cid)] == [True, True, False]
+
+
+def test_a_part_rides_the_previous_still_only_when_that_shot_has_one(
+        tmp_db, seams, monkeypatch):
+    """Continuity is the previous shot's still, labelled; with shot 1 undrawn,
+    shot 2 is drawn with its refs alone rather than with a blank."""
+    monkeypatch.setattr(imagery, "image_bytes_for_gemini",
+                        lambda value, resolve_photo=None: b"\xff\xd8ok")
+    cid = _timed(tmp_db)
+    scene_chain.keyframe_scene(cid, 1, db_path=tmp_db, part=2)
+    assert [label for label, _ in seams["nano"][0]["refs"]] == [shootgen.reference_label(SEED_REF)]
+    cid2 = _timed(tmp_db, drawn=(1,))
+    scene_chain.keyframe_scene(cid2, 1, db_path=tmp_db, part=2)
+    assert scene_chain.CONTINUITY_REF_LABEL in [label for label, _ in seams["nano"][1]["refs"]]
+
+
+def test_a_part_on_a_scene_that_renders_whole_is_a_skip(tmp_db, seams):
+    concept = preprod.get_concept(a_scene(tmp_db), dsn=tmp_db, account_id=None)
+    assert scene_chain.pick_skip_reason(concept, part=1) == "not a timed scene"
+    assert scene_chain.keyframe_quote(concept, part=1) is None
+    assert scene_chain.keyframe_quote(concept) is not None
