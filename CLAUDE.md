@@ -1815,6 +1815,43 @@ is yours, in Resolve, by hand.
   `EMPTY_DRAFT.mode` is `create` now. Verified in the Browser pane against a stubbed
   API (real routes, real rows, every model call replaced): send, slash, drop, Guide,
   reload, resume, Stop, New session, 390px.
+- **THE BRAIN IS THE COMPOSER, AND IT MAKES (2026-10-04, Mike: "there is no guide
+  button, it is all in one place where you can toggle between image and video that are
+  connected to the reasoning/brain"; found when "Let's bounce ideas of what the ad should
+  be" in Image mode drew a Red Bull packshot instead of answering).** The Guide toggle is
+  gone from the React composer: EVERY send is a Guide turn (`POST /api/creative-guide`
+  with `output=image|video`, the Image | Video switch), and the model decides between
+  talking and making. Two write tools, `guide_tools.MAKE_TOOLS` (`make_image`,
+  `make_video`), are published only to a maker turn (`session(maker=True)`); the turn
+  ends on the call as a proposal, as every write does, and the STUDIO runs it -- the page
+  posts the brain's prompt to `/api/generate/run` (image, with the picked `image_model`)
+  or `/api/scenes/run` (video) at once, no confirm card, since the send was the ask and
+  nothing a make does spends more than a still. `/creative-guide/act` and `guide_tools.run`
+  refuse the make tools. `prompts/creative_guide_make.txt` is the rule the brain follows:
+  make ONLY on an ask in this turn in so many words or a confirmed offer, talk on "let's
+  bounce ideas", and write the prompt as the work; `creative_guide.OUTPUT_NOTES` tells it
+  which thing a "make it" means. The Fast / Reasoning pill is the brain's and shows in
+  both outputs; a personal connection (ChatGPT / Claude) has no tools, so it talks and
+  the brief's Make button is how it makes. Without the guide (no Gemini key) a send makes
+  directly, as before. On the page: the brain's one-line answer carries `made` (the tiles
+  under its words), the person's own bubble carries it when they pressed Make on the brief,
+  and the conversation the brain reads says what each make produced. The draft's `mode`
+  is stored and read by nothing.
+  **Images come from fal too (same day, Mike's call).** `fal.IMAGE_MODELS` is five
+  models (FLUX 1.1 Pro, FLUX.2 Pro, Nano Banana Pro through fal, Seedream 4.0, Ideogram
+  3), each with its text endpoint, an `edit` endpoint when it takes references
+  (`image_urls`), how it wants the frame (`size`: wh / aspect / enum), a dated price and
+  a source URL. `GET /api/image-models` is the composer's picker, a PROJECTION: Nano
+  Banana on the Gemini key plus fal's table when `FAL_KEY` is set, with credits per still.
+  `/api/generate/run` takes `image_model`: a fal id goes through
+  `fal.generate_image_from_prompt`, which now takes the SAME charge a Nano still does
+  (hold at `fal.image_usd(model, aspect)` before the submit, settle on the generations
+  row, release on failure), banks the still on the Assets wall under its model, uploads
+  each reference public through `as_image_url`, and reports `references` so the card
+  says when a text-only model drew from the prompt alone. A megapixel is 1024x1024 and
+  every frame in `fal.IMAGE_SIZES` is under one. **THE FOUR ADDED MODELS' PRICES AND IDS
+  ARE FROM MEMORY**: fal.ai was unreachable from the build session, so each `checked`
+  says so -- read each `source` page before the first paid render on it (BACKLOG #23).
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

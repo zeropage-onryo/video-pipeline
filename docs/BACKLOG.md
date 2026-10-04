@@ -1194,3 +1194,18 @@ an email change. Left out on purpose, each a small build when wanted:
 - **Avatar upload.** `users.avatar_url` only ever comes from the OAuth
   provider.
 
+
+## 23. Verify the fal image models' ids, shapes and prices  (2026-10-04, with the composer's image picker)
+
+`fal.IMAGE_MODELS` grew four entries on 2026-10-04 (FLUX.2 Pro, Nano Banana Pro
+through fal, Seedream 4.0, Ideogram 3) so the composer's Image output can pick
+which model draws. fal.ai was unreachable from the build session (the proxy
+refused the tunnel), so every one of those four carries its endpoint id, its
+edit endpoint, its frame shape and its per-image price FROM MEMORY of the
+model pages as of mid-2026, and each entry's `checked` field says so. Before
+the first paid render on any of them: open the entry's `source`, confirm the
+id (a wrong one fails the submit loudly, which is the safe failure), the
+`image_urls` field name on the edit endpoint, the `image_size` / `aspect_ratio`
+shape, and the price (a wrong one mis-charges credits -- the unsafe failure).
+`flux-pro1.1` was read live on 2026-09-08 and is fine. `tests/test_fal.py`
+pins the table's shape, not its numbers.

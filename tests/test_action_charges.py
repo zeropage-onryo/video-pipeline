@@ -418,3 +418,58 @@ def test_every_nano_caller_forwards_the_account():
                     and not any(k.arg == "account_id" for k in node.keywords)):
                 missing.append(f"{rel}:{node.lineno}")
     assert not missing, f"nano_banana.generate_from_prompt without account_id: {missing}"
+
+
+# --- the composer picks the image model (2026-10-04) --------------------------
+
+def test_image_models_is_a_projection_of_the_keys_on_file(client, monkeypatch):
+    from src import fal, nano_banana, pricing
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.setattr(nano_banana, "has_key", lambda account_id=None: True)
+    res = client.get("/api/image-models")
+    assert res.status_code == 200
+    body = res.json()
+    assert [i["id"] for i in body["items"]] == ["nano"] and body["default"] == "nano"
+    assert body["items"][0]["credits"] == pricing.still_credits(nano_banana.MODEL)
+    monkeypatch.setenv("FAL_KEY", "k")
+    body = client.get("/api/image-models").json()
+    assert [i["id"] for i in body["items"]] == ["nano", *fal.IMAGE_MODELS]
+    seedream = next(i for i in body["items"] if i["id"] == "seedream4")
+    assert seedream["provider"] == "fal" and seedream["references"] is True
+    assert seedream["credits"] == pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4")))
+
+
+def test_the_composers_image_door_draws_on_the_picked_fal_model(client, studio, monkeypatch):
+    from app import api
+    from src import fal, shootgen
+    seen = {}
+    monkeypatch.setattr(shootgen, "reference_block", lambda **k: "")
+    monkeypatch.setattr(api, "_enhance_generate_prompt", lambda *a, **k: "ENHANCED")
+    monkeypatch.setattr(nano_banana, "generate_from_prompt",
+                        lambda *a, **k: pytest.fail("Nano drew a still the person asked fal for"))
+
+    def fake_fal(prompt, **kw):
+        seen.update(kw, prompt=prompt)
+        return {"ok": True, "media_url": "/renders/fal/x.jpg", "references": 0}
+
+    monkeypatch.setattr(fal, "generate_image_from_prompt", fake_fal)
+    import google.genai as genai_mod
+    monkeypatch.setattr(genai_mod, "Client", lambda api_key=None: object())
+    _fund(studio)
+    form = {"prompt": "a still", "output": "image", "brand": "zeropage",
+            "image_model": "seedream4", "aspect": "4:5"}
+    # no fal key: refused before the job, no enhance paid for
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    res = client.post("/api/generate/run", data=form)
+    assert res.status_code == 503
+    res = client.post("/api/generate/run", data={**form, "image_model": "dall-e"})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "bad_model"
+    monkeypatch.setenv("FAL_KEY", "k")
+    res = client.post("/api/generate/run", data=form)
+    assert res.status_code == 200, res.text
+    job = _wait(client, res.json()["job_id"])
+    assert job["status"] == "done", job
+    assert seen["prompt"] == "ENHANCED" and seen["model"] == "seedream4"
+    assert seen["aspect"] == "4:5" and seen["approved"] is True
+    assert seen["account_id"] == studio["account_id"]
+    assert "Seedream 4.0" in job["detail"]

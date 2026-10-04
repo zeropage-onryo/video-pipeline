@@ -304,6 +304,40 @@ def brains(account_id: int = Depends(auth.current_account_id)):
             "default": gemini_utils.DEFAULT_BRAIN}
 
 
+# The composer's image models (2026-10-04, Mike's call: "images don't just
+# pull from nano banana, they use fal.ai and can choose between different
+# image models"). A PROJECTION, the /brains rule: Nano Banana on the Gemini
+# key, plus every entry of fal.IMAGE_MODELS when the fal key is set. `id`
+# is what the composer posts back as `image_model`; `credits` is the price
+# of one still at 1MP, the number the balance pill will move by.
+NANO_IMAGE_MODEL = "nano"
+
+
+def image_model_options(account_id: Optional[int] = None) -> dict:
+    from src import fal, nano_banana, pricing
+    items = []
+    if nano_banana.has_key(account_id):
+        pro = "pro" in nano_banana.MODEL
+        items.append({"id": NANO_IMAGE_MODEL, "provider": "nano",
+                      "label": "Nano Banana Pro" if pro else "Nano Banana",
+                      "note": "Gemini's image model, on the studio key; takes references.",
+                      "references": True,
+                      "credits": pricing.still_credits(nano_banana.MODEL)})
+    if fal.has_key(account_id):
+        for opt in fal.image_options():
+            items.append({"id": opt["id"], "provider": "fal", "label": opt["label"],
+                          "note": opt["note"], "references": opt["references"],
+                          "credits": pricing.credits_for(pricing.usd_micros(opt["usd"]))})
+    default = items[0]["id"] if items else NANO_IMAGE_MODEL
+    return {"items": items, "default": default}
+
+
+@router.get("/image-models")
+def image_models(account_id: int = Depends(auth.current_account_id)):
+    """Which model draws a still, for the composer's picker."""
+    return image_model_options(account_id)
+
+
 @router.get("/render-choices")
 def render_choices(account_id: int = Depends(auth.current_account_id)):
     """The frames a scene can be written for, PROJECTED from
@@ -641,6 +675,14 @@ async def creative_guide_reply(request: Request,
 
     image_refs, ref_urls, _ = await _collect_refs(form)
     idea = (form.get("idea") or form.get("prompt") or "").strip()
+    # The composer's Image | Video switch (2026-10-04): with it, the turn
+    # is a MAKER turn -- the model is handed make_image / make_video and
+    # told which one a "make it" means (creative_guide.OUTPUT_NOTES). A
+    # proposal naming one comes back unrun, as every write does, and the
+    # composer's own send runs it against /generate/run or /scenes/run.
+    # Absent (the pill, older callers), the turn is what it was.
+    output = (form.get("output") or "").strip().lower()
+    output = output if output in creative_guide.OUTPUT_NOTES else None
     # The Guide talks inside the same project a Create would write into
     # (2026-09-28), so its suggestions follow that project's brief and memory.
     project = _form_project(form, account_id)
@@ -672,7 +714,7 @@ async def creative_guide_reply(request: Request,
             reply = creative_guide.respond_personal(
                 conversation, provider=provider, scope=scope, model=model,
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                assistant=assistant, links=links)
+                assistant=assistant, links=links, output=output)
         else:
             from google import genai
             # The board's tools, in-process (src/guide_tools.py,
@@ -686,18 +728,20 @@ async def creative_guide_reply(request: Request,
             # X" answered in words with nothing to look at (2026-10-01).
             # find_references comes back as reply.sheet, which both
             # threads now draw.
-            tools, run_tool = _guide_tools(account_id, local=True, brand=brand)
+            tools, run_tool = _guide_tools(account_id, local=True, brand=brand,
+                                           maker=output is not None)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
-                brain=brain, assistant=assistant, links=links)
+                brain=brain, assistant=assistant, links=links, output=output)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
         return {"reply": reply, "reference_urls": ref_urls,
                 "billing": "personal_plan" if personal else "studio_credits",
                 "brain": None if personal else brain,
+                "output": output,
                 "detail": "ready"}
 
     job = jobs.start("guide", "creative guide", _in_project(project, work),
@@ -705,18 +749,21 @@ async def creative_guide_reply(request: Request,
     return {"job_id": job["id"]}
 
 
-def _guide_tools(account_id: int, *, local: bool = False, brand: str = ""):
+def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
+                 maker: bool = False):
     """(specs, run_tool) for a Guide turn, or (None, None) when the
     `mcp` package is absent or the server cannot be opened. Never
     raises: a board that cannot be read costs the answer its tools,
     not the person their turn. `local` adds the assistant's own tools
-    (find/keep references), which need no MCP at all."""
+    (find/keep references), which need no MCP at all; `maker` adds the
+    composer's make_image / make_video (guide_tools.MAKE_TOOLS)."""
     from src import guide_tools
 
     if not guide_tools.available() and not local:
         return None, None
     try:
-        return guide_tools.session(account_id=account_id, local=local, brand=brand)
+        return guide_tools.session(account_id=account_id, local=local, brand=brand,
+                                   maker=maker)
     except Exception as exc:
         print(f"  guide tools unavailable: {exc}", file=sys.stderr)
         return None, None
@@ -746,6 +793,10 @@ async def creative_guide_act(request: Request,
     args = (body or {}).get("args") or {}
     if not guide_tools.is_write(tool):
         return _error(400, "bad_tool", f"`{tool}` is not an action the Guide can take")
+    if guide_tools.is_make(tool):
+        # made by the composer's own send against the generation routes
+        # (their price, their charge, their job) -- never off this body
+        return _error(400, "bad_tool", f"`{tool}` is made by the studio's send, not here")
     if not isinstance(args, dict):
         return _error(400, "bad_request", "args must be an object")
     if not guide_tools.is_local(tool) and not guide_tools.available():
@@ -4439,6 +4490,16 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
     preset = presets.get_preset(form.get("preset"))
     aspect = form.get("aspect")
     aspect = aspect if aspect in GENERATE_ASPECTS else None
+    # which model draws (2026-10-04): a fal.IMAGE_MODELS id, else Nano.
+    # Checked here so a model this install has no key for is refused
+    # before the job rather than after the enhance has been paid for.
+    from src import fal
+    image_model = (form.get("image_model") or "").strip() or NANO_IMAGE_MODEL
+    if output == "image" and image_model != NANO_IMAGE_MODEL:
+        if image_model not in fal.IMAGE_MODELS:
+            return _error(400, "bad_model", f"no image model '{image_model}'")
+        if not fal.has_key(account_id):
+            return _error(503, "generation_unavailable", "FAL_KEY not set")
     concept_id_raw = (form.get("concept_id") or "").strip()
     attach_to = int(concept_id_raw) if concept_id_raw.isdigit() else None
     if attach_to is not None and preprod.get_concept(attach_to, account_id=account_id) is None:
@@ -4520,7 +4581,30 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 pass
 
         notes = []
-        if output == "image":
+        if output == "image" and image_model != NANO_IMAGE_MODEL:
+            label = fal.IMAGE_MODELS[image_model]["label"]
+            jobs.progress(job, 0.7, f"rendering image via {label}")
+            # fal's servers FETCH a reference, so each one goes up public
+            # first (as_image_url); one that cannot is dropped, and the
+            # result's `references` count says how many the model saw
+            urls = [fal.as_image_url(raw, account_id=account_id)
+                    for raw, _mime, _label in image_refs]
+            urls = [u for u in urls if u]
+            result = fal.generate_image_from_prompt(
+                enhanced, model=image_model, aspect=aspect,
+                reference_urls=urls, concept_id=concept_id,
+                # a person asked for this still from the composer
+                approved=True, db_path=None, account_id=account_id)
+            if result.get("ok"):
+                preprod.set_shot_reference_image(
+                    concept_id, shot["n"], result["media_url"], account_id=account_id)
+                note = f"image rendered on {label} → shot reference"
+                if image_refs and not result.get("references"):
+                    note += f" · {label} takes no reference images, drawn from the prompt"
+                notes.append(note)
+            else:
+                notes.append(f"image render skipped: {result.get('error')}")
+        elif output == "image":
             jobs.progress(job, 0.7, "rendering image via Nano Banana")
             result = nano_banana.generate_from_prompt(
                 enhanced, reference_image=image_refs[0][0] if image_refs else None,

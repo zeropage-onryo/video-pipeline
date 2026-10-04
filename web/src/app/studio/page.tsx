@@ -12,10 +12,18 @@
    shipped with promised four and delivered one, so it is gone
    (2026-09-15) and the result names the scene that was written.
 
-   Guide mode (talk the idea through first) shows only when the server
-   reports the creative_guide capability, so Create is the primary action
-   rather than a button that 404s. The model / length / frame pills
-   likewise appear only when their routes answer.
+   THERE IS NO GUIDE TOGGLE (2026-10-04, Mike: "it is all in one place
+   where you can toggle between image and video that are connected to the
+   reasoning/brain"). Every send is a Guide turn carrying the Image | Video
+   switch: the brain talks when the person is bouncing ideas and MAKES when
+   they ask for the thing -- a make_image / make_video proposal comes back
+   and this page runs it at once (lib/composer.ts MAKE_TOOLS), on the brain's
+   own prompt, through the same two routes a send used to post to directly.
+   The Fast / Reasoning pill is the brain's and shows in both outputs; the
+   Image output also picks WHICH MODEL DRAWS (GET /api/image-models: Nano
+   Banana on the Gemini key, or fal's image models). Without the guide
+   (capabilities.creative_guide false) a send makes directly, as before.
+   The model / length / frame pills appear only when their routes answer.
 
    NOTHING IN THE BOX IS THIS PAGE'S TO LOSE (2026-10-02). The Guide
    thread, the idea, the brief, the references and what every send made
@@ -38,10 +46,12 @@
    settings as one line, a red round send; a send becomes a bubble with
    its result as tiles above a docked box; `/` opens commands; a drop
    covers the box; a running send can be stopped. Still ONE output per
-   send -- IMAGE is one Nano Banana still through /api/generate/run, VIDEO
-   is the Create above -- and a send is saved on its turn (lib/composer.ts
-   `Made`), so a still drawn here survives a trip to Pipeline. A send
-   left running is picked up again on return (its job id is on the turn). */
+   send -- IMAGE is one still through /api/generate/run on the picked
+   model, VIDEO is the Create above -- and what was made is saved on the
+   turn that made it (lib/composer.ts `Made`: the brain's answer when it
+   made it, the person's own bubble when they pressed Make on the brief or
+   the guide is off), so a still drawn here survives a trip to Pipeline. A
+   send left running is picked up again on return (its job id is on the turn). */
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "next/navigation";
@@ -54,7 +64,6 @@ import {
   Ellipsis,
   Image as ImageIcon,
   ImageOff,
-  MessageSquare,
   Paperclip,
   Play,
   Plus,
@@ -107,11 +116,15 @@ import { keepersOf } from "@/components/studio/contact-sheet";
 import {
   BASE_COMMANDS,
   IMAGE_ASPECTS,
+  MAKE_TOOLS,
+  isMake,
+  loadImageModel,
   loadOutput,
   matchCommands,
   mediaSrc,
   newMadeId,
   pollJob,
+  saveImageModel,
   saveOutput,
   type Made,
   type Output,
@@ -220,7 +233,7 @@ function Composer() {
   // The thread and the box are the studio's (assistant-thread.tsx): the
   // same turns the pill shows, and a draft that survives leaving the page.
   const { turns: thread, setTurns: setThread, draft, setDraft, ready, finishProject } = useAssistantThread();
-  const { idea, picked, brief, uploads, mode: wantMode } = draft;
+  const { idea, picked, brief, uploads } = draft;
   const setIdea = useCallback(
     (v: string | ((s: string) => string)) => setDraft((d) => ({ ...d, idea: typeof v === "function" ? v(d.idea) : v })),
     [setDraft],
@@ -231,7 +244,6 @@ function Composer() {
     [setDraft],
   );
   const setBrief = (v: string) => setDraft({ brief: v });
-  const setMode = useCallback((m: "guide" | "create") => setDraft({ mode: m }), [setDraft]);
   // The project this composer writes inside (2026-09-28): handed over by
   // the Projects page as ?project=, remembered per browser, cleared by the
   // chip's ×. Create and the Guide both send it, so the scene is written
@@ -280,6 +292,14 @@ function Composer() {
     saveOutput(o);
   };
   const [aspect, setAspect] = useState(IMAGE_ASPECTS[0].id);
+  // which model draws a still (2026-10-04): the picker is GET /api/image-models,
+  // the choice is remembered beside the output; "" until the route answers
+  const [imageModels, setImageModels] = useState<(Option & { credits: number })[]>([]);
+  const [imageModel, setImageModelState] = useState("");
+  const setImageModel = (id: string) => {
+    setImageModelState(id);
+    saveImageModel(id);
+  };
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
   const [slashAt, setSlashAt] = useState(0);
@@ -322,6 +342,14 @@ function Composer() {
         setBrain(r.default);
       })
       .catch(() => setBrains([]));
+    apiFetch<{ items: { id: string; label: string; note: string; credits: number }[]; default: string }>("/image-models")
+      .then((r) => {
+        const items = r.items.map((m) => ({ id: m.id, label: m.label, note: `${m.note} · ${m.credits} credits`, credits: m.credits }));
+        setImageModels(items);
+        const kept = loadImageModel();
+        setImageModelState(items.some((m) => m.id === kept) ? kept : r.default);
+      })
+      .catch(() => setImageModels([]));
     apiFetch<SceneLengths>("/scene-lengths")
       .then((r) => {
         setLengths({ min: r.min, max: r.max, default: r.default });
@@ -358,7 +386,6 @@ function Composer() {
       if (!fill) return;
       if (fill.text) {
         setIdea(fill.text);
-        setMode("create");
         setFilledBy({ name: fill.by, avatar: fill.avatar });
       }
       if (fill.refs?.length) setPicked((was) => [...new Set([...was, ...fill.refs!])]);
@@ -366,7 +393,7 @@ function Composer() {
     take();
     window.addEventListener(FILL_EVENT, take);
     return () => window.removeEventListener(FILL_EVENT, take);
-  }, [setIdea, setMode, setPicked]);
+  }, [setIdea, setPicked]);
 
   // object URLs for uploads still in flight are revoked when the composer unmounts
   useEffect(() => {
@@ -382,15 +409,14 @@ function Composer() {
     el.style.height = `${el.scrollHeight}px`;
   }, [idea]);
 
-  // Guide only when the server says the route is there; otherwise the
-  // primary action is a send rather than a button that 404s
+  // The brain answers every send when the server says the route is there;
+  // without it (no Gemini key) a send makes directly, the way it used to.
   const guideReady = caps.creative_guide === true;
-  const mode: "guide" | "create" = guideReady ? wantMode : "create";
 
   // the slash menu: the fixed commands plus GET /api/presets as camera chips
   const commands = useMemo<SlashCommand[]>(
     () => [
-      ...BASE_COMMANDS.filter((c) => c.id !== "guide" || guideReady),
+      ...BASE_COMMANDS,
       ...presets.map((p) => ({
         id: `preset:${p.id}`,
         cmd: p.id.replace(/[^\w-]+/g, "-").toLowerCase(),
@@ -398,7 +424,7 @@ function Composer() {
         group: "camera" as const,
       })),
     ],
-    [presets, guideReady],
+    [presets],
   );
   const hasImage = thread.some((t) => t.made?.output === "image" && t.made.status === "done" && !!t.made.image);
   const slashItems = matchCommands(idea, commands, output, hasImage);
@@ -431,7 +457,7 @@ function Composer() {
   const mentions = useMentions(textarea, idea, setIdea, attachAsset);
 
   // an upload still on its way to the bin would be left out of the run
-  const canSend = !busy && !pending.length && (mode === "create" ? !!(idea.trim() || brief.trim()) : !!idea.trim());
+  const canSend = !busy && !pending.length && !!(idea.trim() || brief.trim());
   const referenceCount = picked.length + uploads.length + pending.length;
 
   useEffect(() => {
@@ -578,18 +604,47 @@ function Composer() {
     return () => window.removeEventListener(NEW_SESSION_EVENT, on);
   }, [stop]);
 
-  /* IMAGE and VIDEO sends: one turn each, one output each. */
-  async function make(text: string) {
+  /* IMAGE and VIDEO makes: one turn each, one output each.
+
+     `by` says whose turn carries the result: the BRAIN's one-line answer
+     when it made the thing (a make_image / make_video proposal, with the
+     prompt it wrote), or the PERSON's own bubble when they pressed Make on
+     the brief or the guide is off. `on` overrides a setting the brain was
+     asked for in so many words (an aspect, a length); the pills stay the
+     controls otherwise. */
+  async function make(
+    text: string,
+    out: Output,
+    by: { role: "user" } | { role: "assistant"; message: string; reply: GuideReply },
+    on: { aspect?: string; seconds?: number } = {},
+  ) {
     const madeId = newMadeId();
-    const isImage = output === "image";
-    const frame = isImage ? aspect : ratios.find((r) => r.id === ratio)?.label;
+    const isImage = out === "image";
+    const useAspect = on.aspect && IMAGE_ASPECTS.some((a) => a.id === on.aspect) ? on.aspect : aspect;
+    const useSeconds = on.seconds && lengths ? Math.max(lengths.min, Math.min(lengths.max, on.seconds)) : seconds;
+    const frame = isImage ? useAspect : ratios.find((r) => r.id === ratio)?.label;
     const refThumbs = [...uploads.map((u) => u.url), ...picked].filter(drawable);
-    const made: Made = { id: madeId, output, refs: refThumbs, status: "running", detail: "", frame };
-    setThread((ts) => [...ts, { role: "user", content: text, made }]);
+    const made: Made = {
+      id: madeId,
+      output: out,
+      refs: refThumbs,
+      status: "running",
+      detail: "",
+      frame,
+      prompt: text,
+      ...(isImage && imageModel ? { model: imageModel } : {}),
+    };
+    setThread((ts) => [
+      ...ts,
+      by.role === "user"
+        ? { role: "user", content: text, made }
+        : { role: "assistant", content: by.message, reply: by.reply, decided: "done", made },
+    ]);
     const me = { madeId, stopped: false } as { madeId: string; jobId?: number; stopped: boolean };
     running.current = me;
     polling.current.add(madeId);
-    setIdea("");
+    // the box and the brief are spent: what they held is in the prompt now
+    setDraft({ idea: "", brief: "" });
 
     const form = new FormData();
     if (brand) form.append("brand", brand);
@@ -597,14 +652,15 @@ function Composer() {
       form.append("prompt", text);
       form.append("output", "image");
       if (preset) form.append("preset", preset.id);
-      form.append("aspect", aspect);
+      form.append("aspect", useAspect);
+      if (imageModel) form.append("image_model", imageModel);
     } else {
       // a camera preset is a line the writer reads, not a hidden field:
       // /scenes/run has no preset input, so it rides in the idea
       form.append("idea", preset ? `${text}\n\nCamera: ${preset.how}` : text);
       form.append("count", "1");
       if (brain) form.append("brain", brain);
-      if (seconds) form.append("seconds", String(seconds));
+      if (useSeconds) form.append("seconds", String(useSeconds));
       if (ratio) form.append("ratio", ratio);
       // written against the project's brief + memory and filed under it;
       // /generate/run takes no project, so a still is filed outside one
@@ -618,8 +674,45 @@ function Composer() {
     const job = await pollJob(started.job_id, (j) => tick(madeId, j), () => me.stopped);
     if (!job) return; // stopped: stop() already drew it
     running.current = null;
-    await finish(madeId, output, job);
+    await finish(madeId, out, job);
   }
+
+  /* The conversation the brain answers: every turn that went through,
+     including what was made -- a make is an assistant turn whose line is
+     its words, and the model is told what came of it so "do it again but
+     warmer" has something to refer to. */
+  const conversationOf = (turns: Turn[]) =>
+    turns
+      .filter((m) => !m.failed)
+      .map(({ role, content, made }) => ({
+        role,
+        content: made
+          ? `${content}\n[made ${made.output} from the prompt: "${made.prompt ?? content}" — ${made.status}]`
+          : content,
+      }));
+
+  /* Make from the brief: the person's own click on the card the brain
+     wrote, so it rides on their turn. */
+  async function makeBrief() {
+    if (!brief.trim() || busy) return;
+    setBusy(true);
+    try {
+      await make(brief.trim(), output, { role: "user" });
+    } catch (e) {
+      failRun(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const failRun = (e: unknown) => {
+    const r = running.current;
+    if (r && !r.stopped) {
+      polling.current.delete(r.madeId);
+      patchMade(r.madeId, { status: "failed", detail: e instanceof Error ? e.message : "That did not go through." });
+      running.current = null;
+    }
+    toast(e instanceof Error ? e.message : "That did not go through.", "err");
+  };
 
   async function send() {
     if (!canSend) return;
@@ -627,32 +720,31 @@ function Composer() {
     setFilledBy(null);
     let asking: Turn | null = null;
     try {
-      if (mode === "create") {
-        await make(brief.trim() || idea.trim());
+      const asked = idea.trim();
+      if (!guideReady || !asked) {
+        // no brain to ask (no key), or nothing typed but a brief to make
+        // from: make directly, on the person's own turn
+        await make(asked || brief.trim(), output, { role: "user" });
       } else {
-        const asked = idea.trim();
         const mine: Turn = { role: "user", content: asked };
-        // the box's own sends (t.made) are not the Guide's turns: left out of
-        // the conversation it answers
-        const next: Turn[] = [...thread.filter((m) => !m.failed && !m.made), mine];
+        const next = [...conversationOf(thread), { role: mine.role, content: mine.content }];
         asking = mine;
         setThread((all) => [...all, mine]);
         setIdea("");
         setGuideWorking("Thinking…");
         const form = new FormData();
-        form.append(
-          "conversation",
-          JSON.stringify({ messages: next.map(({ role, content }) => ({ role, content })) }),
-        );
+        form.append("conversation", JSON.stringify({ messages: next }));
         if (brand) form.append("brand", brand);
         form.append("guide_provider", "gemini");
         form.append("idea", asked);
+        // the Image | Video switch: which thing a "make it" makes
+        form.append("output", output);
         if (project) form.append("project_id", String(project.id));
-        // The same Fast / Reasoning pill a send carries. Without it the
-        // Guide answered every turn on the reasoning tier -- ~1.5c a
-        // message for "which direction?". Server clamps it; absent means Fast.
+        // The Fast / Reasoning pill. Without it the Guide answered every
+        // turn on the reasoning tier -- ~1.5c a message for "which
+        // direction?". Server clamps it; absent means Fast.
         if (brain) form.append("brain", brain);
-        // The same photos a send would carry: the guide grounds on them
+        // The same photos a make carries: the guide grounds on them
         // (scene_chain.ground) and the model is shown them, so it can
         // answer about a face instead of asking where the photos are.
         appendReferences(form);
@@ -662,19 +754,35 @@ function Composer() {
         const job = await waitForJob(started.job_id, (j) => setGuideWorking(j.detail || "Considering your direction…"));
         const reply = (job as unknown as { reply?: GuideReply }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
-        // appended to whatever the thread holds NOW: the pill shares it and
-        // may have added a turn while this one was out
-        setThread((all) => [
-          ...all,
-          {
-            role: "assistant",
-            content: reply.message,
-            reply,
-            looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
-            chosen: keepersOf(reply.sheet),
-          },
-        ]);
-        if (reply.brief) setBrief(reply.brief);
+        setGuideWorking(null);
+        const proposal = reply.proposal;
+        if (proposal && isMake(proposal.tool)) {
+          // THE BRAIN MADE: its line is the turn, the tiles go under it.
+          // The tool says which output -- the switch follows it, so a
+          // "make that a video" lands where the person will look next.
+          const made = MAKE_TOOLS[proposal.tool];
+          if (made !== output) setOutput(made);
+          const args = proposal.args as { prompt?: unknown; aspect?: unknown; seconds?: unknown };
+          const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : asked;
+          await make(prompt, made, { role: "assistant", message: reply.message, reply }, {
+            aspect: typeof args.aspect === "string" ? args.aspect : undefined,
+            seconds: typeof args.seconds === "number" ? args.seconds : undefined,
+          });
+        } else {
+          // appended to whatever the thread holds NOW: the pill shares it and
+          // may have added a turn while this one was out
+          setThread((all) => [
+            ...all,
+            {
+              role: "assistant",
+              content: reply.message,
+              reply,
+              looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
+              chosen: keepersOf(reply.sheet),
+            },
+          ]);
+          if (reply.brief) setBrief(reply.brief);
+        }
       }
     } catch (e) {
       // The thread and the box were cleared before the request went out,
@@ -685,13 +793,7 @@ function Composer() {
         setThread((all) => all.map((m) => (m === mine ? { ...m, failed: true } : m)));
         setIdea((now) => now || mine.content);
       }
-      const r = running.current;
-      if (r && !r.stopped) {
-        polling.current.delete(r.madeId);
-        patchMade(r.madeId, { status: "failed", detail: e instanceof Error ? e.message : "That did not go through." });
-        running.current = null;
-      }
-      toast(e instanceof Error ? e.message : "That did not go through.", "err");
+      failRun(e);
     } finally {
       setGuideWorking(null);
       setBusy(false);
@@ -704,10 +806,6 @@ function Composer() {
     setSlashAt(0);
     if (c.id === "image" || c.id === "video") {
       setOutput(c.id);
-      setMode("create");
-    } else if (c.id === "guide") {
-      if (guideReady) setMode("guide");
-      else toast("The guide is not available on this account", "err");
     } else if (c.id === "animate") {
       const lastImage = [...thread].reverse().find((t) => t.made?.output === "image" && t.made.status === "done" && t.made.image);
       if (lastImage?.made) animate(lastImage.made);
@@ -733,15 +831,13 @@ function Composer() {
     if (!m.image) return;
     setPicked((was) => [...new Set([...was, m.image!])]);
     setOutput("video");
-    setMode("create");
     textarea.current?.focus();
     toast("Image attached · describe how the shot moves");
   }
   /* "Reuse prompt" fills the box; it never spends on its own */
   function reuse(t: Turn) {
     if (t.made) setOutput(t.made.output);
-    setMode("create");
-    setIdea(t.content);
+    setIdea(t.made?.prompt ?? t.content);
     textarea.current?.focus();
   }
   const select = (madeId: string, n: number) => patchMade(madeId, { shot: n });
@@ -888,24 +984,24 @@ function Composer() {
 
   const empty = !thread.length;
   const liveRun = running.current && busy;
-  const sendLabel = mode === "guide" ? "Send" : output === "image" ? "Generate" : "Create";
-  const placeholder =
-    mode === "guide"
-      ? "Describe your idea or ask for a direction…"
-      : output === "image"
-        ? empty
-          ? "Describe an image, a look, or a still…"
-          : "Refine, vary, or describe the next image…"
-        : empty
-          ? "Describe a shot, scene, or sequence…"
-          : "Refine, extend, or describe the next shot…";
+  const sendLabel = "Send";
+  const placeholder = guideReady
+    ? output === "image"
+      ? empty
+        ? "Describe an image, or talk the idea through…"
+        : "Refine, vary, ask, or describe the next image…"
+      : empty
+        ? "Describe a scene, or talk the idea through…"
+        : "Refine, extend, ask, or describe the next shot…"
+    : output === "image"
+      ? "Describe an image, a look, or a still…"
+      : "Describe a shot, scene, or sequence…";
   const starters: { label: string; run: () => void }[] = [
     ...(guideReady
       ? [
           {
             label: "Pitch a concept",
             run: () => {
-              setMode("guide");
               setIdea("Pitch me three short concepts for ");
               textarea.current?.focus();
             },
@@ -916,7 +1012,6 @@ function Composer() {
       label: "Storyboard a scene",
       run: () => {
         setOutput("video");
-        setMode("create");
         setIdea("Storyboard a scene: ");
         textarea.current?.focus();
       },
@@ -926,13 +1021,14 @@ function Composer() {
       label: "Turn a still into a shot",
       run: () => {
         setOutput("video");
-        setMode("create");
         fileInput.current?.click();
       },
     },
   ];
   const frameLabel = ratios.find((r) => r.id === ratio)?.label ?? "Frame";
   const brainLabel = brains.find((b) => b.id === brain)?.label ?? "Model";
+  const imageModelLabel = imageModels.find((m) => m.id === imageModel)?.label ?? "Model";
+  const modelLabel = (id?: string) => imageModels.find((m) => m.id === id)?.label;
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
@@ -955,12 +1051,12 @@ function Composer() {
               working={guideWorking}
               handlers={{
                 busy,
+                modelLabel,
                 onAnimate: animate,
                 onUseAsRef: attachResult,
                 onReuse: reuse,
                 onSelect: select,
                 onChip: (c) => {
-                  setMode("guide");
                   setIdea(c);
                   textarea.current?.focus();
                 },
@@ -1146,62 +1242,30 @@ function Composer() {
             </div>
 
             {brief ? (
-              // The brief is shown in BOTH modes. It used to render only
-              // in Create, so the guide's "the text block below is your
-              // paste-ready prompt" pointed at an empty idea box while
-              // the brief sat in state behind the mode pill (2026-09-18).
+              // The brain's brief, editable, with the one button that makes
+              // from it without another turn -- the person's own click, so
+              // the result rides on their bubble.
               <div className="cbrief">
                 <span className="m" style={{ fontSize: 8.5, display: "block", marginBottom: 6 }}>
-                  {mode === "create"
-                    ? "Brief from the guide · editable · this is what Create writes from"
-                    : "Brief from the guide · editable · Create writes from this, not from the box"}
+                  Brief from the brain · editable · Make draws from this, not from the box
                 </span>
                 <textarea value={brief} onChange={(e) => setBrief(e.target.value)} rows={5} />
-                {mode === "guide" ? (
-                  <button type="button" className="pill chosen cbrief-go" onClick={() => setMode("create")}>
-                    <Play strokeWidth={1.6} />
-                    Create from this brief
-                  </button>
-                ) : null}
+                <button type="button" className="pill chosen cbrief-go" disabled={busy || !!pending.length} onClick={() => void makeBrief()}>
+                  <Play strokeWidth={1.6} />
+                  {output === "image" ? "Make this image" : "Write this scene"}
+                </button>
               </div>
             ) : null}
 
             <div className="zc-tools">
               <span className="zc-seg" role="radiogroup" aria-label="What to make">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={output === "image"}
-                  onClick={() => {
-                    setOutput("image");
-                    setMode("create");
-                  }}
-                >
+                <button type="button" role="radio" aria-checked={output === "image"} onClick={() => setOutput("image")}>
                   <ImageIcon strokeWidth={1.6} /> Image
                 </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={output === "video"}
-                  onClick={() => {
-                    setOutput("video");
-                    setMode("create");
-                  }}
-                >
+                <button type="button" role="radio" aria-checked={output === "video"} onClick={() => setOutput("video")}>
                   <Video strokeWidth={1.6} /> Video
                 </button>
               </span>
-              {guideReady ? (
-                <button
-                  type="button"
-                  className="zc-tool"
-                  aria-pressed={mode === "guide"}
-                  title="Talk the idea through first"
-                  onClick={() => setMode(mode === "guide" ? "create" : "guide")}
-                >
-                  <MessageSquare strokeWidth={1.6} /> Guide
-                </button>
-              ) : null}
               <span className="zc-sep" aria-hidden />
               <button
                 type="button"
@@ -1225,13 +1289,28 @@ function Composer() {
                 <AtSign strokeWidth={1.6} />
               </button>
               <span className="zc-opts">
-                {output === "image" && mode !== "guide" ? (
+                {output === "image" ? (
                   <OptMenu heading="Image shape" value={aspect} onChange={setAspect} options={IMAGE_ASPECTS} label={aspect} />
                 ) : null}
-                {output === "video" && mode !== "guide" && ratios.length ? (
+                {output === "image" && imageModels.length ? (
+                  <>
+                    <span className="zc-dot" aria-hidden>
+                      ·
+                    </span>
+                    <OptMenu
+                      heading="Which model draws"
+                      value={imageModel}
+                      onChange={setImageModel}
+                      options={imageModels}
+                      label={imageModelLabel}
+                      chevron
+                    />
+                  </>
+                ) : null}
+                {output === "video" && ratios.length ? (
                   <OptMenu heading="Frame" value={ratio} onChange={setRatio} options={ratios} label={frameLabel} />
                 ) : null}
-                {output === "video" && mode !== "guide" && lengths ? (
+                {output === "video" && lengths ? (
                   <>
                     <span className="zc-dot" aria-hidden>
                       ·
@@ -1248,15 +1327,13 @@ function Composer() {
                     />
                   </>
                 ) : null}
-                {brains.length && (output === "video" || mode === "guide") ? (
+                {brains.length ? (
                   <>
-                    {mode !== "guide" ? (
-                      <span className="zc-dot" aria-hidden>
-                        ·
-                      </span>
-                    ) : null}
+                    <span className="zc-dot" aria-hidden>
+                      ·
+                    </span>
                     <OptMenu
-                      heading={mode === "guide" ? "Which model answers" : "Which model writes"}
+                      heading={guideReady ? "Which model thinks" : "Which model writes"}
                       value={brain}
                       onChange={setBrain}
                       options={brains}
@@ -1283,7 +1360,7 @@ function Composer() {
               ) : (
                 <motion.button
                   type="button"
-                  className={`zc-send${filledBy && idea.trim() && mode === "create" ? " zpa-ring" : ""}`}
+                  className={`zc-send${filledBy && idea.trim() ? " zpa-ring" : ""}`}
                   disabled={!canSend}
                   aria-label={sendLabel}
                   title={`${sendLabel} (Enter)`}

@@ -263,3 +263,63 @@ def test_turn_degrades_without_tools(monkeypatch):
     monkeypatch.setattr(guide_tools, "available", lambda: True)
     monkeypatch.setattr(guide_tools, "session", lambda **k: (_ for _ in ()).throw(RuntimeError("no db")))
     assert api._guide_tools(42) == (None, None)
+
+
+# --- the brain makes (2026-10-04) --------------------------------------------
+# The composer has no Guide toggle: every send is a Guide turn, and the
+# model decides between talking and making through make_image /
+# make_video. Those are proposals the STUDIO runs; this module never does.
+
+def test_make_tools_are_published_only_to_a_maker_turn(monkeypatch):
+    monkeypatch.setattr(guide_tools, "available", lambda: False)
+    specs, _ = guide_tools.session(local=True)
+    assert {s["name"] for s in specs}.isdisjoint(guide_tools.MAKE_TOOLS)
+    specs, run_tool = guide_tools.session(local=True, maker=True)
+    names = {s["name"] for s in specs}
+    assert set(guide_tools.MAKE_TOOLS) <= names
+    assert all(s["write"] for s in specs if s["name"] in guide_tools.MAKE_TOOLS)
+    # a make is a write: the model's own call is refused mid-turn like any write
+    with pytest.raises(guide_tools.Refused):
+        run_tool("make_image", {"prompt": "a can"})
+
+
+def test_a_make_call_ends_the_turn_as_a_proposal_with_a_clean_prompt(monkeypatch):
+    calls = []
+    proposal = _Resp(calls=[("make_image", {"prompt": "  a wet   steel counter ", "aspect": "4:5",
+                                             "seconds": 9})])
+    reply, _ = _turn(monkeypatch, [proposal], lambda n, a: calls.append(n))
+    assert calls == []
+    assert reply["proposal"] == {"tool": "make_image", "args": {"prompt": "a wet steel counter",
+                                                               "aspect": "4:5"},
+                                 "label": guide_tools.WRITE_LABELS["make_image"]}
+
+
+@pytest.mark.parametrize("args, clean", [
+    ({"prompt": "a scene", "seconds": 90, "shots": 0}, {"prompt": "a scene", "seconds": 30, "shots": 1}),
+    ({"prompt": "a scene", "seconds": "9", "shots": True}, {"prompt": "a scene"}),
+])
+def test_make_video_args_are_clamped_to_the_scenes_own_bounds(args, clean):
+    assert guide_tools.check_args("make_video", args) == clean
+
+
+@pytest.mark.parametrize("name, args", [
+    ("make_image", {}),
+    ("make_video", {"prompt": "   "}),
+    ("make_image", {"prompt": "draw https://x.y/z.jpg"}),
+])
+def test_a_make_without_a_prompt_or_with_a_url_is_refused(name, args):
+    with pytest.raises(guide_tools.Refused):
+        guide_tools.check_args(name, args)
+
+
+def test_run_never_makes(tmp_db):
+    with pytest.raises(guide_tools.Refused, match="studio"):
+        guide_tools.run("make_image", {"prompt": "a can"}, dsn=tmp_db)
+
+
+def test_act_refuses_a_make_tool(client, monkeypatch):
+    from src import assistant_brain
+    monkeypatch.setattr(assistant_brain, "run_local", lambda *a, **k: pytest.fail("ran"))
+    res = client.post("/api/creative-guide/act", json={"tool": "make_video", "args": {"prompt": "x"}})
+    assert res.status_code == 400
+    assert "send" in res.json()["error"]["message"]

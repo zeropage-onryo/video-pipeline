@@ -327,15 +327,84 @@ PLATFORM_MODELS: dict[str, str] = {
 # module docstring's IMAGES note).
 VIDEO_LOG_TOOLS = tuple(sorted(PLATFORM_MODELS))
 
-# FLUX and friends. Priced per MEGAPIXEL, not per image, so the constant
-# below is "what one 1MP image costs" and estimate_image_cost says so.
+# THE IMAGE MODELS (widened 2026-10-04, Mike's call: "images don't just
+# pull from nano banana, they use fal.ai and can choose between different
+# image models"). One table, the composer's picker is a PROJECTION of it
+# (app/api.py /image-models), the same rule as providers.render_options.
+#
+# Per entry: `endpoint` draws from text; `edit` (when the model has one)
+# takes the composer's references as `image_urls` and is used whenever a
+# send carries any -- a model with no `edit` renders text-only and the
+# result says the references were not used, which is better than a
+# silently dropped can. `size` says how the model wants the frame:
+# "wh" = an {width, height} image_size object, "aspect" = an aspect_ratio
+# string, "enum" = fal's named sizes. Priced per MEGAPIXEL (FLUX) or per
+# image; `image_usd` is the one reader.
+#
+# PRICES ARE DATED AND MUST BE RE-CHECKED. flux-pro1.1 was read off its
+# /api page on 2026-09-08. The four added on 2026-10-04 were written from
+# memory of each model's fal page because fal.ai was unreachable from the
+# build session (the proxy refused the tunnel) -- the ids and the shapes
+# are what the pages carried as of mid-2026, the prices are the published
+# per-image figures as remembered, and every one of them wants a look at
+# its `source` before the first paid render on it. A wrong price here
+# mis-charges credits; a wrong id fails the submit loudly, which is the
+# safer of the two.
 IMAGE_MODELS: dict[str, dict] = {
     "flux-pro1.1": {
+        "label": "FLUX 1.1 Pro",
+        "note": "Sharp, fast, the default. Text-only (no reference input).",
         "endpoint": "fal-ai/flux-pro/v1.1",
+        "edit": None,
+        "size": "wh",
         "params": ("width", "height", "num_inference_steps", "guidance_scale", "seed"),
         "usd_per_megapixel": 0.04,
         "checked": "2026-09-08",
         "source": "https://fal.ai/models/fal-ai/flux-pro/v1.1",
+    },
+    "flux2-pro": {
+        "label": "FLUX.2 Pro",
+        "note": "FLUX's newest; takes reference images.",
+        "endpoint": "fal-ai/flux-2-pro",
+        "edit": "fal-ai/flux-2-pro/edit",
+        "size": "wh",
+        "params": ("image_size", "seed"),
+        "usd_per_megapixel": 0.03,
+        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro",
+    },
+    "nano-banana-pro": {
+        "label": "Nano Banana Pro (fal)",
+        "note": "Gemini's image model through fal; strong on references and text.",
+        "endpoint": "fal-ai/nano-banana-pro",
+        "edit": "fal-ai/nano-banana-pro/edit",
+        "size": "aspect",
+        "params": ("aspect_ratio", "resolution"),
+        "usd_per_image": 0.15,
+        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "source": "https://fal.ai/models/fal-ai/nano-banana-pro",
+    },
+    "seedream4": {
+        "label": "Seedream 4.0",
+        "note": "ByteDance; photographic, cheap, takes references.",
+        "endpoint": "fal-ai/bytedance/seedream/v4/text-to-image",
+        "edit": "fal-ai/bytedance/seedream/v4/edit",
+        "size": "wh",
+        "params": ("image_size", "seed"),
+        "usd_per_image": 0.03,
+        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4/text-to-image",
+    },
+    "ideogram3": {
+        "label": "Ideogram 3",
+        "note": "Graphic, typographic, poster-like. Text-only.",
+        "endpoint": "fal-ai/ideogram/v3",
+        "edit": None,
+        "size": "enum",
+        "params": ("image_size", "rendering_speed"),
+        "usd_per_image": 0.06,
+        "checked": "2026-10-04 (from memory; fal.ai unreachable -- re-check)",
+        "source": "https://fal.ai/models/fal-ai/ideogram/v3",
     },
 }
 IMAGE_MODEL_NAMES = tuple(IMAGE_MODELS)
@@ -343,6 +412,82 @@ DEFAULT_IMAGE_MODEL = os.environ.get("FAL_IMAGE_MODEL", "flux-pro1.1")
 COST_PER_IMAGE_USD = float(
     os.environ.get("FAL_IMAGE_COST_USD",
                    str(IMAGE_MODELS[DEFAULT_IMAGE_MODEL]["usd_per_megapixel"])))
+# The composer's aspects as ~1-megapixel frames (multiples of 16, which
+# every model here accepts), and fal's named sizes for the one model that
+# takes only those. A ratio off this list draws square.
+IMAGE_SIZES: dict[str, tuple[int, int]] = {
+    "1:1": (1024, 1024), "4:5": (912, 1136), "5:4": (1136, 912),
+    "3:4": (880, 1168), "4:3": (1168, 880), "2:3": (832, 1248), "3:2": (1248, 832),
+    "9:16": (768, 1360), "16:9": (1360, 768), "21:9": (1536, 656),
+}
+IMAGE_SIZE_ENUM: dict[str, str] = {
+    "1:1": "square_hd", "4:5": "portrait_4_3", "5:4": "landscape_4_3",
+    "3:4": "portrait_4_3", "4:3": "landscape_4_3", "2:3": "portrait_4_3",
+    "3:2": "landscape_4_3", "9:16": "portrait_16_9", "16:9": "landscape_16_9",
+    "21:9": "landscape_16_9",
+}
+DEFAULT_IMAGE_ASPECT = "1:1"
+
+
+def image_dims(aspect: Optional[str]) -> tuple[int, int]:
+    return IMAGE_SIZES.get(aspect or "", IMAGE_SIZES[DEFAULT_IMAGE_ASPECT])
+
+
+def image_usd(model: str, aspect: Optional[str] = None) -> float:
+    """One still's provider USD on `model` at `aspect` -- per-image models
+    as listed, per-megapixel models at the frame's pixel count rounded UP
+    to the next megapixel (fal's own rule). Unknown model -> ValueError,
+    never a free image."""
+    spec = IMAGE_MODELS.get(model)
+    if spec is None:
+        raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
+    if "usd_per_image" in spec:
+        return round(float(spec["usd_per_image"]), 4)
+    w, h = image_dims(aspect)
+    return round(float(spec["usd_per_megapixel"]) * megapixels(w, h), 4)
+
+
+def megapixels(width: int, height: int) -> int:
+    """fal's billing unit: a megapixel is 1024x1024, and a frame is billed
+    at the next whole one UP (a 1024x1024 still is exactly one)."""
+    return max(1, -(-(int(width) * int(height)) // (1024 * 1024)))
+
+
+def image_options() -> list[dict]:
+    """The composer's picker, PROJECTED off IMAGE_MODELS: id, label, note,
+    whether references reach it, and the USD it costs at 1MP."""
+    return [{"id": name, "label": spec["label"], "note": spec["note"],
+             "references": bool(spec.get("edit")), "usd": image_usd(name)}
+            for name, spec in IMAGE_MODELS.items()]
+
+
+def image_request(model: str, prompt: str, *, aspect: Optional[str] = None,
+                  reference_urls=None) -> tuple[str, dict, int]:
+    """(endpoint, body, references used) for one still. References go to
+    the model's `edit` endpoint as `image_urls`; a model without one
+    draws from text and the count comes back 0 so the caller can say so."""
+    spec = IMAGE_MODELS.get(model)
+    if spec is None:
+        raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
+    refs = [u for u in (reference_urls or []) if isinstance(u, str) and u.startswith("http")]
+    body: dict = {"prompt": prompt}
+    endpoint = spec["endpoint"]
+    used = 0
+    if refs and spec.get("edit"):
+        endpoint = spec["edit"]
+        body["image_urls"] = refs[:8]
+        used = len(body["image_urls"])
+    size = spec.get("size", "wh")
+    w, h = image_dims(aspect)
+    if size == "aspect":
+        body["aspect_ratio"] = aspect if aspect in IMAGE_SIZES else DEFAULT_IMAGE_ASPECT
+    elif size == "enum":
+        body["image_size"] = IMAGE_SIZE_ENUM.get(aspect or "", "square_hd")
+    elif "width" in spec["params"]:
+        body["width"], body["height"] = w, h
+    else:
+        body["image_size"] = {"width": w, "height": h}
+    return endpoint, body, used
 # The tool name an image attempt is logged under -- generative.IMAGE_TOOLS,
 # beside midjourney and nano, never a video platform.
 IMAGE_LOG_TOOL = "fal"
@@ -866,9 +1011,14 @@ def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
                    width: int = 1024, height: int = 1024,
                    http=None, db_path=None,
                    approved: Optional[bool] = None,
-                   account_id: Optional[int] = None) -> Path:
-    """A FLUX still, same queue and same walls. Separate from the video
-    path on purpose -- it shares the transport, not the contract."""
+                   account_id: Optional[int] = None,
+                   aspect: Optional[str] = None,
+                   reference_urls=None) -> Path:
+    """A still on one of IMAGE_MODELS, same queue and same walls. Separate
+    from the video path on purpose -- it shares the transport, not the
+    contract. `aspect` (2026-10-04) picks the frame off IMAGE_SIZES and
+    outranks width/height; `reference_urls` go to the model's edit
+    endpoint when it has one (image_request)."""
     spec = IMAGE_MODELS.get(model)
     if spec is None:
         raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
@@ -876,12 +1026,13 @@ def generate_image(prompt: str, out_path, *, model: str = DEFAULT_IMAGE_MODEL,
         raise RuntimeError(
             f"spend not approved: this call was not approved by a person. "
             f"Approve it at the Queue, or set {SPEND_ENV}=1 for an unattended run "
-            f"(~${estimate_image_cost(1)} at fal, {model})")
+            f"(~${image_usd(model, aspect)} at fal, {model})")
     prompt = safe_prompt(prompt, db_path, account_id)
-    body = {"prompt": prompt}
-    if "width" in spec["params"]:
+    endpoint, body, _ = image_request(model, prompt, aspect=aspect,
+                                      reference_urls=reference_urls)
+    if aspect is None and "width" in spec["params"]:
         body["width"], body["height"] = int(width), int(height)
-    result, skip = _submit_and_wait(spec["endpoint"], body, http=http,
+    result, skip = _submit_and_wait(endpoint, body, http=http,
                                     account_id=account_id)
     url = _output_url(result, skip)
     if not url:
@@ -1439,19 +1590,38 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
 def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                                model: str = DEFAULT_IMAGE_MODEL,
                                approved: Optional[bool] = None,
-                               account_id: Optional[int] = None) -> dict:
+                               account_id: Optional[int] = None,
+                               aspect: Optional[str] = None,
+                               reference_urls=None,
+                               concept_id: Optional[int] = None,
+                               source: str = "workflow",
+                               bank: bool = True) -> dict:
     """
-    Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
-    A FLUX still -- the keyframe alternative to nano_banana, on the same
-    key and the same gates as the clips. Logged under IMAGE_LOG_TOOL so it
-    never lands in the video scoreboards or moves the video cap.
+    Never raises: {"ok", "media_url", "generation_id", "path", "error",
+    "references", "asset_id"}.
+    A still on one of IMAGE_MODELS -- the composer's alternative to
+    nano_banana (2026-10-04), on the same key and the same gates as the
+    clips. Logged under IMAGE_LOG_TOOL so it never lands in the video
+    scoreboards or moves the video cap.
+
+    CHARGED like a Nano still (nano_banana.generate_from_prompt's shape):
+    the hold is taken before the submit at image_usd(model, aspect),
+    settled on the generations row, released when no image came back or
+    nothing recorded it. Exempt accounts and the unowned pool take no
+    hold. `references` on the result says how many of `reference_urls`
+    the model was actually handed (0 on a text-only model), so the route
+    can tell the person rather than let a dropped reference pass as used.
     """
+    from . import pricing, render_assets
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
     try:
         prompt = (prompt or "").strip()
         if not prompt:
             return {"ok": False, "error": "an empty prompt renders nothing"}
+        if model not in IMAGE_MODELS:
+            return {"ok": False,
+                    "error": f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}"}
 
         generative.init(**kwargs)
         # Images are counted on their own tool name, so the wall they hit
@@ -1465,23 +1635,62 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
             return {"ok": False, "error": refusal}
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out_path = RENDER_DIR / f"flux-{stamp}.jpg"
-        generate_image(prompt, out_path, model=model, http=http,
-                       db_path=db_path, approved=approved, account_id=account_id)
+        who = f"c{concept_id}-" if concept_id else ""
+        out_path = RENDER_DIR / f"{model}-{who}{stamp}.jpg"
+        _, _, used = image_request(model, prompt, aspect=aspect,
+                                   reference_urls=reference_urls)
+        usd = image_usd(model, aspect)
 
-        shot_row_id = _shot_row_for_prompt(
-            prompt, db_path, "auto-created by fal.generate_image_from_prompt",
-            account_id)
-        generation_id = generative.record_generation(
-            shot_row_id, IMAGE_LOG_TOOL, prompt,
-            params={"provider": "fal", "model": model, "source": "workflow",
-                    "key_source": KEY_SOURCE},
-            output_path=str(out_path),
-            cost_usd=estimate_image_cost(1),
-            **kwargs,
-            account_id=account_id)
-        return {"ok": True, "media_url": _publish(out_path, "image/jpeg", account_id),
+        charge = charging.Charge(
+            account_id, provider="fal", ref=charging.attempt_ref(out_path),
+            estimate_usd=usd, dsn=db_path)
+        try:
+            charge.take()     # an empty balance refuses HERE: no fal call
+        except ledger.InsufficientCredit as e:
+            return {"ok": False, "media_url": None, "generation_id": None,
+                    "path": None, "error": charging.refusal(e, "this still")}
+        try:
+            charge.submitted()
+            generate_image(prompt, out_path, model=model, http=http,
+                           db_path=db_path, approved=approved, account_id=account_id,
+                           aspect=aspect, reference_urls=reference_urls)
+        except Exception as e:
+            charge.release(f"fal image: {type(e).__name__}")
+            raise
+
+        params = {"provider": "fal", "model": model, "source": source,
+                  "key_source": KEY_SOURCE, "references": used,
+                  **({"aspect": aspect} if aspect else {}),
+                  **({"concept_id": concept_id} if concept_id else {}),
+                  **charge.params()}
+        try:
+            shot_row_id = _shot_row_for_prompt(
+                prompt, db_path, "auto-created by fal.generate_image_from_prompt",
+                account_id)
+            generation_id = generative.record_generation(
+                shot_row_id, IMAGE_LOG_TOOL, prompt,
+                params=params,
+                output_path=str(out_path),
+                cost_usd=usd,
+                **kwargs,
+                account_id=account_id)
+        except Exception as e:
+            charge.release(f"fal image: unrecorded ({type(e).__name__})")
+            raise
+        charge.settle(generation_id=generation_id)
+
+        media_url = _publish(out_path, "image/jpeg", account_id)
+        asset = {"id": None, "rag": None}
+        if bank:
+            asset = render_assets.record_best_effort(
+                account_id=account_id, generation_id=generation_id,
+                tool=IMAGE_LOG_TOOL, model=model, media_kind="image",
+                prompt=prompt, media_url=media_url, output_path=str(out_path),
+                concept_id=concept_id, metadata=params, dsn=db_path)
+        return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
+                "references": used, "asset_id": asset["id"],
+                "credits": pricing.credits_for(pricing.usd_micros(usd)),
                 "error": None}
     except Exception as e:
         return {"ok": False, "error": _safe_error(e, account_id)}

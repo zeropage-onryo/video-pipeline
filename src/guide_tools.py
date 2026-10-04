@@ -69,6 +69,74 @@ LOCAL_TOOLS = LOCAL_READ + LOCAL_WRITE
 WRITE_LABELS["keep_references"] = "Keep these references and attach them to the composer"
 MAX_KEEP_IDS = 12
 
+# THE BRAIN MAKES (2026-10-04, Mike's call: "it is all in one place where
+# you can toggle between image and video that are connected to the
+# reasoning/brain"). The composer has no Guide toggle any more: every
+# send is a Guide turn, and the model decides whether the person is
+# talking an idea through or asking for the thing -- a still, or a
+# written scene. These two are WRITE tools in the proposal sense (the
+# turn ends on the call, nothing runs here) with one difference from
+# add_spark: the STUDIO runs them, not /creative-guide/act. The reply's
+# proposal names the tool and the prompt the model wrote, and the
+# composer posts it to the same doors a send used to post to directly
+# (/api/generate/run for an image, /api/scenes/run for a scene), so the
+# spend gates, the charge and the job registry are exactly what they
+# were. `run` refuses them: a server that made a still off a POST body
+# would be the Director's Generate node without its price. Published
+# only when a turn asks (`session(maker=True)`), so the pill is unchanged.
+MAKE_TOOLS = ("make_image", "make_video")
+WRITE_LABELS["make_image"] = "Generate this image"
+WRITE_LABELS["make_video"] = "Write this scene"
+MAX_MAKE_PROMPT = 4000
+MAKE_SECONDS = (4, 30)          # timeline.scene_seconds' clamp
+MAKE_SHOTS = (1, 8)
+MAKE_SPECS = (
+    {
+        "name": "make_image",
+        "description": (
+            "Generate ONE still from a prompt, on the image model the person picked "
+            "in the composer. Call it ONLY when the person asked for an image in this "
+            "turn in so many words (make / generate / draw / show me / render it / "
+            "do it) or confirmed an offer you made -- never when they are bouncing "
+            "ideas, asking a question, or giving notes. The prompt is what the image "
+            "model is handed, in plain visual language: subject, setting, light, lens, "
+            "mood. Keep every reference the person attached in mind; they ride along."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "The image, described plainly."},
+                "aspect": {"type": "string",
+                           "description": "Optional: 1:1, 4:5, 3:4, 9:16, 16:9, 21:9 -- "
+                                          "only when they asked for a shape."},
+            },
+            "required": ["prompt"],
+        },
+        "write": True,
+    },
+    {
+        "name": "make_video",
+        "description": (
+            "Write ONE video scene from an idea: the studio's scene writer turns it "
+            "into timed shots with its references, and it lands on the Pipeline board "
+            "(nothing is rendered; the Queue spends). Call it ONLY when the person "
+            "asked for the scene in this turn in so many words or confirmed an offer "
+            "you made -- never while they are still deciding. The prompt is the idea "
+            "as agreed: subject, turn, setting, look, pacing, sound, constraints."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "The scene idea, as agreed."},
+                "seconds": {"type": "integer",
+                            "description": "Optional total length, 4-30, only when asked."},
+                "shots": {"type": "integer",
+                          "description": "Optional shot count, only when they named one."},
+            },
+            "required": ["prompt"],
+        },
+        "write": True,
+    },
+)
+
 MAX_TOOL_CALLS = 6      # read calls per turn; a Guide answer, not a crawl
 
 _URL = re.compile(r"(?i)\b(?:https?|ftp)://|\bwww\.|\.(?:jpe?g|png|webp|gif)(?:\?|$)")
@@ -84,11 +152,17 @@ HIDDEN_WITH_LOCAL = frozenset({"images_for"})
 
 
 def is_write(name: str) -> bool:
-    return name in WRITE_TOOLS or name in LOCAL_WRITE
+    return name in WRITE_TOOLS or name in LOCAL_WRITE or name in MAKE_TOOLS
 
 
 def is_local(name: str) -> bool:
     return name in LOCAL_TOOLS
+
+
+def is_make(name: str) -> bool:
+    """A make tool: proposed by the model, run by the STUDIO (the
+    composer's own send), never by this module."""
+    return name in MAKE_TOOLS
 
 
 def available() -> bool:
@@ -112,7 +186,7 @@ def check_args(name: str, args: dict) -> dict:
     The URL rule is checked on every string argument, not only the two
     named `*_url`: a model told "no URLs" puts one in `title` next.
     """
-    if name not in TOOLS and name not in LOCAL_TOOLS:
+    if name not in TOOLS and name not in LOCAL_TOOLS and name not in MAKE_TOOLS:
         raise Refused(f"`{name}` is not reachable from the Guide")
     args = dict(args or {})
     for key, value in args.items():
@@ -140,6 +214,22 @@ def check_args(name: str, args: dict) -> dict:
         k = args.get("k")
         args = {"query": str(args["query"])[:300],
                 "k": k if isinstance(k, int) and not isinstance(k, bool) else 8}
+    if name in MAKE_TOOLS:
+        prompt = " ".join(str(args.get("prompt") or "").split())
+        if not prompt:
+            raise Refused(f"`{name}` needs the prompt to make it from")
+        clean: dict = {"prompt": prompt[:MAX_MAKE_PROMPT]}
+        if name == "make_image":
+            aspect = str(args.get("aspect") or "").strip()
+            if re.fullmatch(r"\d{1,2}:\d{1,2}", aspect):
+                clean["aspect"] = aspect
+        else:
+            for key, (lo, hi) in (("seconds", MAKE_SECONDS), ("shots", MAKE_SHOTS)):
+                value = args.get(key)
+                if isinstance(value, bool) or not isinstance(value, int):
+                    continue
+                clean[key] = max(lo, min(hi, value))
+        args = clean
     if name == "reference":
         for key in ("image_url", "source_url"):
             if args.get(key):
@@ -183,6 +273,11 @@ def run(name: str, args: dict, *, dsn: Optional[str] = None,
     # session's task group comes back wrapped in an ExceptionGroup,
     # which no caller can catch as the Refused it is.
     args = check_args(name, args)
+    if is_make(name):
+        # the studio's send runs these against the generation routes,
+        # where the price, the charge and the job are; a server that made
+        # a still off this body would be a second spend door with no card
+        raise Refused(f"`{name}` is made by the studio's own send, not here")
     if is_local(name):
         from . import assistant_brain
         return assistant_brain.run_local(name, args, brand=brand, account_id=account_id,
@@ -197,7 +292,7 @@ def run(name: str, args: dict, *, dsn: Optional[str] = None,
 
 
 def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
-            *, local: bool = False, brand: str = ""):
+            *, local: bool = False, brand: str = "", maker: bool = False):
     """Everything a Guide turn needs, gathered once: the tool specs for
     the model, and a synchronous `run_tool(name, args)` for the READ
     calls the model makes mid-turn.
@@ -212,6 +307,9 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
     assistant can still hunt references even where the board is not
     reachable. `run_tool.attachments` collects what a read tool left
     for the reply (the contact sheet).
+
+    `maker=True` (the composer's send, 2026-10-04) also publishes
+    make_image / make_video -- proposals the studio runs, see MAKE_TOOLS.
     """
     tool_specs: list = []
     if available():
@@ -232,6 +330,8 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
         # contact-sheet hunt is published it is the only image search.
         tool_specs = [s for s in tool_specs if s.get("name") not in HIDDEN_WITH_LOCAL]
         tool_specs = tool_specs + [dict(s) for s in assistant_brain.LOCAL_SPECS]
+    if maker:
+        tool_specs = tool_specs + [dict(s) for s in MAKE_SPECS]
 
     attachments: dict = {}
 
