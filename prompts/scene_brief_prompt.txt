@@ -13,10 +13,11 @@ RUN-SPECIFIC CREATIVE AUTHORITY:
 The filmmaker's idea or spark above is the primary brief. Any images attached
 to this run are direct visual evidence: follow what they actually show for the
 relevant identity, environment, wardrobe, objects, composition, palette and
-mood. The selected reference library supports those inputs. The channel note
-below is only broad background and may fill details the run leaves open; it
-must never override, narrow or redirect the idea or images. If anything
-conflicts, the idea and attached images win.
+mood. The selected reference library supports those inputs. The project brief
+below, when there is one, is the standing brief for this piece of work: keep
+its must-haves and its nevers.
+On anything else the idea and attached images win. There is no house brand or
+channel style beyond them.
 
 WHAT THE SPARK IS, AND WHAT YOU DO WITH IT: it is the filmmaker's IDEA, told
 in full -- who is there, what they want, what is in the way, what changes.
@@ -34,7 +35,7 @@ clothing where they apply; name them, don't redescribe their appearance):
 REFERENCE LIBRARY (tone and structure to echo):
 {references}
 
-CHANNEL DIRECTION (rough context, not strict generation rules):
+PROJECT (the standing brief for this piece of work, when there is one):
 {brand}
 
 GOLD-STANDARD EXAMPLE — match the SHAPE and craft of this prompt (its hook,

@@ -1,23 +1,20 @@
-"""The LOOK a prompt is held to -- resolved here, and only here.
+"""The LOOK a prompt is held to -- the PROJECT's, or none.
 
-The look belongs to the PROJECT, not the brand (2026-10-02, Mike's call): a
-film, an ad, a video each carries its own, and the studio has no house
-style. `look_block` answers in this order:
+The look belongs to the project (2026-10-02, Mike's call), and since
+2026-10-04 there is no other source: the per-brand files
+(prompts/look_zeropage.txt, look_antihero.txt) are deleted. "Even still
+you're building the brand and look from scratch" -- a look is typed when a
+project starts, never inherited from a house style. `look_block` answers:
 
-1. a project in scope -> ITS look (`projects.look`), or "" when none is
-   typed. Never the brand file: a fallback there is how the house style
-   came back without anybody noticing, which is the bug this replaced --
-   prompts/look_zeropage.txt imposed a horror grade on every run.
-2. no project (the nightly walk, the crawl, research) ->
-   prompts/look_<brand>.txt when one exists. The night does not invent a
-   look of its own.
-3. otherwise "".
+1. a project in scope (passed, or `project_context.current()`) -> its
+   `projects.look`, or "" when none is typed;
+2. anything else -- the nightly walk, the crawl, research -> "".
 
 The project comes from `project_context` (the ContextVar the Create and
-Guide routes already set) unless a caller passes one, so the seven readers
--- the scout digest, the research brief, the two scene writers, refgen,
-refcheck, reference_needs and the assistant's memory -- follow the project
-with no argument threaded through any of them.
+Guide routes already set) unless a caller passes one, so every reader --
+the two scene writers, refgen, refcheck, reference_needs and the
+assistant's memory -- follows the project with no argument threaded
+through any of them.
 
 Its own module rather than a function on scout.py because shootgen must
 read it too, and shootgen importing scout would drag the crawl's
@@ -30,9 +27,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 
-def look_block(brand: str, project: Optional[dict] = None) -> str:
-    """The look text, or "" -- never an error, because a prompt with no
-    look is a different run, not a broken one."""
+def look_block(brand: str = "", project: Optional[dict] = None) -> str:
+    """The project's look, or "" -- never an error, because a prompt with
+    no look is a different run, not a broken one. `brand` is accepted and
+    ignored: a brand has no look of its own any more."""
     try:
         if project is None:
             from . import project_context
@@ -41,11 +39,8 @@ def look_block(brand: str, project: Optional[dict] = None) -> str:
             look = project.get("look")
             return look.strip() if isinstance(look, str) else ""
     except Exception:
-        return ""
-    try:
-        return (PROMPTS_DIR / f"look_{brand}.txt").read_text().strip()
-    except OSError:
-        return ""
+        pass
+    return ""
 
 
 def unset_note() -> str:

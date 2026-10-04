@@ -266,20 +266,21 @@ def test_load_manifest_records_reads_paths_domains_and_text(tmp_path):
     ingest_records expects: source, text, domain, and the optional
     project/source_ref carried through untouched.
     """
+    (tmp_path / "a.md").write_text("one source, hard light")
+    (tmp_path / "b.md").write_text("cut on motion")
     manifest_path = tmp_path / "library.json"
     manifest_path.write_text(json.dumps([
-        {"path": "prompts/brief.txt", "domain": "personal_brand"},
-        {"path": "prompts/settings.txt", "domain": "cinematography",
+        {"path": str(tmp_path / "a.md"), "domain": "personal_brand"},
+        {"path": str(tmp_path / "b.md"), "domain": "cinematography",
          "project": "zpf", "source_ref": "hand-written"},
     ]))
 
     records = rag.load_manifest_records(manifest_path)
 
-    assert [r["source"] for r in records] == ["prompts/brief.txt", "prompts/settings.txt"]
+    assert [r["text"] for r in records] == ["one source, hard light", "cut on motion"]
     assert records[0]["domain"] == "personal_brand"
     assert records[0]["project"] is None
     assert records[0]["source_ref"] is None
-    assert "Zero Page Films" in records[0]["text"]
     assert records[1]["domain"] == "cinematography"
     assert records[1]["project"] == "zpf"
     assert records[1]["source_ref"] == "hand-written"

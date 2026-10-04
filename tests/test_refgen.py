@@ -68,8 +68,7 @@ def test_the_prompt_is_the_hook_frame_plus_the_look(tmp_db, a_spark, monkeypatch
     # 150` is appended by _midjourney itself, so it is not in what the
     # renderer is HANDED. prompts/look_antihero.txt carries the framing
     # in prose ("vertical 9:16") for the providers that take no flags.
-    terms = refgen.look_terms("zeropage")
-    assert terms and all(t in prompt for t in terms) and "9:16" in prompt
+    assert "9:16" in prompt and prompt.count(".") <= 3       # hook frame + framing, no house look
 
 
 def test_the_render_is_banked_on_its_own_pass_and_read_first(tmp_db, a_spark, monkeypatch):
@@ -138,32 +137,20 @@ def test_a_picked_photo_on_a_crawl_spark_stays_with_that_spark(tmp_db, monkeypat
     assert scout.get_finding(a, dsn=tmp_db)["pass_id"] == "crawl-1"
 
 
-def test_a_still_of_michael_goes_to_nano_with_his_photos(monkeypatch, tmp_path):
-    """Midjourney leads for everything except his face: nano is the one
-    renderer that can be handed his real photos, and it goes first. The
-    Soul path rendered somebody else (2026-09-06), so it is never first
-    for him; the prompt opens by naming the attached man as the subject
-    and the photos ride as labelled reference parts."""
+def test_no_face_is_special_cased(monkeypatch):
+    """No likeness path since 2026-10-04 (Mike's call): a hook frame that
+    names Michael renders exactly like any other -- same provider order,
+    no opener about his stubble, no photos or Pro model handed to nano."""
     monkeypatch.delenv("REFGEN_PROVIDERS", raising=False)
-    assert refgen.provider_order() == ("midjourney", "nano")          # no Higgsfield since 2026-09-29
-    assert refgen.provider_order(identity=True) == ("nano", "midjourney")
-    assert refgen.is_identity("Michael at the gate, visor up", "antihero")
-    assert not refgen.is_identity("a stranger at the gate", "zeropage")
+    assert refgen.provider_order() == ("midjourney", "nano")
+    assert not hasattr(refgen, "LIKENESS_OPENER") and not hasattr(refgen, "is_identity")
+    prompt = refgen.build_prompt("Michael at the gate, visor up")
+    assert prompt.startswith("Michael at the gate, visor up.")
+    assert "stubble" not in prompt and "mustache" not in prompt
 
-    prompt = refgen.build_prompt("Michael at the gate, visor up", "antihero")
-    assert prompt.startswith(refgen.LIKENESS_OPENER)
-    assert "even light stubble" in prompt
-    assert "NOT have a grown or" in prompt
-    assert not refgen.build_prompt("a stranger at the gate", "antihero").startswith(
-        refgen.LIKENESS_OPENER)
-
-    from src import asset_shelf, nano_banana, refbin
-    fake = [tmp_path / n for n in refgen.LIKENESS_PHOTOS]
-    for f in fake:
-        f.write_bytes(b"jpegbytes")
-    monkeypatch.setattr(asset_shelf, "photos_for", lambda kind, slug: fake)
-    monkeypatch.setattr(refbin, "to_jpeg", lambda data: b"JPEG" + data)
+    from src import nano_banana
     monkeypatch.setattr(nano_banana, "has_key", lambda: True)
+    monkeypatch.setenv("REFGEN_PROVIDERS", "nano")
     seen = {}
 
     def fake_generate(prompt, out, **kw):
@@ -171,19 +158,9 @@ def test_a_still_of_michael_goes_to_nano_with_his_photos(monkeypatch, tmp_path):
         out.write_bytes(b"img")
         return out
     monkeypatch.setattr(nano_banana, "generate_image", fake_generate)
-
-    result = refgen.render(prompt, identity=True)
+    result = refgen.render(prompt)
     assert result["provider"] == "nano"
-    assert seen["model"] == refgen.LIKENESS_MODEL
-    assert [label for label, _ in seen["reference_bytes"]] == [
-        f"Reference photo {i} of Michael" for i in (1, 2, 3)]
-
-    # Without his photos on disk, nano refuses rather than rendering a
-    # stranger, and the next provider gets its turn.
-    monkeypatch.setattr(asset_shelf, "photos_for", lambda kind, slug: [])
-    seen.clear()
-    result = refgen.render(prompt, identity=True)
-    assert result["tried"][0][0] == "nano" and "likeness photos" in result["tried"][0][1]
+    assert "model" not in seen and "reference_bytes" not in seen
 
 
 # ---------- the caller pays (2026-09-29) ----------

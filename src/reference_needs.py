@@ -151,7 +151,7 @@ def build_prompt(text: str, *, look: str = "", anti=()) -> str:
     return template.format(
         scene=(text or "").strip(),
         roles=", ".join(ROLES),
-        look=(look or "").strip() or "(no look file for this brand)",
+        look=(look or "").strip() or "(no look set for this run)",
         anti=anti_block,
         count=MAX_NEEDS,
     )

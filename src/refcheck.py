@@ -82,7 +82,7 @@ def build_prompt(need: Optional[dict] = None, *, look: str = "", anti=(),
         look_block = IDENTITY_BLOCK
     else:
         look_block = ("THE LOOK it has to sit inside\n"
-                      + ((look or "").strip() or "(no look file for this brand)"))
+                      + ((look or "").strip() or "(no look set for this run)"))
     return template.format(
         count=count,
         role=role,

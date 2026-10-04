@@ -180,7 +180,7 @@ vector-store failure never discards the completed render or its local Asset Bank
 ```bash
 docker compose up -d                       # Postgres + pgvector
 
-venv/bin/python -m src.rag ingest prompts/brief.txt --domain personal_brand
+venv/bin/python -m src.rag ingest .claude/skills/video-prompting/references/models/veo3/prompting.md --domain ai_prompting
 venv/bin/python -m src.rag query "stillness broken once" --k 5
 venv/bin/python -m src.shootgen --spark "gearing up ritual"   # picks up references on its own
 

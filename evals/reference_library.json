@@ -1,6 +1,4 @@
 [
-  {"path": "prompts/brief.txt", "domain": "personal_brand"},
-  {"path": "prompts/settings.txt", "domain": "cinematography"},
   {"path": ".claude/skills/video-prompting/references/models/veo3/prompting.md", "domain": "ai_prompting"},
   {"path": ".claude/skills/video-prompting/references/models/seedance2/prompting.md", "domain": "ai_prompting"},
   {"path": ".claude/skills/video-prompting/references/models/seedance25/prompting.md", "domain": "ai_prompting", "source_ref": "https://www.youtube.com/watch?v=UxwV16jDglA"},

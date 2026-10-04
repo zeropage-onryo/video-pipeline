@@ -26,6 +26,7 @@ SHOT = Shot(
     setting="a cramped garage at night",
     lighting="one warm practical",
     audio="the metallic clunk of the drawer seating",
+    look="soft overcast daylight",     # given: there is no house look any more
 )
 
 

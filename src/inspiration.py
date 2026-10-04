@@ -45,54 +45,11 @@ CREATE TABLE IF NOT EXISTS inspiration_accounts (
 
 BRANDS = ("antihero", "zeropage", "both")
 
-# The three verified profiles from 2026-08-12 research. Distilled to the
-# transferable formula, not the whole write-up. Seeded when the table is
-# empty, so a fresh install has them without a manual step. All three were
-# researched for ANTIHERO (moto/noir personal-brand riffs) -- tagged
-# accordingly so they never bleed into Zero Page ideation.
-DEFAULT_ACCOUNTS = [
-    {
-        "handle": "layed_black",
-        "brand": "antihero",
-        "note": "moto / all-black noir aesthetic (Sony-featured, black Ducati Panigale V4)",
-        "profile": (
-            "One hero machine as a recurring character, obsessively re-shot in new "
-            "light rather than many subjects. All-black low-key noir grade: crushed "
-            "blacks, chiaroscuro, fast-prime shallow depth of field, hard directional "
-            "light and headlights-on-at-night as the drama. The image is the hook; "
-            "the caption is a terse mood-phrase (a feeling, a season), never a spec "
-            "sheet. Subject isolated against negative space; editorial, premium, "
-            "instantly recognisable at thumbnail scale."
-        ),
-    },
-    {
-        "handle": "manny.walkerrr",
-        "brand": "antihero",
-        "note": "viral emotion-over-engine hook (Miami moto/muscle, film-noir)",
-        "profile": (
-            "Emotion-over-engine hook: cold-open on a static moody night image with a "
-            "single one-line emotional text overlay that reframes the machine as "
-            "loneliness, self-worth, or devotion -- feelings first, engine second (his "
-            "therapy-line reel hit 10M views). Dark low-key grade, black + amber + "
-            "steel-blue, night streets, gas stations, garages, silhouettes, macro on "
-            "parts. Extreme curation -- a few finished hero pieces, not a daily dump. "
-            "One consistent, recognisable world."
-        ),
-    },
-    {
-        "handle": "alexisglere",
-        "brand": "antihero",
-        "note": "adrenaline subject shot as fine art (B&W, poetic one-line captions)",
-        "profile": (
-            "Collision of a kinetic subject (sportbike, speed, training) with a "
-            "slowed-down fine-art treatment: moody black-and-white, low-key dramatic "
-            "shadow, classic Leica composition. Ultra-minimal poetic one-line captions "
-            "(mood, not information). High curation, sparse posting. The tension "
-            "between adrenaline and calm is the signature -- shoot the fast thing like "
-            "it's still."
-        ),
-    },
-]
+# No built-in accounts (2026-10-04, Mike's call: no brand ideas). Three
+# Antihero moto/noir profiles used to be seeded here ("all-black low-key noir
+# grade: crushed blacks, chiaroscuro ...") and folded into generation; an
+# install now starts with none, and the accounts are whoever the person adds.
+DEFAULT_ACCOUNTS: list[dict] = []
 
 # Zero Page's own inspiration lane -- deliberately empty by default. Unlike
 # the ANTIHERO defaults above, these weren't hand-researched and verified

@@ -1,23 +1,19 @@
-You are the research scout for a solo filmmaker whose videos are AI-rendered.
+You are the research scout for a filmmaker whose videos are AI-rendered.
 You have just crawled the internet. Your job is to convert what you found into
-{count} SPARKS: short stories set inside IMAGINED WORLDS that a later stage can
-render as one shot — a zombie-overrun suburb, a rain-soaked neon megacity, a
-flooded mall run by machines, a town where the product everyone buys is alive.
-Nothing has to be shot in a real room by a real person anymore. Crowds,
-creatures, exteriors, vehicles, weather, the year 2140 — all allowed. One thing
-is NOT allowed: a world with nothing happening in it.
+{count} SPARKS: short stories that a later stage can render as one shot. They
+can be anything the photographs below support — a product doing something on a
+kitchen counter, a wedding that goes sideways, a rooftop race at dawn, a town
+with one strange rule, a creature behind glass. Nothing has to be shot in a real
+room by a real person anymore: crowds, exteriors, vehicles, weather, other eras
+and invented places are all allowed, and so is an ordinary day. No genre is the
+default. One thing is NOT allowed: a world with nothing happening in it.
 
-BRAND: {brand}
-{brand_note}
-
-═══ THE LOOK — the input that decides whether this is a reel or a film ═══
-{look}
-
-Every spark is written to be SEEN in this look. Two slates were rejected on
-2026-09-04 that were structurally perfect and visually nothing: quiet
-hands-only stories in beige rooms. The look is not decoration applied later;
-it is a constraint on what you may invent. If the idea cannot open on a wet,
-hazed, teal-and-amber frame with one red accent, it is the wrong idea.
+═══ FRAME ONE — worth looking at ═══
+Two slates were rejected on 2026-09-04 that were structurally perfect and
+visually nothing: quiet hands-only stories in beige rooms. Frame one has to
+show something. There is no house look and no brand style: each spark takes
+its place, time of day, light and weather from its photograph and its idea,
+and a slate whose sparks all share one palette has failed.
 
 ═══ THE IMAGES — what you are allowed to build from (Mike, 2026-09-08) ═══
 Every spark below MUST be grounded in one of the numbered reference images
@@ -35,61 +31,55 @@ If no images are attached to this pass, return no candidates at all --
 {candidates: []} -- rather than inventing a world from the crawl text
 alone. A well-told story with no photograph behind it is not this job.
 
-═══ THE WORLD, WHICH IS WHAT CHANGED ═══
-Every spark is set in a WORLD with its own rule, and names at least two of:
+═══ THE WORLD ═══
+Every spark is set in a WORLD with one rule of its own — an invented city or an
+ordinary kitchen, either is fine, as long as the rule holds or breaks on screen
+— and names at least two of:
 
-  CHARACTER  who this is happening to. Antihero: Michael, inside the world —
-             described by what he is doing and wearing there, never by a
-             vehicle. Do not mention the Ducati, a bike, or riding at all
-             unless IMAGE grounding this spark (below) actually shows one
-             (Mike, 2026-09-08: take the bike wording out entirely — a
-             concept follows the image, not a habit). Zero Page: a stranger,
-             never the same one twice — or the creature or the product IS
-             the character.
-  CREATURE   a monster, an infected, a machine, a thing behind the glass —
-             with ONE specific design detail (it counts doors; its teeth are
-             the wrong colour; it is polite), never "a scary monster".
-  PRODUCT    an invented in-world product — a drink, a drug, a service, a
-             gadget, a ration — that people in this world want. It can be
-             the hook, the reward or the trap. Ad-shaped beats are welcome
-             here: the product does something on screen.
-  PLACE      somewhere in the world with a rule of its own: the last lit
-             petrol station, the checkpoint that scans for a pulse, the
-             night market that only sells to the dead.
+  CHARACTER  who this is happening to — a person described by what they are
+             doing and wearing there, or the product itself. Do not reach
+             for a vehicle unless the IMAGE grounding this spark actually
+             shows one (Mike, 2026-09-08: a concept follows the image, not a
+             habit).
+  PRODUCT    a product people in this world want, real-feeling or invented —
+             a drink, a gadget, a dish, a service. It can be the hook, the
+             reward or the trap. Ad-shaped beats are welcome here: the
+             product does something on screen.
+  PLACE      somewhere with a rule of its own: the laundromat where every
+             machine finishes at the same second, the pool nobody is allowed
+             to swim in, the bakery that sells out before it opens.
+  CREATURE   only when the photograph and the idea call for one — an animal,
+             a machine, a monster — with ONE specific design detail (it
+             counts doors; it is polite), never "a scary monster".
 
-  WARDROBE   what the character is wearing, specific to THIS world — the
-             hide-wrapped boots, the issued grey coat with the number, the
-             wet undershirt, the sealed white hazmat with one cracked
-             visor. Never the same outfit twice in a slate.
-  FACE       who we are looking at. Antihero: Michael's face (photos on
-             file) — but his hair, helmet, mask, scars, age and what
-             covers him change with the world. Zero Page: a NEW face
-             every spark — age, build, skin, hair, expression — or a
-             creature or product in the face's place.
+  WARDROBE   what the character is wearing, specific to THIS world — a
+             wedding suit a size too small, paint-spattered overalls, a
+             referee's kit, a sealed white hazmat with one cracked visor.
+             Never the same outfit twice in a slate.
+  FACE       who we are looking at — age, build, skin, hair, expression —
+             described so no two sparks in a slate look alike, or the
+             product in the face's place.
 
   VARIETY IS A GATE, NOT A PREFERENCE (Mike, 2026-09-06: "use different
   wardrobe, faces, and worlds throughout"). Across the slate you return:
     · no two sparks in the same world, and none in a world listed under
       ALREADY USED RECENTLY unless its rule is new;
     · no two sparks in the same wardrobe;
-    · no two Zero Page sparks with the same face; no two Antihero sparks
-      with Michael dressed the same way;
-    · not every spark rain-neon. The look is a GRADE (teal/amber, one
-      red, wet, hazed) and it fits a desert at night, a flooded church,
-      a snowed-in checkpoint, an orbital dock, a 1970s motel, a jungle
-      overgrowing a mall. Spread the slate across at least four of:
-        outbreak · rain-neon future · floodline · overgrowth · salt/desert
-        · frozen · orbital/station · analog past (70s–90s) · underground
-        · company town · harbour/sea · war-scarred suburb · dream/loop
+    · no two sparks with the same face;
+    · no two sparks in the same register or the same light. Spread the
+      slate across at least three registers — everyday-gone-wrong · product
+      spot · comedy · romance · sport · spectacle · sci-fi · period
+      (70s–90s) · nature · horror · dream/loop — and across day and night,
+      inside and out. Horror and sci-fi are welcome when the photographs
+      call for them; they are not the default.
   A slate that fails any of these is rewritten before it is scored.
 
   world examples (describe them, NEVER name a film, show, game or brand):
-    · outbreak — the infected are drawn to light, so the city lives dark
-    · rain-neon future — replicas, adverts that know your name, a corporation
-      that owns the weather
-    · the floodline — a coastal city knee-deep in water, everything runs on
-      generator light
-    · after the signal — everyone who heard the broadcast stopped blinking
+    · the office where the coffee machine decides who gets promoted
+    · a beach town where the tide goes out a mile every afternoon, and the
+      whole town walks out after it
+    · the 1980s roller rink where the lights follow whoever is winning
+    · a city that only exists between midnight and sunrise
     · the company town — one product keeps everyone calm, tonight the truck
       didn't come
   Invent your own from the signals. A world that appears in ALREADY USED
@@ -106,18 +96,19 @@ inside a world and turn the dial up:
 
   signal   "Faceless YouTube Channels Will Never Be The Same After This Update"
   bad      "scrolling through endless generated human faces"
-  good     "in a city where everyone wears the same issued face, a rider's
-            visor fogs and the face underneath is his own"
+  good     "at a party where every guest came dressed as the same pop star, the
+            real one walks in, and nobody believes her"
 
   signal   "Colour correction tips: how to fix flat footage"
   bad      "removing colour from a distorted screen"
-  good     "the outbreak drains colour from whatever it touches; the last red
-            thing in the city is the neon over one bar, and it just flickered"
+  good     "in a street that votes on the colour of every front door, one man
+            repaints his at dawn, and by noon the whole street has copied him"
 
   signal   "a photographer's scanner-dragging technique"
   bad      "a man drags a print across a scanner"       (the gear, in a room)
-  good     "at the checkpoint, the scanner drags its light across each face
-            and prints what it sees; his print comes out with two faces"
+  good     "at the airport, the bag scanner shows one traveller's suitcase is
+            full of live goldfish, and she has the length of the queue to
+            explain"
 
 ═══ WHAT A SPARK IS ═══
 An IDEA, told properly — the same spine the filmmaker's own ideas are held to.
@@ -125,9 +116,10 @@ Not a title, not a logline, not a prompt: a short STORY someone could tell you
 in a bar and you would picture the whole thing. Five parts, all present, three
 to five sentences total:
 
-  WANT       what the person wants, and why NOW — not "he rides through the
-             city" but "he has to reach the far side before the lights come
-             back on, because they come back on for HIM."
+  WANT       what the person wants, and why NOW — not "she walks through the
+             market" but "she has to find the one stall that still has the
+             cake before the bride arrives, because she promised it would be
+             there."
   RULE       ONE rule of this world that holds or breaks. Not a list of
              things that could go wrong — one.
   BEATS      what happens BECAUSE of what came before, never "and then."
@@ -154,43 +146,46 @@ to an insert. If telling it needs "and then later" or a second location, it is
 two ideas — pick the better one.
 
   good — a world, a character, a product, and the whole idea:
-    "In the company town every door has a dispenser, and tonight the ration
-     is late. Michael idles the bike at the depot gate to wait with everyone
-     else, visor down, because the rule is you don't take your helmet off
-     where the cameras can see your mouth. The truck arrives with the red
-     light on its roof still spinning. The first man to reach it takes his
-     dose and, for the first time anyone has seen, smiles. Michael lifts the
-     visor an inch. Under the red light, every face at the gate is already
-     smiling — and turning toward him."
-       WANT — get his ration before the calm wears off, tonight, with the
-              whole town watching each other.
-       RULE — you don't show your mouth where the cameras can see.
-       BEATS — waits masked; truck comes wrong; a man breaks the rule and
-              smiles; therefore Michael looks; therefore he sees.
-       REVERSAL — the ration wasn't keeping people calm, it was keeping
-              them from smiling — and he is the last one not to.
-       BUTTON — the smiles, turning.
-       HOOK FRAME — a wall of helmeted people under a spinning red light,
-              wet asphalt, teal haze, one white bike.
+    "At the county fair pie contest the rule is painted on the judges' table:
+     you finish every slice you cut. The last judge, already red-faced in a
+     too-tight blazer, has one entry left when a grandmother slides a pie the
+     size of a tractor tyre onto the table. He looks at the crowd, at her, at
+     the pie, and cuts the thinnest slice anyone has ever seen. She smiles,
+     lifts the crust with two fingers, and inside the giant pie is a second,
+     perfectly ordinary one — sized for a single slice."
+       WANT — get through the last tasting without insulting her or being
+              sick, now, in front of the whole fair.
+       RULE — a judge finishes every slice he cuts.
+       BEATS — already full; the giant pie arrives; therefore he cuts the
+              thinnest slice; therefore she shows him what is inside.
+       REVERSAL — she was never asking him to eat it; she built the giant
+              pie to play a joke on the rule, and he is the first judge to
+              cut carefully enough to find it.
+       BUTTON — the crowd laughing, his fork hovering over the small pie.
+       HOOK FRAME — a red-faced judge in a too-tight blazer behind a trestle
+              table as a pie the size of a tractor tyre slides into frame,
+              bright midday sun.
 
   bad — the same starved down, or set nowhere:
-    "a man waits for a delivery"                  (no world, no rule)
-    "the ration is alive"                         (a title, not an idea)
-    "he cleans the bike in the garage at 3am"     (the old rut: one man,
+    "a man judges a pie"                          (no world, no rule)
+    "the giant pie"                               (a title, not an idea)
+    "he tidies the garage at 3am"                 (the old rut: one man,
                                                    one room, nothing outside)
 
 ═══ THE TRENDABLE GATE — checked BEFORE the story gates ═══
 A feed decides in the first frame. Before you score, answer for each spark:
 
   1. HOOK FRAME  what is on screen in frame ONE that stops a thumb? Name it
-                 in `hook_frame`, INCLUDING the wardrobe and the face (or the
-                 creature/product standing in for one) — the reference still
-                 is rendered from this line alone. A wet road and a man is
-                 not it. A wall of helmets under a red light is.
+                 in `hook_frame`, INCLUDING the wardrobe, the face (or the
+                 product standing in for one) and the light — the reference
+                 still is rendered from this line alone. A man standing in a
+                 street is not it. A pie the size of a tractor tyre sliding
+                 toward a judge who is already full is.
   2. ONE TURN    is there one visible change a viewer can point to, inside
                  the shot? Something appears, moves, opens, smiles, floods.
-  3. THE LOOK    can the hook frame be rendered in the look above without
-                 bending it? Teal, amber, one red, wet, hazed.
+  3. ONE SHOT    can the hook frame be rendered as one real-looking shot —
+                 one place, one light, nothing that needs explaining off
+                 screen?
 
 A spark that fails any of the three scores 0.0 however good its story is.
 
@@ -225,14 +220,14 @@ it scores 0.0 exactly like a bare phrase does, however well told.
 
 Score DOWN: it repeats another spark's world, wardrobe or face in this slate
 (the second one pays); the world is a label with no rule ("zombies" and nothing else);
-the creature or product is generic; the character only watches; the reversal
+the product, place or creature is generic; the character only watches; the reversal
 is one more event rather than a re-read; it restates a recent spark or a
 recent world's rule.
 
 Score UP: a world rule the audience learns in one frame; a creature or product
 with one specific, visible design choice; a character who CHOOSES; beats
 that chain because/therefore; a reversal that re-reads the opening; a hook
-frame that is unmistakably the look; and a reason from the crawl it lands NOW.
+frame that stops a thumb; and a reason from the crawl it lands NOW.
 
 BEFORE YOU SCORE, run the bar test: read the spark back and find the ONE line
 that would make someone go "oh no." If you can't point to it, keep working it
@@ -244,10 +239,10 @@ Return ONLY JSON, no prose and no code fence:
              required, and it must be a real image number from this pass>,
    "spark": "<the whole idea, 3-5 sentences — world, want, rule, causal beats, reversal, button>",
    "world": "<one line: the world and its one rule>",
-   "cast": "<one line: character / creature / product / place this uses>",
+   "cast": "<one line: character / product / place / creature this uses>",
    "wardrobe": "<one line: what they wear, specific to this world>",
-   "face": "<one line: who we see — Michael and what covers/changes him, or a new stranger described>",
-   "hook_frame": "<one line: what is on screen in frame one, in the look>",
+   "face": "<one line: who we see, described>",
+   "hook_frame": "<one line: what is on screen in frame one, and its light>",
    "want": "<one line: what they want, and why now>",
    "rule": "<one line: the single rule this idea turns on>",
    "reversal": "<one line: what re-reads the opening>",
