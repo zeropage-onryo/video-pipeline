@@ -18,12 +18,26 @@ export function useMentions(
 ) {
   const [items, setItems] = useState<AssetHit[]>([]);
   const [cursor, setCursor] = useState(0);
+  // mirrors `items.length`, so close() can tell nothing is open WITHOUT a
+  // setState: a functional no-op update still schedules a render when the
+  // fiber has pending lanes, which inside a keystroke's commit it does
+  const open = useRef(false);
   const token = useRef<{ start: number; end: number } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // A no-op while nothing is open. It used to do `setItems([])` with a fresh
+  // array on EVERY value change, so each keystroke scheduled one more
+  // default-priority render after its own commit. A fast burst of keys (an
+  // automation typing, a long paste-like `type`) starved those renders, so
+  // every keystroke's commit still had that update pending and React counted
+  // it as a nested update -- at the 51st it threw "Maximum update depth
+  // exceeded" (#185) from the box's onChange and dropped the character
+  // (seen on zeropage.studio 2026-10-03: "dashoard", "ligt").
   const close = () => {
-    setItems([]);
     token.current = null;
+    if (!open.current) return;
+    open.current = false;
+    setItems([]);
   };
 
   const pick = (hit: AssetHit) => {
@@ -61,6 +75,7 @@ export function useMentions(
     timer.current = setTimeout(() => {
       searchAssets(q)
         .then((res) => {
+          open.current = res.items.length > 0;
           setItems(res.items);
           setCursor(0);
         })
