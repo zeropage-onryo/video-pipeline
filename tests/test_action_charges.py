@@ -418,3 +418,34 @@ def test_every_nano_caller_forwards_the_account():
                     and not any(k.arg == "account_id" for k in node.keywords)):
                 missing.append(f"{rel}:{node.lineno}")
     assert not missing, f"nano_banana.generate_from_prompt without account_id: {missing}"
+
+
+# --- the cue cards' per-shot approve (2026-10-04) ----------------------------
+
+
+def test_a_cue_card_approves_one_shot(client, studio, drawn, monkeypatch):
+    """`{"part": n}` prices and draws ONE still: the balance only has to
+    cover that shot, the quote says which one, and the job carries it."""
+    from src import nano_banana, scene_chain
+    parts_seen = []
+    monkeypatch.setattr(scene_chain, "keyframe_scene",
+                        lambda cid, n=None, part=None, **kw: parts_seen.append(part) or
+                        {"ok": True, "media_url": "https://example.test/k.jpg", "frames": []})
+    cid = _timed_scene(studio)
+    each = pricing.still_credits(nano_banana.MODEL)
+    _fund(studio, each)                        # one of three stills
+    assert client.post(f"/api/concepts/{cid}/keyframes").status_code == 402
+    res = client.post(f"/api/concepts/{cid}/keyframes", json={"part": 2})
+    assert res.status_code == 200, res.text
+    assert res.json()["keyframes"] == {"stills": 1, "each": each, "credits": each, "part": 2}
+    assert _wait(client, res.json()["job_id"])["status"] == "done"
+    assert parts_seen == [2]
+    # a shot the scene does not have, and one already drawn, are refused
+    assert client.post(f"/api/concepts/{cid}/keyframes", json={"part": 7}).status_code == 409
+    from src import timeline
+    timeline.attach_part(cid, 1, 2, "reference_image", "https://example.test/2.jpg",
+                         db_path=studio["dsn"], account_id=studio["account_id"])
+    res = client.post(f"/api/concepts/{cid}/keyframes", json={"part": 2})
+    assert res.status_code == 409 and "already has a still" in res.json()["error"]["message"]
+    # the card's whole-strip quote prices the two still missing
+    assert client.get(f"/api/concepts/{cid}").json()["keyframes"]["stills"] == 2

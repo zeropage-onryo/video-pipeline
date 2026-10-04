@@ -1132,7 +1132,9 @@ def test_creating_an_element_draws_its_sheet_as_a_job(
     drawn = []
 
     def fake_draw(kind, name, photos, out_dir, **kw):
-        drawn.append((kind, name, [p.name for p in photos], kw))
+        # the route hands over (filename, bytes), read through _photo_bytes
+        # -- disk here, the bucket on the deployed site (2026-10-04)
+        drawn.append((kind, name, [(n, d) for n, d in photos], kw))
         target = out_dir / "sheet.jpg"
         target.write_bytes(b"sheet")
         return {"ok": True, "path": target, "generation_id": 1, "error": None}
@@ -1147,7 +1149,7 @@ def test_creating_an_element_draws_its_sheet_as_a_job(
     job = wait_for_job(body["sheet_job"])
     assert job["status"] == "done", job
     assert job["output"].endswith("/sheet.jpg")
-    assert drawn == [("prop", "Ducati 959", ["a.jpg"],
+    assert drawn == [("prop", "Ducati 959", [("a.jpg", b"jpg-bytes")],
                       {"detail": "vehicle", "notes": "red", "account_id": None})]
     files = [u.split("?")[0].rsplit("/", 1)[-1]
              for u in client.get("/api/assets/prop/1").json()["photos"]]
@@ -1200,6 +1202,53 @@ def test_redrawing_an_existing_element(tmp_db, tmp_path, monkeypatch):
     assert client.post("/api/assets/renders/1/sheet").status_code == 404
     monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: None)
     assert client.post(f"/api/assets/characters/{cid}/sheet").status_code == 503
+
+
+def test_the_sheet_draws_from_the_bucket_when_the_folder_is_gone(tmp_db, tmp_path, monkeypatch):
+    """The deployed API has no characters/ folder (gitignored AND
+    dockerignored), so an element's photos live in R2 only. The sheet used
+    to read the folder, answer "add a photo first" to the button, and
+    quietly start no job on create -- the live generations table held not
+    one sheet attempt (2026-10-04). Now the listing is the gallery's: disk,
+    else the bucket; and a sheet already in the bucket is not a source."""
+    from src import asset_shelf
+    root = tmp_path / "characters"            # never created: Fly's shape
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", root)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: "k")
+    cid = entities.add_character(name="Michael", role="rider", notes="",
+                                 dsn=tmp_db, account_id=None)
+    bucket = {"https://cdn.test/m/1/characters/michael/a.jpg": b"face-a",
+              "https://cdn.test/m/1/characters/michael/b.jpg": b"face-b",
+              "https://cdn.test/m/1/characters/michael/sheet.jpg": b"old sheet"}
+    listed = []
+    monkeypatch.setattr(asset_shelf, "r2_photo_urls",
+                        lambda kind, slug, account_id=None: listed.append((kind, slug)) or list(bucket))
+    monkeypatch.setattr(api_mod, "_photo_bytes", lambda url: bucket.get(url))
+    drawn = []
+
+    def fake_draw(kind, name, photos, out_dir, **kw):
+        drawn.append(list(photos))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / "sheet.jpg"
+        target.write_bytes(b"sheet")
+        return {"ok": True, "path": target, "generation_id": 1, "error": None}
+
+    monkeypatch.setattr(api_mod.element_sheet, "draw", fake_draw)
+    mirrored = []
+    monkeypatch.setattr(api_mod, "_mirror_photos_to_r2",
+                        lambda plural, slug, saved, account_id=None: mirrored.append((plural, slug)))
+    res = client.post(f"/api/assets/characters/{cid}/sheet")
+    assert res.status_code == 200, res.text
+    job = wait_for_job(res.json()["job_id"])
+    assert job["status"] == "done", job
+    # asked under THIS account's keys -- by the route's check and again by the job
+    assert listed and set(listed) == {("character", "michael")}
+    # the real photos, as bytes, and never the sheet already drawn
+    assert drawn == [[("a.jpg", b"face-a"), ("b.jpg", b"face-b")]]
+    assert mirrored == [("characters", "michael")]
+    # with nothing in the bucket either, the button still says so
+    monkeypatch.setattr(asset_shelf, "r2_photo_urls", lambda kind, slug, account_id=None: [])
+    assert client.post(f"/api/assets/characters/{cid}/sheet").status_code == 400
 
 
 def test_assets_backfill_runs_as_a_job(tmp_db, monkeypatch):

@@ -9,24 +9,45 @@
    when one has been drawn and its number otherwise, never fake footage;
    a tile with a clip (rendered later, read back here) gets the play mark.
    The Guide's turns are the same stream: the person's words on the
-   right, the answer on the left with its chips, sheet and confirm card. */
+   right, the answer on the left with its chips, sheet and confirm card.
+
+   THE CUE CARDS GET IMAGES AND APPROVALS (2026-10-04, Mike's call). A
+   shot tile without a still carries its own priced approve -- "Draw ·
+   10 credits" -- which posts the Queue's keyframe approve for THAT shot
+   (`POST /concepts/{id}/keyframes {part}`), and the still lands on the
+   tile when the job does; "Draw all" under the strip is the same approve
+   for every shot still missing one. Nothing is drawn until a button is
+   pressed, the 2026-09-29 rule, only now one card at a time. Pick is
+   real here too: it posts the board's pick, so a scene can go to the
+   Queue without a trip to Pipeline. */
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Clapperboard, Film, ImagePlus, Play, RotateCcw, Workflow } from "lucide-react";
+import { Check, Clapperboard, Film, ImagePlus, Images, Play, RotateCcw, Workflow } from "lucide-react";
 import { cssAspect, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
+import { creditsText } from "@/lib/render-choice";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
 export type Live = { progress: number; detail: string };
 
+/** which shot of a send is being drawn right now: a part number, or
+ *  "all" for the whole strip (page state, never saved) */
+export type Drawing = Record<string, number | "all">;
+
 type Handlers = {
   busy: boolean;
+  /** the operator's exempt account sees the price with "not charged" */
+  exempt: boolean;
   onAnimate: (m: Made) => void;
   onUseAsRef: (m: Made) => void;
   onReuse: (t: Turn) => void;
   onSelect: (madeId: string, n: number) => void;
+  /** the priced approve: one shot's still, or every missing one */
+  onDraw: (m: Made, part?: number) => void;
+  /** the board's pick, from here */
+  onPick: (m: Made) => void;
   onChip: (text: string) => void;
   onDecide: (i: number, yes: boolean) => void;
   onToggleFrame: (i: number, id: string) => void;
@@ -63,9 +84,14 @@ function RunningTile({ m, live }: { m: Made; live?: Live }) {
   );
 }
 
-function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; turn: Turn }) {
+function MadeView({ m, live, h, turn, drawing }: { m: Made; live?: Live; h: Handlers; turn: Turn; drawing?: number | "all" }) {
   const still = useReducedMotion();
   const selected = m.shot ?? 1;
+  // a shot can be approved from its card when the scene is on the board,
+  // the server priced it, and nothing of this send is drawing already
+  const each = m.keyframes?.each ?? 0;
+  const canDraw = m.status === "done" && !!m.conceptId && !!m.keyframes && drawing == null && !h.busy;
+  const missing = (m.parts ?? []).filter((p) => !p.reference_image).length;
   const tile = (i: number) => ({
     initial: still ? false : { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
@@ -97,11 +123,12 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
       <div className={`zc-tiles${parts.length >= 4 ? " four" : ""}`}>
         {parts.map((p, i) => {
           const on = p.n === selected;
+          const busyHere = drawing === p.n || (drawing === "all" && !p.reference_image);
           return (
             <motion.div key={p.n} className="zc-tilewrap" {...tile(i)}>
               <button
                 type="button"
-                className={`zc-tile${on ? " on" : ""}`}
+                className={`zc-tile${on ? " on" : ""}${busyHere ? " drawing" : ""}`}
                 aria-pressed={on}
                 title={p.text || p.prompt || `Shot ${pad(p.n)}`}
                 onClick={() => h.onSelect(m.id, p.n)}
@@ -123,7 +150,26 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
                   </span>
                 ) : null}
                 <span className="zc-badge">{p.seconds}s</span>
+                {busyHere ? (
+                  <span className="zc-drawing" role="status">
+                    <span className="zc-live" aria-hidden /> Drawing…
+                  </span>
+                ) : null}
               </button>
+              {/* the per-card approve: a sibling of the tile, since a
+                  button cannot sit inside the tile's own button */}
+              {!p.reference_image && !busyHere && m.keyframes ? (
+                <button
+                  type="button"
+                  className="zc-approve"
+                  disabled={!canDraw}
+                  onClick={() => h.onDraw(m, p.n)}
+                  aria-label={`Draw the still for shot ${pad(p.n)} — ${creditsText(each, h.exempt)}`}
+                  title={`Draw this shot's still · ${creditsText(each, h.exempt)}`}
+                >
+                  <Check strokeWidth={2.2} /> Draw · {each}
+                </button>
+              ) : null}
               <span className={`zc-label${on ? " on" : ""}`}>
                 Shot {pad(p.n)} · {p.start}–{p.end}s{on ? " · selected" : ""}
               </span>
@@ -134,10 +180,33 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
     ) : (
       <div className="zc-tiles one">
         <motion.div className="zc-tilewrap" {...tile(0)}>
-          <div className="zc-tile on">
-            <span className="zc-tile-n">01</span>
+          <div className={`zc-tile on${drawing != null ? " drawing" : ""}`}>
+            {m.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={mediaSrc(m.image)} alt="" />
+            ) : (
+              <span className="zc-tile-n">01</span>
+            )}
             {m.seconds ? <span className="zc-badge">{m.seconds}s</span> : null}
+            {drawing != null ? (
+              <span className="zc-drawing" role="status">
+                <span className="zc-live" aria-hidden /> Drawing…
+              </span>
+            ) : null}
           </div>
+          {/* a scene that renders whole has the one still to approve */}
+          {!m.image && drawing == null && m.keyframes ? (
+            <button
+              type="button"
+              className="zc-approve"
+              disabled={!canDraw}
+              onClick={() => h.onDraw(m)}
+              aria-label={`Draw the still — ${creditsText(m.keyframes.credits, h.exempt)}`}
+              title={`Draw the scene's still · ${creditsText(m.keyframes.credits, h.exempt)}`}
+            >
+              <Check strokeWidth={2.2} /> Draw · {m.keyframes.credits}
+            </button>
+          ) : null}
           <span className="zc-label on">One continuous shot · {m.detail}</span>
         </motion.div>
       </div>
@@ -162,7 +231,29 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
               </button>
             </>
           ) : null}
-          {m.output === "video" ? (
+          {m.output === "video" && m.keyframes && missing > 1 ? (
+            <button
+              type="button"
+              className="zc-act"
+              disabled={!canDraw}
+              onClick={() => h.onDraw(m)}
+              aria-label={`Draw all ${m.keyframes.stills} stills — ${creditsText(m.keyframes.credits, h.exempt)}`}
+            >
+              <Images strokeWidth={1.6} />
+              {drawing === "all" ? "Drawing…" : `Draw all ${m.keyframes.stills} · ${m.keyframes.credits}`}
+            </button>
+          ) : null}
+          {m.output === "video" && m.conceptId ? (
+            m.picked ? (
+              <Link href="/studio/pipeline" className="zc-act on">
+                <Check strokeWidth={2} /> Picked · on Pipeline
+              </Link>
+            ) : (
+              <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onPick(m)}>
+                <Workflow strokeWidth={1.6} /> Pick
+              </button>
+            )
+          ) : m.output === "video" ? (
             <Link href="/studio/pipeline" className="zc-act">
               <Workflow strokeWidth={1.6} /> Pick on Pipeline
             </Link>
@@ -190,6 +281,7 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
 export function ComposerStream({
   turns,
   live,
+  drawing = {},
   choices,
   working,
   handlers,
@@ -197,6 +289,8 @@ export function ComposerStream({
   turns: Turn[];
   /** progress per running send, by made id (page state) */
   live: Record<string, Live>;
+  /** which shot each send is drawing a still for, by made id (page state) */
+  drawing?: Drawing;
   /** the Guide's offered replies after its newest answer */
   choices: string[];
   /** the Guide is answering: its detail line, drawn as a working row */
@@ -284,7 +378,7 @@ export function ComposerStream({
                 ) : null}
               </div>
             )}
-            {t.made ? <MadeView m={t.made} live={live[t.made.id]} h={handlers} turn={t} /> : null}
+            {t.made ? <MadeView m={t.made} live={live[t.made.id]} h={handlers} turn={t} drawing={drawing[t.made.id]} /> : null}
           </motion.article>
         ))}
       </AnimatePresence>
