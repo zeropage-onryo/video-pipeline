@@ -191,7 +191,9 @@ def build_body(args, *, templates_dir: Path = TEMPLATES_DIR,
             raise ValueError("custom SMTP needs " + ", ".join(missing))
         if not smtp_pass:
             raise ValueError("custom SMTP needs the password: SMTP_PASS=... or type it")
-        body.update({"smtp_host": args.smtp_host, "smtp_port": int(args.smtp_port),
+        # smtp_port goes over the wire as a STRING: the Management API answers
+        # HTTP 400 "expected string, received number" to an int (2026-10-05).
+        body.update({"smtp_host": args.smtp_host, "smtp_port": str(int(args.smtp_port)),
                      "smtp_user": args.smtp_user, "smtp_pass": smtp_pass,
                      "smtp_admin_email": args.sender_email,
                      "smtp_sender_name": args.sender_name or "Zero Page"})
