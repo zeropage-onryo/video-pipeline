@@ -188,6 +188,12 @@
   /* a card's outline (features, model and how-to cards); the hairline by
      default, its own colour on the light tone */
   --card-line: var(--border);
+  /* a /make page's accent (landing-pages/theme.ts) overrides these four
+     inline on its wrapper; the defaults are the tone's own */
+  --card-light: rgba(255, 255, 255, 0.06);
+  --card-shadow: 0 12px 32px -16px rgba(0, 0, 0, 0.6);
+  --plate-1: linear-gradient(135deg, #3a3631 0%, #2a2724 55%, #1f1d1a 100%);
+  --plate-2: linear-gradient(135deg, #2b2e33 0%, #2a2724 50%, #262b24 100%);
   --glass: rgba(16, 16, 16, 0.72);
   --grid-line: rgba(255, 255, 255, 0.035);
   --grid-spot: rgba(255, 255, 255, 0.11);
@@ -228,6 +234,10 @@
   /* cards wear a light red outline that deepens on hover (2026-10-01) */
   --card-line: #f2b9c3;
   --line-hover: #e4002b;
+  --card-light: rgba(0, 0, 0, 0.06);
+  --card-shadow: 0 12px 32px -16px rgba(0, 0, 0, 0.25);
+  --plate-1: linear-gradient(135deg, #f6d7a6 0%, #e9a67f 55%, #d78a8a 100%);
+  --plate-2: linear-gradient(135deg, #cfe3f2 0%, #e8c9a8 50%, #b9d9a3 100%);
   --glass: rgba(255, 255, 255, 0.78);
   --grid-line: rgba(0, 0, 0, 0.05);
   --grid-spot: rgba(0, 0, 0, 0.14);

@@ -9,6 +9,8 @@
 // spend, prices come from the catalog below and are never typed by hand.
 //
 import { MODELS, num } from "@/lib/catalog";
+import { RED, type MakeAccent } from "./theme";
+import type { SignatureKey } from "./components/signatures";
 
 // One tile in the wall under the hero (the InVideo-style wall, 2026-10-01).
 // A tile with no `src` draws as a soft gradient plate, the way the
@@ -57,12 +59,26 @@ export type MakePage = {
   /** The short line in the header's Solutions menu (site-header.tsx). */
   menu: string;
   subhead: string;
-  cta: { label: string; /** carried into the composer as ?spark= */ spark: string };
+  cta: {
+    label: string;
+    /** carried into the composer as ?spark= */
+    spark: string;
+    /** The outline button beside it. Default: "See examples" -> #examples. */
+    secondary?: { label: string; href: string };
+    /** The small link at the foot of every model and how-to card. Default "Start now". */
+    startLabel?: string;
+  };
   /** Which starting shape the composer opens with. Only "spark" exists
    *  today; a real `?template=` the composer reads is the follow-up. */
   template: "spark";
   /** The skin's tone. "light" is white ground, black type (2026-10-01). */
   tone: "light" | "dark";
+  /** The page's own colours (theme.ts), published as CSS variables on the
+   *  skin wrapper. `RED` is the light tone's original palette. */
+  accent: MakeAccent;
+  /** The page's one signature interaction, drawn between the hero and the
+   *  wall (components/signatures.tsx). Absent = none. */
+  signature?: SignatureKey;
   /** The wall right under the hero (ad-wall.tsx): its own big line, up
    *  to eight tiles, and the button under them. */
   wall: { title: string; tiles: MakeTile[]; explore: { label: string; href: string } };
@@ -150,6 +166,7 @@ export const MAKE_PAGES: MakePage[] = [
     },
     template: "spark",
     tone: "light",
+    accent: RED,
     wall: {
       title: "ZeroPage Ad Generator",
       tiles: TILES,

@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 
 type SpotlightProps = {
   gradientFirst?: string;
@@ -25,11 +25,12 @@ export const Spotlight = ({
   duration = 7,
   xOffset = 100,
 }: SpotlightProps = {}) => {
+  // Reduced motion: the beams are drawn still, at their resting place.
+  const still = !!useReducedMotion();
+  const drift = (offset: number) => (still ? undefined : { x: [0, offset, 0] });
   return (
     <motion.div
-      initial={{
-        opacity: 0,
-      }}
+      initial={still ? false : { opacity: 0 }}
       animate={{
         opacity: 1,
       }}
@@ -39,9 +40,7 @@ export const Spotlight = ({
       className="pointer-events-none absolute inset-0 h-full w-full"
     >
       <motion.div
-        animate={{
-          x: [0, xOffset, 0],
-        }}
+        animate={drift(xOffset)}
         transition={{
           duration,
           repeat: Infinity,
@@ -82,9 +81,7 @@ export const Spotlight = ({
       </motion.div>
 
       <motion.div
-        animate={{
-          x: [0, -xOffset, 0],
-        }}
+        animate={drift(-xOffset)}
         transition={{
           duration,
           repeat: Infinity,

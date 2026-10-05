@@ -3,15 +3,13 @@ import { HeroCursors } from "@/components/landing/hero-cursors";
 import { HeroMedia } from "@/components/landing/hero-media";
 import { HeroPrompt } from "@/components/landing/hero-prompt";
 import { HeroSpotlight } from "@/components/landing/hero-spotlight";
+import { REVEAL_CLASS as REVEAL } from "@/lib/motion";
 
 // The hero (2026-09-18 restyle, made interactive 2026-09-24): a centered
 // column over a hairline grid that brightens under the pointer, four
 // floating cursors, the headline Mike chose in the serif face, and a box
 // you can actually type an idea into. Every reveal is motion-safe -- with
 // reduced motion set the content simply renders.
-const REVEAL =
-  "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-both";
-
 export function HeroSection() {
   return (
     <section id="studio" className="relative overflow-hidden pt-[60px]">

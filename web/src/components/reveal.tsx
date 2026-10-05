@@ -1,7 +1,9 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 import type { ReactNode } from "react";
+import { EASE_OUT } from "@/lib/motion";
+import { useStill } from "@/lib/motion-hooks";
 
 // A section that arrives as you reach it. `once` is deliberate: content
 // that re-animates every time it scrolls back into view reads as a page
@@ -15,7 +17,7 @@ export function Reveal({
   delay?: number;
   className?: string;
 }) {
-  const reduce = useReducedMotion();
+  const reduce = useStill();
   if (reduce) return <div className={className}>{children}</div>;
 
   return (
@@ -24,7 +26,7 @@ export function Reveal({
       initial={{ opacity: 0, y: 18 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 0.25 }}
-      transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1], delay }}
+      transition={{ duration: 0.6, ease: EASE_OUT, delay }}
     >
       {children}
     </motion.div>

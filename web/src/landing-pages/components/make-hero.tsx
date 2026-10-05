@@ -2,7 +2,10 @@ import Link from "next/link";
 import { Spotlight } from "@/components/ui/spotlight-new";
 import { Button } from "@/components/ui/button";
 import { CreateCtaButton } from "./create-cta-button";
+import { REVEAL_CLASS as REVEAL } from "@/lib/motion";
 import type { MakePage } from "../pages";
+
+const SECONDARY = { label: "See examples", href: "#examples" };
 
 // The homepage hero's bones -- serif H1 at the same scale (bold here),
 // centered column -- with the spotlight as this page's one effect. The
@@ -18,11 +21,9 @@ const beam = (tone: MakePage["tone"]) => {
   };
 };
 
-const REVEAL =
-  "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-both";
-
 export function MakeHero({ page }: { page: MakePage }) {
   const BEAM = beam(page.tone);
+  const secondary = page.cta.secondary ?? SECONDARY;
   return (
     <section className="relative overflow-hidden pt-[60px]">
       <div aria-hidden className="absolute inset-0 z-0 overflow-hidden">
@@ -51,8 +52,8 @@ export function MakeHero({ page }: { page: MakePage }) {
           className={`mt-9 flex w-full max-w-[420px] flex-col items-stretch gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-center ${REVEAL} motion-safe:duration-700 motion-safe:delay-200`}
         >
           <CreateCtaButton label={page.cta.label} spark={page.cta.spark} />
-          <Button size="lg" variant="outline" render={<Link href="#examples" />}>
-            See examples
+          <Button size="lg" variant="outline" render={<Link href={secondary.href} />}>
+            {secondary.label}
           </Button>
         </div>
       </div>
