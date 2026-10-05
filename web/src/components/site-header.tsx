@@ -9,6 +9,8 @@ import { goToSignIn } from "@/lib/api";
 import { Wordmark } from "@/components/wordmark";
 import { skinClass, useTone } from "@/components/editorial-skin";
 import { makePath, pagesIn } from "@/landing-pages/pages";
+import { MODELS } from "@/lib/catalog";
+import { pageLabel } from "@/landing-pages/shared";
 
 // Fixed 60px bar: transparent while the page is at the top, glass (blur +
 // hairline) once scrolled. The state is written to a data attribute the
@@ -22,10 +24,15 @@ import { makePath, pagesIn } from "@/landing-pages/pages";
 // (2026-10-05, Mike's call).
 const BEFORE = [{ href: "/#how", label: "How it works" }];
 const AFTER = [
-  { href: "/models", label: "Models" },
   { href: "/pricing", label: "Pricing" },
   { href: "/faq", label: "FAQ" },
 ];
+
+// "Models" (Mike, 2026-10-05) is a second panel: every model's own page under
+// /models/<slug>, video in one column and image in the other, with the
+// overview at the top. A page is video when its first model id is in the
+// pricing catalog; the rest are the composer's image models.
+const isVideoPage = (p: { modelIds?: string[] }) => MODELS.some((m) => m.model === p.modelIds?.[0]);
 
 const ITEM =
   "inline-flex h-9 items-center rounded-md px-3 text-[13.5px] tracking-[-0.005em] text-[var(--nav-fg)] transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:bg-secondary focus-visible:text-foreground";
@@ -94,6 +101,54 @@ export function SiteHeader() {
                     </li>
                   ))}
                 </ul>
+              </Menu.Content>
+            </Menu.Item>
+
+            <Menu.Item>
+              <Menu.Trigger className={`${ITEM} group/models gap-1 data-popup-open:bg-secondary data-popup-open:text-foreground`}>
+                Models
+                <ChevronDown
+                  aria-hidden
+                  strokeWidth={1.75}
+                  className="size-3.5 transition-transform duration-200 group-data-popup-open/models:rotate-180"
+                />
+              </Menu.Trigger>
+              <Menu.Content className="w-[520px] p-1.5 data-ending-style:opacity-0 data-starting-style:opacity-0 transition-opacity duration-200">
+                <Menu.Link
+                  render={<Link href="/models" />}
+                  closeOnClick
+                  className="block rounded-md px-3 py-2.5 transition-colors outline-none hover:bg-secondary focus-visible:bg-secondary"
+                >
+                  <span className="block text-[14px] font-medium tracking-[-0.005em] text-foreground">All models</span>
+                  <span className="mt-0.5 block text-[12.5px] leading-snug text-[var(--ink-3)]">
+                    Every renderer, the tier that unlocks it, and what a clip costs.
+                  </span>
+                </Menu.Link>
+                <div className="mt-1 grid grid-cols-2 gap-1 border-t border-border pt-2">
+                  {(
+                    [
+                      ["Video", pagesIn("models").filter(isVideoPage)],
+                      ["Image", pagesIn("models").filter((p) => !isVideoPage(p))],
+                    ] as const
+                  ).map(([group, pages]) => (
+                    <div key={group}>
+                      <span className="eyebrow block px-3 pt-1.5 pb-1">{group}</span>
+                      <ul className="flex flex-col">
+                        {pages.map((page) => (
+                          <li key={page.slug}>
+                            <Menu.Link
+                              render={<Link href={makePath(page)} />}
+                              closeOnClick
+                              className="block rounded-md px-3 py-2 text-[14px] font-medium tracking-[-0.005em] text-foreground transition-colors outline-none hover:bg-secondary focus-visible:bg-secondary"
+                            >
+                              {pageLabel(page)}
+                            </Menu.Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
               </Menu.Content>
             </Menu.Item>
 
