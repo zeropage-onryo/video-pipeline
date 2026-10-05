@@ -65,8 +65,18 @@ export type MakeFaq = {
   link?: { href: string; label: string };
 };
 
+/** Where a page lives: /make/<slug> (a thing to make) or /models/<slug>
+ *  (a model's page, listed on /models under "Image models"; 2026-10-05,
+ *  Mike's call). The template is the same; the route, the menu and the
+ *  footer column follow the section. */
+export type MakeSection = "make" | "models";
+
 export type MakePage = {
   slug: string;
+  section: MakeSection;
+  /** The fal image-model id this page is about (shared.ts IMAGE_MODELS),
+   *  for the /models listing. Only the image pages carry one. */
+  model?: string;
   /** <title> without the site suffix (layout.tsx adds " — Zero Page"). */
   title: string;
   description: string;
@@ -113,8 +123,17 @@ export type MakePage = {
 // In the order the Solutions menu and the Tools column list them.
 export const MAKE_PAGES: MakePage[] = [AD_GENERATOR, SEEDANCE, NANO_BANANA, FLUX, SEEDREAM, GPT_IMAGE, IDEOGRAM];
 
-export function getMakePage(slug: string): MakePage | undefined {
-  return MAKE_PAGES.find((p) => p.slug === slug);
+export function getMakePage(slug: string, section?: MakeSection): MakePage | undefined {
+  return MAKE_PAGES.find((p) => p.slug === slug && (!section || p.section === section));
 }
 
-export const makePath = (slug: string) => `/make/${slug}`;
+/** The pages in one section, in list order. */
+export const pagesIn = (section: MakeSection) => MAKE_PAGES.filter((p) => p.section === section);
+
+/** A page's path, from its section: /make/<slug> or /models/<slug>. */
+export function makePath(slugOrPage: string | MakePage): string {
+  const page = typeof slugOrPage === "string" ? getMakePage(slugOrPage) : slugOrPage;
+  const section = page?.section ?? "make";
+  const slug = typeof slugOrPage === "string" ? slugOrPage : slugOrPage.slug;
+  return `/${section}/${slug}`;
+}

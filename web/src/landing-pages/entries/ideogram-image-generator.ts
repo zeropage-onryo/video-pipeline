@@ -30,6 +30,8 @@ const TILES = plateTiles([
 
 export const IDEOGRAM: MakePage = {
   slug: "ideogram-image-generator",
+  section: "models",
+  model: "ideogram3",
   title: "Ideogram 3 AI Image Generator",
   description:
     "Draw posters, logos and typographic stills on Ideogram 3 from one line, in any of the composer's frames, then make the still an element and shoot it.",

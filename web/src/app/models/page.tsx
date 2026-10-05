@@ -7,6 +7,8 @@ import { SiteFooter } from "@/components/site-footer";
 import { PageIntro } from "@/components/site/page-intro";
 import { Button } from "@/components/ui/button";
 import { CATALOG, MODELS, PLANS, TIER_LABEL, frameLabel, num, type Tier } from "@/lib/catalog";
+import { makePath, pagesIn } from "@/landing-pages/pages";
+import { IMAGE_MODELS } from "@/landing-pages/shared";
 
 export const metadata: Metadata = {
   title: "Models",
@@ -83,6 +85,44 @@ export default function ModelsPage() {
               </div>
             );
           })}
+        </section>
+
+        {/* The image models (2026-10-05, Mike's call): one card per model
+            the composer's Image mode draws on, each opening its own page
+            under /models/<slug>. Read off the same list the sitemap and
+            the footer read; prices stay in the picker, never here. */}
+        <section id="image-models" className="border-t border-border">
+          <div className="mx-auto max-w-[1200px] px-6 py-20">
+            <div className="max-w-[560px]">
+              <span className="eyebrow">Image models</span>
+              <h2 className="serif mt-5 text-[clamp(1.75rem,3.5vw,2.5rem)]">One composer, every image model.</h2>
+              <p className="mt-5 text-[17px] leading-relaxed text-[#afafaf]">
+                Switch the composer to Image, pick the model in the picker with its credits per still beside it,
+                and the still lands on your Assets wall. Each model has its own page.
+              </p>
+            </div>
+            <div className="mt-8 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {pagesIn("models").map((page) => {
+                const m = IMAGE_MODELS.find((x) => x.id === page.model);
+                return (
+                  <Link
+                    key={page.slug}
+                    href={makePath(page)}
+                    className="group flex flex-col justify-between rounded-[14px] border border-border bg-card p-6 transition-colors hover:border-[#343331]"
+                  >
+                    <div>
+                      <h3 className="serif text-2xl">{m?.label ?? page.h1}</h3>
+                      <p className="mt-2 text-[15px] leading-relaxed text-[#afafaf]">{m?.note ?? page.subhead}</p>
+                    </div>
+                    <span className="mt-6 inline-flex items-center gap-1 border-t border-border pt-4 text-[13px] font-medium text-foreground">
+                      {m ? (m.references ? "Takes your reference photos" : "Draws from the prompt alone") : "Read more"}
+                      <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
         </section>
 
         <section className="border-t border-border">

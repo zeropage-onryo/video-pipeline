@@ -5,7 +5,7 @@ import { getMakePage, makePath, type MakePage } from "../pages";
 // Links to the other /make pages. Renders nothing while an entry's
 // `related` list is empty or names slugs that do not exist yet.
 export function RelatedSection({ page }: { page: MakePage }) {
-  const related = page.related.map(getMakePage).filter((p): p is MakePage => Boolean(p));
+  const related = page.related.map((s) => getMakePage(s)).filter((p): p is MakePage => Boolean(p));
   if (!related.length) return null;
   return (
     <section id="related" className="border-t border-border">
@@ -15,7 +15,7 @@ export function RelatedSection({ page }: { page: MakePage }) {
           {related.map((p) => (
             <li key={p.slug}>
               <Link
-                href={makePath(p.slug)}
+                href={makePath(p)}
                 className="flex h-full items-center justify-between gap-4 rounded-[14px] border border-border bg-card p-5 transition-colors hover:border-[var(--line-hover)]"
               >
                 <span className="serif text-xl">{p.h1}</span>

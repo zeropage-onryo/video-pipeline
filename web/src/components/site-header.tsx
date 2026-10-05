@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { goToSignIn } from "@/lib/api";
 import { Wordmark } from "@/components/wordmark";
 import { skinClass, useTone } from "@/components/editorial-skin";
-import { MAKE_PAGES, makePath } from "@/landing-pages/pages";
+import { makePath, pagesIn } from "@/landing-pages/pages";
 
 // Fixed 60px bar: transparent while the page is at the top, glass (blur +
 // hairline) once scrolled. The state is written to a data attribute the
@@ -18,6 +18,8 @@ import { MAKE_PAGES, makePath } from "@/landing-pages/pages";
 // "Solutions" (Mike, 2026-10-02) sits right of "How it works" and opens a
 // panel listing every /make landing page by its short `menu` line, off the
 // same list the footer and the sitemap read -- adding a page adds the row.
+// The image-model pages live under /models and are listed there, not here
+// (2026-10-05, Mike's call).
 const BEFORE = [{ href: "/#how", label: "How it works" }];
 const AFTER = [
   { href: "/models", label: "Models" },
@@ -75,7 +77,7 @@ export function SiteHeader() {
               </Menu.Trigger>
               <Menu.Content className="w-[300px] p-1.5 data-ending-style:opacity-0 data-starting-style:opacity-0 transition-opacity duration-200">
                 <ul className="flex flex-col">
-                  {MAKE_PAGES.map((page) => (
+                  {pagesIn("make").map((page) => (
                     <li key={page.slug}>
                       <Menu.Link
                         render={<Link href={makePath(page.slug)} />}

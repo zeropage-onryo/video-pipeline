@@ -1,24 +1,24 @@
 import type { Metadata } from "next";
 import { LandingRoute, metadataFor, staticParams } from "@/landing-pages/route";
 
-// /make/<slug>: the "make a thing" landing pages. Everything it renders
-// comes from src/landing-pages (pages.ts, entries/); this file only binds
-// the section. The image-model pages live at /models/<slug>.
+// /models/<slug>: one page per image model, listed on /models under
+// "Image models" (2026-10-05, Mike's call). Same template as /make; this
+// file only binds the section.
 
 export const dynamicParams = false;
 
 export function generateStaticParams() {
-  return staticParams("make");
+  return staticParams("models");
 }
 
 type Props = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  return metadataFor("make", slug);
+  return metadataFor("models", slug);
 }
 
 export default async function Page({ params }: Props) {
   const { slug } = await params;
-  return <LandingRoute section="make" slug={slug} />;
+  return <LandingRoute section="models" slug={slug} />;
 }

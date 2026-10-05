@@ -29,6 +29,8 @@ const TILES = plateTiles([
 
 export const SEEDREAM: MakePage = {
   slug: "seedream-image-generator",
+  section: "models",
+  model: "seedream4",
   title: "Seedream 4.0 AI Image Generator",
   description:
     "Draw a photographic still on ByteDance's Seedream 4.0 from one line and your reference photos, edit it in the same model, then make it an element and shoot it.",

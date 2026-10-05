@@ -33,6 +33,7 @@ const SEEDANCE_TILES: MakeTile[] = [
 // (`src: "/make/seedance-video-generator/<name>.jpg"`, 928x1152).
 export const SEEDANCE: MakePage = {
     slug: "seedance-video-generator",
+    section: "make",
     title: "Seedance AI Video Generator",
     description:
       "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.0 or Seedance 2.0 Fast, 4 to 15 seconds a clip, up to 1080p.",

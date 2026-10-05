@@ -30,6 +30,8 @@ const TILES = plateTiles([
 
 export const GPT_IMAGE: MakePage = {
   slug: "gpt-image-generator",
+  section: "models",
+  model: "gpt-image-2",
   title: "GPT Image 2 AI Image Generator",
   description:
     "Draw a still on OpenAI's GPT Image 2 from one line and up to sixteen reference photos, with the words in the picture spelled right, then make it an element and shoot it.",

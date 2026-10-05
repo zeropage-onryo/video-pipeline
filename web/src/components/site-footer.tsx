@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/wordmark";
-import { MAKE_PAGES, makePath } from "@/landing-pages/pages";
+import { makePath, pagesIn } from "@/landing-pages/pages";
+import { IMAGE_MODELS } from "@/landing-pages/shared";
 
 const COLUMNS: { title: string; links: [string, string][] }[] = [
   {
@@ -18,7 +19,15 @@ const COLUMNS: { title: string; links: [string, string][] }[] = [
     title: "Tools",
     // every /make landing page, off its own entry, so the site links to
     // each one from every page (crawlers find it; the person does too)
-    links: MAKE_PAGES.map((page) => [page.h1, makePath(page.slug)]),
+    links: pagesIn("make").map((page) => [page.h1, makePath(page)]),
+  },
+  {
+    // the image-model pages, under /models (2026-10-05, Mike's call)
+    title: "Image models",
+    links: pagesIn("models").map((page) => [
+      IMAGE_MODELS.find((m) => m.id === page.model)?.label ?? page.h1,
+      makePath(page),
+    ]),
   },
   {
     title: "Plans",
@@ -42,7 +51,7 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-border">
       <div className="mx-auto max-w-[1200px] px-6 py-14">
-        <div className="grid gap-10 sm:grid-cols-2 md:grid-cols-[1.4fr_repeat(4,1fr)]">
+        <div className="grid gap-10 sm:grid-cols-2 md:grid-cols-[1.4fr_repeat(5,1fr)]">
           <div className="max-w-xs">
             <Wordmark />
             <p className="mt-4 text-sm leading-relaxed text-[var(--ink-2)]">

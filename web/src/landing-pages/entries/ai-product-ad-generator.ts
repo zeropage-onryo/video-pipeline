@@ -30,6 +30,7 @@ const TILES: MakeTile[] = [
 
 export const AD_GENERATOR: MakePage = {
     slug: "ai-product-ad-generator",
+    section: "make",
     title: "AI Ad Generator",
     description:
       "Upload your product, pick a look, and render a short ad on Kling, Seedance, LTX, Wan or Veo.",

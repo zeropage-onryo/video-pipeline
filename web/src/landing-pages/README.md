@@ -39,8 +39,15 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
   only -- a server component may import a constant from the first file but
   Next refuses a hook there). Reduced motion renders the finished state.
 
-The Next route is the thin shell at `src/app/make/[slug]/page.tsx`: static
-params, metadata (title, description, canonical, OG) and the JSON-LD.
+Each entry names its `section`: `make` renders at `/make/<slug>` (the Ad
+Generator, Seedance; the header's Solutions menu and the footer's Tools column)
+and `models` at `/models/<slug>` (the five image models; listed on `/models`
+under "Image models" and in the footer's Image models column, 2026-10-05,
+Mike's call). `makePath(page)` follows the section. The two Next routes,
+`src/app/make/[slug]/page.tsx` and `src/app/models/[slug]/page.tsx`, are thin
+bindings of `route.tsx`: static params for the section, metadata (title,
+description, canonical, OG) and the JSON-LD; a slug under the wrong section
+is a 404, so every page has exactly one URL.
 
 ## Adding a page
 

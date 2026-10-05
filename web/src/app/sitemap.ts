@@ -17,7 +17,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: path === "/" ? 1 : monthly.has(path) ? 0.7 : 0.3,
   }));
   const make = MAKE_PAGES.map((page) => ({
-    url: `${SITE_URL}${makePath(page.slug)}`,
+    url: `${SITE_URL}${makePath(page)}`,
     changeFrequency: "monthly" as const,
     priority: 0.8,
   }));
