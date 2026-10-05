@@ -4,6 +4,7 @@ import { ReferenceStack } from "./reference-stack";
 import { FramePicker } from "./frame-picker";
 import { EditLoop } from "./edit-loop";
 import { TypeFrame } from "./type-frame";
+import { PosterType } from "./poster-type";
 import type { MakePage } from "../pages";
 
 // A page's ONE signature interaction (2026-10-05): the section that gives
@@ -24,6 +25,8 @@ export const SIGNATURES = {
   "edit-loop": EditLoop,
   /** The words set letter by letter at the model's three sizes (GPT Image). */
   "type-frame": TypeFrame,
+  /** A poster whose type setting you pick (Ideogram). */
+  "poster-type": PosterType,
 } satisfies Record<string, ComponentType<{ page: MakePage }>>;
 
 export type SignatureKey = keyof typeof SIGNATURES;
