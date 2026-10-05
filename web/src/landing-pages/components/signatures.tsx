@@ -3,6 +3,7 @@ import { ShotTimeline } from "./shot-timeline";
 import { ReferenceStack } from "./reference-stack";
 import { FramePicker } from "./frame-picker";
 import { EditLoop } from "./edit-loop";
+import { TypeFrame } from "./type-frame";
 import type { MakePage } from "../pages";
 
 // A page's ONE signature interaction (2026-10-05): the section that gives
@@ -21,6 +22,8 @@ export const SIGNATURES = {
   "frame-picker": FramePicker,
   /** The draw and the edit under one divider (Seedream). */
   "edit-loop": EditLoop,
+  /** The words set letter by letter at the model's three sizes (GPT Image). */
+  "type-frame": TypeFrame,
 } satisfies Record<string, ComponentType<{ page: MakePage }>>;
 
 export type SignatureKey = keyof typeof SIGNATURES;
