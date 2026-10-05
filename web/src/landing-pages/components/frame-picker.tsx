@@ -58,7 +58,7 @@ export function FramePicker({ page }: { page: MakePage }) {
           <motion.div
             layout={!still}
             transition={still ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 28 }}
-            style={{ width: box.width || undefined, height: box.height || undefined }}
+            style={box.width ? { width: box.width, height: box.height } : { height: "100%", aspectRatio: `${f.w} / ${f.h}` }}
             className="relative overflow-hidden rounded-2xl bg-card shadow-[var(--card-shadow)]"
           >
             <div aria-hidden className="absolute inset-0" style={{ background: plate }} />

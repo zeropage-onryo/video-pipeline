@@ -62,7 +62,7 @@ export function TypeFrame({ page }: { page: MakePage }) {
                 <motion.span layoutId={still ? undefined : "size-pill"} transition={t} aria-hidden className="absolute inset-0 rounded-full bg-primary" />
               )}
               <span className={`relative ${k === size ? "text-primary-foreground" : ""}`}>
-                {sz.label} <span className="opacity-70">{sz.w}×{sz.h}</span>
+                {sz.label} <span className="font-normal">{sz.w}×{sz.h}</span>
               </span>
             </button>
           ))}
@@ -72,10 +72,10 @@ export function TypeFrame({ page }: { page: MakePage }) {
           <motion.button
             type="button"
             onClick={() => setTake((n) => n + 1)}
-            aria-label="Set the line again"
+            aria-label={`${word}: set the line again`}
             layout={!still}
             transition={still ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 28 }}
-            style={{ width: box.width || undefined, height: box.height || undefined }}
+            style={box.width ? { width: box.width, height: box.height } : { height: "100%", aspectRatio: `${s.w} / ${s.h}` }}
             className="relative overflow-hidden rounded-2xl bg-card text-left shadow-[var(--card-shadow)] outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             <div aria-hidden className="absolute inset-0" style={{ background: plate }} />
