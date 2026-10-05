@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { ShotTimeline } from "./shot-timeline";
+import { ReferenceStack } from "./reference-stack";
 import type { MakePage } from "../pages";
 
 // A page's ONE signature interaction (2026-10-05): the section that gives
@@ -12,6 +13,8 @@ import type { MakePage } from "../pages";
 export const SIGNATURES = {
   /** One 15-second scene scrubbed by the scroll, shot by shot (Seedance). */
   "shot-timeline": ShotTimeline,
+  /** Tap references into the frame; the still is held to them (Nano Banana). */
+  "reference-stack": ReferenceStack,
 } satisfies Record<string, ComponentType<{ page: MakePage }>>;
 
 export type SignatureKey = keyof typeof SIGNATURES;
