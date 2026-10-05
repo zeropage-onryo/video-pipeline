@@ -10,8 +10,14 @@ import {
   LayoutGrid,
   Layers,
   MessageSquareText,
+  Monitor,
   Package,
   Receipt,
+  Timer,
+  Type,
+  Unlock,
+  Volume2,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { HOVER, SPRINGS, reveal } from "@/lib/motion";
@@ -37,6 +43,12 @@ const ICONS: Record<FeatureIcon, LucideIcon> = {
   export: Download,
   guide: MessageSquareText,
   assets: LayoutGrid,
+  frame: Monitor,
+  sound: Volume2,
+  clock: Timer,
+  open: Unlock,
+  type: Type,
+  edit: Wand2,
 };
 
 export function FeaturesGrid({ items }: { items: MakeFeature[] }) {

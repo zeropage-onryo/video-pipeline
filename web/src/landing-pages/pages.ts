@@ -1,19 +1,21 @@
 // The SEO landing pages under /make/<slug> (2026-10-01). ONE typed entry
 // per page, ONE template (app/make/[slug]/page.tsx) -- adding a page is
-// adding an entry here, and the sitemap, the static params, the metadata
-// and the FAQ JSON-LD all read this list.
+// adding an entry under entries/ and listing it here, and the sitemap, the
+// static params, the metadata, the header's Solutions menu, the footer's
+// Tools column and the FAQ JSON-LD all read this list.
 //
 // Every claim in an entry is something the studio does today. Check the
 // code before writing a new one (the first page's audit is in the PR):
 // the composer takes `?spark=` and `?attach=` only, the Queue is the one
-// spend, prices come from the catalog below and are never typed by hand.
+// spend, prices come from the catalog (shared.ts) and are never typed by hand.
 //
-import { MODELS, num } from "@/lib/catalog";
-import { INDIGO, RED, type MakeAccent } from "./theme";
+import type { MakeAccent } from "./theme";
 import type { SignatureKey } from "./components/signatures";
+import { AD_GENERATOR } from "./entries/ai-product-ad-generator";
+import { SEEDANCE } from "./entries/seedance-video-generator";
 
 // One tile in the wall under the hero (the InVideo-style wall, 2026-10-01).
-// A tile with no `src` draws as a soft gradient plate, the way the
+// A tile with no `src` draws as a gradient plate, the way the
 // reference wall leaves two slots as colour. Up to eight are laid out; the
 // layout itself is the wall's (ad-wall.tsx), not the entry's.
 export type MakeTile = {
@@ -43,7 +45,13 @@ export type FeatureIcon =
   | "model"
   | "export"
   | "guide"
-  | "assets";
+  | "assets"
+  | "frame"
+  | "sound"
+  | "clock"
+  | "open"
+  | "type"
+  | "edit";
 export type MakeFaq = {
   q: string;
   /** Plain text: it is also the FAQPage JSON-LD answer. */
@@ -97,382 +105,8 @@ export type MakePage = {
   finalCta: { eyebrow: string; title: string; body: string };
 };
 
-const model = (id: string) => {
-  const m = MODELS.find((x) => x.model === id);
-  if (!m) throw new Error(`make-pages: no model ${id} in pricing.json`);
-  return m;
-};
-
-// The three models the model cards quote, read off the generated catalog so
-// a re-export of src/pricing.py changes the page and nothing has to be
-// remembered. The FAQ names every model and no price (2026-10-02).
-const ltx = model("ltx2.3");
-const kling = model("kling3-turbo-pro");
-const veo = model("veo3.1");
-
-// The model cards: three renderers off the catalog (name, blurb and price
-// are the catalog's own) and a fourth for the rest of the list.
-const PLAN_FOR = { standard: "every plan", creator: "Creator and up", premium: "the Studio plan" } as const;
-const modelCard = (m: typeof ltx): MakeCard => ({
-  title: m.name,
-  body: `${m.blurb} ${num(m.credits)} credits for a ${m.seconds}-second clip, on ${PLAN_FOR[m.tier]}.`,
-});
-// Every model name off the catalog, "A, B and C", for the FAQ.
-const MODEL_NAMES = (() => {
-  const n = MODELS.map((m) => m.name);
-  return n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : n.join("");
-})();
-
-/** Three named renderers off the catalog and a fourth card for the rest. */
-const modelCards = (featured: (typeof ltx)[]): MakeCard[] => [
-  ...featured.map(modelCard),
-  {
-    title: `${MODELS.length} Models`,
-    body: `Every video model the Queue renders on, ${MODELS.filter((m) => !featured.includes(m))
-      .map((m) => m.name)
-      .join(", ")} included, with the price on the card before you approve.`,
-  },
-];
-const MODEL_CARDS = modelCards([ltx, kling, veo]);
-
-// The wall's stills are eight product ads generated in the studio (Mike,
-// 2026-10-02; 928x1152 JPEGs under public/make/<slug>/, named by product
-// type). Every slot carries one, so no gradient plate is drawn. The slot
-// order follows the wall's bento (ad-wall.tsx): 0 is the short tile, 1 and
-// 4 the tall narrow ones, 5 the wide one, 6 and 7 the pair at the end.
-const ADS = "/make/ai-product-ad-generator";
-const TILES: MakeTile[] = [
-  { title: "Lip tint", tag: "", src: `${ADS}/lip-tint.jpg` },
-  { title: "Fragrance", tag: "", src: `${ADS}/fragrance.jpg` },
-  { title: "Energy drink", tag: "", src: `${ADS}/energy-drink.jpg` },
-  { title: "Headphones", tag: "", src: `${ADS}/headphones.jpg` },
-  { title: "Sneaker", tag: "", src: `${ADS}/sneaker.jpg` },
-  { title: "Tumbler", tag: "", src: `${ADS}/tumbler.jpg` },
-  { title: "Hot sauce", tag: "", src: `${ADS}/hot-sauce.jpg` },
-  { title: "Matcha", tag: "", src: `${ADS}/matcha.jpg` },
-];
-
-// The Seedance page's two renderers, off the catalog like the three above.
-const sd = model("seedance2");
-const sdFast = model("seedance2-fast");
-
-// TODO(media): eight Seedance stills from the studio go here as `src`
-// (public/make/seedance-video-generator/<name>.jpg, 928x1152, the Ad
-// Generator wall's shape). Until then each slot is its own plate: a shot
-// type the scene writer actually produces, drawn as a cool gradient.
-const plate = (a: string, b: string, c: string) => `linear-gradient(150deg, ${a} 0%, ${b} 55%, ${c} 100%)`;
-const SEEDANCE_TILES: MakeTile[] = [
-  { title: "Wide establishing", tag: "Shot 1", plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5") },
-  { title: "Macro detail", tag: "Shot 2", plate: plate("#ecfeff", "#67e8f9", "#3730a3") },
-  { title: "Slow push-in", tag: "Shot 3", plate: plate("#f5f3ff", "#c4b5fd", "#4338ca") },
-  { title: "Handheld follow", tag: "Shot 4", plate: plate("#e0f2fe", "#7dd3fc", "#312e81") },
-  { title: "Top-down reveal", tag: "Shot 5", plate: plate("#eef2ff", "#818cf8", "#1e1b4b") },
-  { title: "Rack focus", tag: "Shot 6", plate: plate("#fdf4ff", "#d8b4fe", "#4c1d95") },
-  { title: "Golden hour", tag: "Shot 7", plate: plate("#fff7ed", "#fdba74", "#4338ca") },
-  { title: "Night exterior", tag: "Shot 8", plate: plate("#1e1b4b", "#312e81", "#6366f1") },
-];
-
-export const MAKE_PAGES: MakePage[] = [
-  {
-    slug: "ai-product-ad-generator",
-    title: "AI Ad Generator",
-    description:
-      "Upload your product, pick a look, and render a short ad on Kling, Seedance, LTX, Wan or Veo.",
-    h1: "AI Ad Generator",
-    menu: "AI Ad Generator",
-    subhead: "Upload your product, pick a look, and render a short ad on the model you choose.",
-    cta: {
-      label: "Create your ad",
-      spark:
-        "A 10-second product ad for my [product]: a reveal, a detail, the product in use. Clean, premium look.",
-    },
-    template: "spark",
-    tone: "light",
-    accent: RED,
-    wall: {
-      title: "ZeroPage Ad Generator",
-      tiles: TILES,
-      explore: { label: "Explore more", href: "#features" },
-    },
-    features: {
-      title: "Ad Generator Features",
-      items: [
-        {
-          icon: "references",
-          title: "Product references",
-          body: "Your product photos ride into the prompt, the keyframe and the clip. Every shot anchors on a still drawn from them.",
-        },
-        {
-          icon: "elements",
-          title: "Reusable elements",
-          body: "Save the product as an element once and every ad after is held to the same frames.",
-        },
-        {
-          icon: "shots",
-          title: "Timed shots",
-          body: "A scene is written as timed shots, 4 to 30 seconds in all, and each shot renders as its own clip.",
-        },
-        {
-          icon: "keyframe",
-          title: "Keyframe first",
-          body: "See each shot's first frame and redraw it until it is right, before a clip is rendered.",
-        },
-        {
-          icon: "price",
-          title: "Price before spend",
-          body: "The Queue shows the credits for the exact model and length you picked, and that number is what is charged.",
-        },
-        {
-          icon: "model",
-          title: "Pick the model",
-          body: "Kling, Seedance, LTX and Wan, plus Veo on the Studio plan, chosen per approve through one Queue.",
-        },
-        {
-          icon: "export",
-          title: "Export one MP4",
-          body: "Assemble the clips in shot order into one MP4, with a music bed you upload under the clips' own sound.",
-        },
-        {
-          icon: "guide",
-          title: "Guided writing",
-          body: "Describe the ad, or let the Guide work through story, look and pacing with you before anything is written.",
-        },
-        {
-          icon: "assets",
-          title: "Everything on one wall",
-          body: "Every render lands on your Assets wall to view, star, sort into folders and download.",
-        },
-      ],
-    },
-    models: {
-      title: `${MODELS.length} Video Generator Models`,
-      items: MODEL_CARDS,
-    },
-    howTo: {
-      title: "How to make a product ad",
-      items: [
-        {
-          title: "Upload your product",
-          body: "Sign in, drop a few product photos into the composer, and write one line about the ad. Or save the product as an element and reuse it across ads.",
-        },
-        {
-          title: "Pick a look and approve",
-          body: "Describe the look, or let the Guide work through story, look and pacing with you. In the Queue, pick the model, length and frame, with the price on the card.",
-        },
-        {
-          title: "Render and export",
-          body: "Clips render one shot at a time. Download each from Assets, or export the whole scene as one MP4 in shot order.",
-        },
-      ],
-    },
-    faq: {
-      // One line at the title's full size; longer wraps (measured 2026-10-02).
-      title: "FAQs about AI Ad Generator",
-      // The reference's questions (what it is, how to, the prompt, people,
-      // styles, references, models, length, commercial use), each answer
-      // checked against the code on 2026-10-02. Cost stays out of this
-      // section (Mike's call): prices live on /pricing and /models.
-      items: [
-        {
-          q: "What is an AI product ad generator?",
-          a: "A studio that writes a short ad from your product photos and one line about it. The scene is written as timed shots, each shot's first frame is drawn from your photos, and each shot renders as its own clip on the video model you pick. The clips assemble into one MP4.",
-        },
-        {
-          q: "How do I make a product ad with it?",
-          a: "Sign in, drop a few product photos into the composer, write one line about the ad, and press Create. Pick the scene on the board, which draws its keyframes, then approve each shot in the Queue. The clips land on your Assets wall, and Export joins them in shot order into one MP4.",
-        },
-        {
-          q: "How do I write the prompt for the best ad?",
-          a: "Name the product, one action per shot, and the look you want. The studio writes the full scene prompt as timed shots from that line and your photos. If you would rather talk it through, the Guide works through story, look and pacing with you first. Then check each shot's keyframe before you render: that still is what the clip anchors on, and the Director lets you edit the prompt, swap a reference and redraw it.",
-        },
-        {
-          q: "Can I upload my own product photos as references?",
-          a: "Yes. Upload photos into the composer for one ad, or save the product as an element with its photos and reuse it across ads. Every keyframe is drawn from the references attached to the scene, and a scene with no references never reaches the Queue.",
-        },
-        {
-          q: "Can it show a real person or the same product every time?",
-          a: "Save the person or product as an element with a few photos, and every scene written against it is held to those frames, keyframe and clip. Video models still vary between renders, so look at the keyframe before you approve. No pixel match is promised, and you need the consent of anyone whose likeness you upload.",
-        },
-        {
-          q: "What looks and styles can it make?",
-          a: "Whatever you can describe: the prompt carries the look, the lighting and the camera, and the keyframe shows it before a clip renders. Attach a reference image for the mood and the writing is grounded in it. The Guide can work through the look with you if you have not settled on one.",
-        },
-        {
-          q: "Which video models does it render on?",
-          a: `${MODEL_NAMES}, chosen per shot in the Queue with a length and a frame.`,
-          link: { href: "/models", label: "See every model" },
-        },
-        {
-          q: "How long can an ad be?",
-          a: "A scene runs 4 to 30 seconds, written as timed shots. Each shot renders as its own clip, fitted to the lengths the model you picked supports.",
-        },
-        {
-          q: "Can I use the ads commercially?",
-          a: "What the studio generates for your account is yours to use, subject to the terms of the model that rendered it. The output is AI-made, so review it before you publish it.",
-          link: { href: "/terms", label: "Read the terms" },
-        },
-      ],
-    },
-    related: ["seedance-video-generator"],
-    finalCta: {
-      eyebrow: "Your first ad",
-      title: "Make your first product ad.",
-      body: "Upload the product, pick a look, see the price, render.",
-    },
-  },
-
-  // Seedance (2026-10-05, Mike's call). What renders today is Seedance 2.0
-  // and Seedance 2.0 Fast through fal (src/fal.py VIDEO_MODELS; 4-15 s a
-  // clip, 480p/720p, 1080p on the full model as the premium band). Seedance
-  // 2.5 is on fal and NOT in the catalog, so no line here names it: the copy
-  // names the models the Queue offers, and `sd`/`sdFast` read the catalog
-  // so a re-export changes the page. TODO(media): the wall's eight tiles are
-  // gradient plates until Seedance renders from the studio replace them
-  // (`src: "/make/seedance-video-generator/<name>.jpg"`, 928x1152).
-  {
-    slug: "seedance-video-generator",
-    title: "Seedance AI Video Generator",
-    description:
-      "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.0 or Seedance 2.0 Fast, 4 to 15 seconds a clip, up to 1080p.",
-    h1: "Seedance Video Generator",
-    menu: "Seedance Video Generator",
-    subhead:
-      "Write a scene, anchor every shot on your reference photos, and render it on Seedance, 4 to 15 seconds a clip, up to 1080p.",
-    cta: {
-      label: "Make a scene",
-      spark:
-        "A 15-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance.",
-      secondary: { label: "See the shots", href: "#shots" },
-      startLabel: "Start a scene",
-    },
-    template: "spark",
-    tone: "light",
-    accent: INDIGO,
-    signature: "shot-timeline",
-    wall: {
-      title: "Shots Seedance Renders",
-      tiles: SEEDANCE_TILES,
-      explore: { label: "See the features", href: "#features" },
-    },
-    features: {
-      title: "Seedance in the Studio",
-      items: [
-        {
-          icon: "model",
-          title: "Two Seedance tiers",
-          body: `${sdFast.name} for quick 720p takes, ${sd.name} for the full-quality render up to 1080p. Pick either per shot in the Queue.`,
-        },
-        {
-          icon: "shots",
-          title: "4 to 15 seconds a shot",
-          body: "A scene is written as timed shots, and each shot's window is fitted to a Seedance clip length between 4 and 15 seconds.",
-        },
-        {
-          icon: "references",
-          title: "Image to video, from your photos",
-          body: "Each shot renders image-to-video from a keyframe drawn from the references you attached, so the clip starts on your product, person or place.",
-        },
-        {
-          icon: "keyframe",
-          title: "Keyframe first",
-          body: "Draw every shot's first frame before a clip is rendered, and redraw it in the Director until it is right.",
-        },
-        {
-          icon: "price",
-          title: "Price before spend",
-          body: "The Queue prices the exact Seedance tier, length and frame you picked, and that number is what is charged.",
-        },
-        {
-          icon: "elements",
-          title: "Reusable elements",
-          body: "Save a character, prop or place as an element and every scene written against it is held to the same frames.",
-        },
-        {
-          icon: "guide",
-          title: "Guided writing",
-          body: "Type the idea, or let the Guide work through story, look and pacing with you before the scene is written.",
-        },
-        {
-          icon: "export",
-          title: "Export one MP4",
-          body: "Assemble the Seedance clips in shot order into one MP4, loudness-normalised, with an optional music bed under them.",
-        },
-        {
-          icon: "assets",
-          title: "Everything on one wall",
-          body: "Every render lands on your Assets wall with its model and prompt, to view, star, sort and download.",
-        },
-      ],
-    },
-    models: {
-      title: `${MODELS.length} Video Generator Models`,
-      items: modelCards([sd, sdFast, kling]),
-    },
-    howTo: {
-      title: "How to render on Seedance",
-      items: [
-        {
-          title: "Write the scene",
-          body: "Sign in, drop your reference photos into the composer, and write one line about the scene. It comes back as timed shots, each with its own prompt.",
-        },
-        {
-          title: "Check each keyframe",
-          body: "Pick the scene on the board and draw its keyframes. Open any shot in the Director to edit the prompt, swap a reference and redraw.",
-        },
-        {
-          title: "Approve on Seedance",
-          body: "In the Queue, choose Seedance 2.0 or 2.0 Fast, the length and the frame for each shot, with the price on the card, and approve. Export joins the clips into one MP4.",
-        },
-      ],
-    },
-    faq: {
-      title: "FAQs about Seedance",
-      items: [
-        {
-          q: "What is the Seedance video generator?",
-          a: "Seedance is ByteDance's video model. In this studio you write a scene as timed shots, each shot's first frame is drawn from your reference photos, and each shot renders as its own Seedance clip, image-to-video, on the tier you pick in the Queue. The clips assemble into one MP4.",
-        },
-        {
-          q: "Which Seedance models can I render on?",
-          a: `${sdFast.name} and ${sd.name}, both chosen per shot in the Queue with a length and a frame. The Fast tier renders at 480p or 720p; the full model adds 1080p.`,
-          link: { href: "/models", label: "See every model" },
-        },
-        {
-          q: "How long can a Seedance clip be?",
-          a: "Between 4 and 15 seconds a shot. A scene runs 4 to 30 seconds in all, written as timed shots, and each shot's window is fitted up to a length Seedance supports.",
-        },
-        {
-          q: "Can I use my own photos as references?",
-          a: "Yes. Upload photos into the composer for one scene, or save a person, product or place as an element and reuse it. Every keyframe is drawn from the references attached to the scene, and a scene with no references never reaches the Queue.",
-        },
-        {
-          q: "Does it keep the same character or product across shots?",
-          a: "Each shot's keyframe is drawn from the same references and from the previous shot's still, so the scene holds together. Video models still vary between renders, so look at each keyframe before you approve. No pixel match is promised, and you need the consent of anyone whose likeness you upload.",
-        },
-        {
-          q: "Does the Queue render text-to-video or image-to-video?",
-          a: "Image-to-video, anchored on the shot's keyframe. A scene whose keyframes have not been drawn yet is drawn on the Draw keyframes button before the render, so a Seedance clip always starts from a frame you have seen.",
-        },
-        {
-          q: "Which plan do I need?",
-          a: `Both Seedance tiers are on ${PLAN_FOR[sd.tier]}. A 1080p render on ${sd.name} is the premium band, on ${PLAN_FOR.premium}.`,
-          link: { href: "/pricing", label: "Compare plans" },
-        },
-        {
-          q: "Can I use the clips commercially?",
-          a: "What the studio generates for your account is yours to use, subject to the terms of the model that rendered it. The output is AI-made, so review it before you publish it.",
-          link: { href: "/terms", label: "Read the terms" },
-        },
-      ],
-    },
-    related: ["ai-product-ad-generator"],
-    finalCta: {
-      eyebrow: "Your first scene",
-      title: "Render your first scene on Seedance.",
-      body: "Write it, see every keyframe, see the price, approve.",
-    },
-  },
-];
+// In the order the Solutions menu and the Tools column list them.
+export const MAKE_PAGES: MakePage[] = [AD_GENERATOR, SEEDANCE];
 
 export function getMakePage(slug: string): MakePage | undefined {
   return MAKE_PAGES.find((p) => p.slug === slug);

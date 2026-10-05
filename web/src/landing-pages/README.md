@@ -2,9 +2,18 @@
 
 The SEO landing pages under `/make/<slug>` live here, in one folder:
 
-- `pages.ts` — one typed entry per page. **Adding a page is adding an entry.**
-  The route, the sitemap, the header's Solutions menu, the footer's Tools column and the FAQ JSON-LD all
-  read this list. Prices in copy are read off `@/lib/catalog`, never typed.
+- `pages.ts` — the types and the ordered list `MAKE_PAGES`. **Adding a page is adding
+  an entry under `entries/` and listing it here.** The route, the sitemap, the header's
+  Solutions menu, the footer's Tools column and the FAQ JSON-LD all read this list.
+- `entries/<slug>.ts` — one typed `MakePage` per page (the Ad Generator, Seedance, and
+  the five image models: Nano Banana Pro, FLUX.2 Pro, Seedream 4.0, GPT Image 2,
+  Ideogram 3). Every claim is checked against the code and the comment at the top of
+  each file says where.
+- `shared.ts` — what entries build from: the video-model readers off `@/lib/catalog`
+  (`model`, `modelCards`, `PLAN_FOR`), the image-model list copied from
+  `src/fal.py IMAGE_MODELS` by hand (names and notes, never prices; dated), the ten
+  composer frames, the shared FAQ answers, `plateTiles`. Prices in copy are read off
+  the catalog, never typed; an image still's price is only ever "shown in the picker".
 - `theme.ts` — a page's **accent** (`MakeAccent`): button fill, card outline
   and hover line, the feature card's pointer light, the wall's two gradient
   plates. `accentVars()` turns it into CSS variables on the page's skin
@@ -14,7 +23,9 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
 - `components/` — the sections, in page order: `make-hero` (bold serif H1,
   subhead, the two buttons, the spotlight), `signatures` (the page's ONE
   signature interaction, keyed by `signature` on the entry; nothing when
-  unset), `ad-wall` (one heavy uppercase line, an eight-tile wall on Motion --
+  unset: `shot-timeline`, `reference-stack`, `frame-picker`, `edit-loop`,
+  `type-frame`, `poster-type`; `use-fit` sizes a frame of a given ratio
+  inside a fixed stage), `ad-wall` (one heavy uppercase line, an eight-tile wall on Motion --
   tilt, lift, label slide -- and the Explore button; a tile with no `src` is
   a gradient plate off the accent), `features-section` (nine cards on Motion,
   `features-grid`), `models-section` + `how-to-section` (both `link-cards`),
@@ -33,7 +44,8 @@ params, metadata (title, description, canonical, OG) and the JSON-LD.
 
 ## Adding a page
 
-1. Add an entry to `MAKE_PAGES` in `pages.ts`: slug, title/description, h1,
+1. Write `entries/<slug>.ts` exporting a `MakePage` and add it to `MAKE_PAGES`
+   in `pages.ts`: slug, title/description, h1,
    menu line, subhead, `cta` (label + the spark the composer opens on;
    optional `secondary` button and `startLabel`), `tone`, `accent` (`RED`, or
    a new `MakeAccent` in `theme.ts`), the wall's tiles (a tile with no `src`

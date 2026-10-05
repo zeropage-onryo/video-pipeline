@@ -49,6 +49,68 @@ export const INDIGO: MakeAccent = {
   ],
 };
 
+// The four model pages' accents (2026-10-05), each checked against white:
+// emerald 5.5:1, amber 4.6:1, rose 5.9:1, blue 6.3:1.
+export const EMERALD: MakeAccent = {
+  primary: "#047857",
+  primaryForeground: "#ffffff",
+  cardLine: "#b7e4cf",
+  lineHover: "#047857",
+  cardLight: "rgba(4,120,87,0.08)",
+  plates: [
+    "linear-gradient(135deg, #ecfdf5 0%, #6ee7b7 55%, #047857 100%)",
+    "linear-gradient(135deg, #f0fdfa 0%, #5eead4 50%, #115e59 100%)",
+  ],
+};
+
+export const AMBER: MakeAccent = {
+  primary: "#b45309",
+  primaryForeground: "#ffffff",
+  cardLine: "#f5d3a8",
+  lineHover: "#b45309",
+  cardLight: "rgba(180,83,9,0.08)",
+  plates: [
+    "linear-gradient(135deg, #fffbeb 0%, #fcd34d 55%, #b45309 100%)",
+    "linear-gradient(135deg, #fff7ed 0%, #fdba74 50%, #9a3412 100%)",
+  ],
+};
+
+export const ROSE: MakeAccent = {
+  primary: "#be185d",
+  primaryForeground: "#ffffff",
+  cardLine: "#f6bdd3",
+  lineHover: "#be185d",
+  cardLight: "rgba(190,24,93,0.08)",
+  plates: [
+    "linear-gradient(135deg, #fdf2f8 0%, #f9a8d4 55%, #be185d 100%)",
+    "linear-gradient(135deg, #fff1f2 0%, #fda4af 50%, #9f1239 100%)",
+  ],
+};
+
+export const BLUE: MakeAccent = {
+  primary: "#1d4ed8",
+  primaryForeground: "#ffffff",
+  cardLine: "#bcd0fb",
+  lineHover: "#1d4ed8",
+  cardLight: "rgba(29,78,216,0.08)",
+  plates: [
+    "linear-gradient(135deg, #eff6ff 0%, #93c5fd 55%, #1d4ed8 100%)",
+    "linear-gradient(135deg, #f0f9ff 0%, #7dd3fc 50%, #1e40af 100%)",
+  ],
+};
+
+export const VIOLET: MakeAccent = {
+  primary: "#6d28d9",
+  primaryForeground: "#ffffff",
+  cardLine: "#d6c6fa",
+  lineHover: "#6d28d9",
+  cardLight: "rgba(109,40,217,0.08)",
+  plates: [
+    "linear-gradient(135deg, #f5f3ff 0%, #c4b5fd 55%, #6d28d9 100%)",
+    "linear-gradient(135deg, #faf5ff 0%, #d8b4fe 50%, #5b21b6 100%)",
+  ],
+};
+
 /** The inline variables the skin wrapper carries for `accent`. */
 export function accentVars(accent: MakeAccent): CSSProperties {
   return {
