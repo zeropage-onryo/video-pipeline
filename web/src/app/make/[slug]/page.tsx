@@ -31,11 +31,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       description: page.description,
       url: path,
       locale: "en_US",
+      // Next replaces the whole openGraph object per route rather than
+      // merging it, and the root's file-based card (app/opengraph-image.tsx)
+      // applies to `/` only, so until 2026-10-05 these pages shared with no
+      // image at all. The root's generated card is named here explicitly;
+      // layout.tsx's `/og.jpg` is a file that does not exist (404).
+      // TODO(media): a per-page card, app/make/[slug]/opengraph-image.tsx.
+      images: [{ url: "/opengraph-image", width: 1200, height: 630, type: "image/png" }],
     },
     twitter: {
       card: "summary_large_image",
       title: `${page.title} — Zero Page`,
       description: page.description,
+      images: ["/opengraph-image"],
     },
     robots: { index: true, follow: true },
   };

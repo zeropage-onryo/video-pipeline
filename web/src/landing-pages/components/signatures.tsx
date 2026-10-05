@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import { ShotTimeline } from "./shot-timeline";
 import type { MakePage } from "../pages";
 
 // A page's ONE signature interaction (2026-10-05): the section that gives
@@ -8,7 +9,10 @@ import type { MakePage } from "../pages";
 //
 // Adding one: write the component, add it to SIGNATURES, and name the key
 // on the entry. Nothing else changes.
-export const SIGNATURES: Record<string, ComponentType<{ page: MakePage }>> = {};
+export const SIGNATURES = {
+  /** One 15-second scene scrubbed by the scroll, shot by shot (Seedance). */
+  "shot-timeline": ShotTimeline,
+} satisfies Record<string, ComponentType<{ page: MakePage }>>;
 
 export type SignatureKey = keyof typeof SIGNATURES;
 

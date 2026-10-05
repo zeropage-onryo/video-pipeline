@@ -183,7 +183,7 @@ export function Tile({
           />
         )
       ) : (
-        <div aria-hidden className="absolute inset-0" style={{ background: plate }} />
+        <div aria-hidden className="absolute inset-0" style={{ background: tile.plate ?? plate }} />
       )}
 
       {labelled && (

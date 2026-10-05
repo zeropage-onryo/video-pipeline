@@ -34,6 +34,21 @@ export const RED: MakeAccent = {
   ],
 };
 
+// The Seedance page's accent (2026-10-05): an electric indigo on the same
+// white ground. #4338ca on white is 8.1:1; the pale outline is the same hue
+// at a tint. The plates are the cool, cinematic half of the wall.
+export const INDIGO: MakeAccent = {
+  primary: "#4338ca",
+  primaryForeground: "#ffffff",
+  cardLine: "#c9c5f3",
+  lineHover: "#4338ca",
+  cardLight: "rgba(67,56,202,0.08)",
+  plates: [
+    "linear-gradient(135deg, #e0e7ff 0%, #a5b4fc 55%, #6366f1 100%)",
+    "linear-gradient(135deg, #cffafe 0%, #a5f3fc 50%, #818cf8 100%)",
+  ],
+};
+
 /** The inline variables the skin wrapper carries for `accent`. */
 export function accentVars(accent: MakeAccent): CSSProperties {
   return {
