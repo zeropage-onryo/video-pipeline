@@ -8,7 +8,7 @@ import { PageIntro } from "@/components/site/page-intro";
 import { Button } from "@/components/ui/button";
 import { CATALOG, MODELS, PLANS, TIER_LABEL, frameLabel, num, type Tier } from "@/lib/catalog";
 import { makePath, pagesIn } from "@/landing-pages/pages";
-import { IMAGE_MODELS } from "@/landing-pages/shared";
+import { IMAGE_MODELS, pageForModel } from "@/landing-pages/shared";
 
 export const metadata: Metadata = {
   title: "Models",
@@ -52,14 +52,30 @@ export default function ModelsPage() {
                   )}
                 </div>
                 <div className="mt-6 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                  {rows.map((m) => (
+                  {rows.map((m) => {
+                    const page = pageForModel(m.model, pagesIn("models"));
+                    return (
                     <article
                       key={m.model}
                       className="flex flex-col justify-between rounded-[14px] border border-border bg-card p-6 transition-colors hover:border-[#343331]"
                     >
                       <div>
-                        <h2 className="serif text-2xl">{m.name}</h2>
+                        <h2 className="serif text-2xl">
+                          {page ? (
+                            <Link href={makePath(page)} className="transition-opacity hover:opacity-80">
+                              {m.name}
+                            </Link>
+                          ) : (
+                            m.name
+                          )}
+                        </h2>
                         <p className="mt-2 text-[15px] leading-relaxed text-[#afafaf]">{m.blurb}</p>
+                        {page && (
+                          <Link href={makePath(page)} className="mt-3 inline-flex items-center gap-1 text-[13px] font-medium text-foreground">
+                            Its page
+                            <ArrowRight className="size-3.5" />
+                          </Link>
+                        )}
                       </div>
                       <dl className="mt-6 grid grid-cols-3 gap-3 border-t border-border pt-4 text-[13px]">
                         <div>
@@ -80,7 +96,8 @@ export default function ModelsPage() {
                         </div>
                       </dl>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             );
@@ -103,7 +120,7 @@ export default function ModelsPage() {
             </div>
             <div className="mt-8 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {pagesIn("models").map((page) => {
-                const m = IMAGE_MODELS.find((x) => x.id === page.model);
+                const m = IMAGE_MODELS.find((x) => x.id === page.modelIds?.[0]);
                 return (
                   <Link
                     key={page.slug}

@@ -4,7 +4,7 @@
 // read off `@/lib/catalog`, never typed; a re-export of src/pricing.py
 // changes every page.
 import { CATALOG, MODELS, num, type CatalogModel } from "@/lib/catalog";
-import type { MakeCard, MakeTile } from "./pages";
+import type { MakeCard, MakePage, MakeTile } from "./pages";
 
 export const model = (id: string): CatalogModel => {
   const m = MODELS.find((x) => x.model === id);
@@ -134,3 +134,14 @@ export const STILL_FAQS = {
     link: { href: "/pricing", label: "See the plans" },
   },
 };
+
+/** The page for a model id, if one exists. */
+export const pageForModel = (id: string, pages: MakePage[]): MakePage | undefined =>
+  pages.find((p) => p.modelIds?.includes(id));
+
+/** A model page's short label: the catalog's or the picker's name of its first model. */
+export function pageLabel(page: MakePage): string {
+  const id = page.modelIds?.[0];
+  if (!id) return page.h1;
+  return MODELS.find((m) => m.model === id)?.name ?? IMAGE_MODELS.find((m) => m.id === id)?.label ?? page.h1;
+}

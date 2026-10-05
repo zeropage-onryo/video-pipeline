@@ -32,7 +32,7 @@ const TILES = plateTiles([
 export const FLUX: MakePage = {
   slug: "flux-image-generator",
   section: "models",
-  model: "flux2-pro",
+  modelIds: ["flux2-pro"],
   title: "FLUX.2 Pro AI Image Generator",
   description:
     "Draw a still on FLUX.2 Pro from one line and your reference photos, in any of ten frames from 1:1 to 21:9, then make it an element and shoot it. Credits per still shown before you send.",

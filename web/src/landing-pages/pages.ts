@@ -13,6 +13,10 @@ import type { MakeAccent } from "./theme";
 import type { SignatureKey } from "./components/signatures";
 import { AD_GENERATOR } from "./entries/ai-product-ad-generator";
 import { SEEDANCE } from "./entries/seedance-video-generator";
+import { LTX } from "./entries/ltx-video-generator";
+import { WAN } from "./entries/wan-video-generator";
+import { KLING } from "./entries/kling-video-generator";
+import { VEO } from "./entries/veo-video-generator";
 import { NANO_BANANA } from "./entries/nano-banana-image-generator";
 import { FLUX } from "./entries/flux-image-generator";
 import { SEEDREAM } from "./entries/seedream-image-generator";
@@ -74,9 +78,10 @@ export type MakeSection = "make" | "models";
 export type MakePage = {
   slug: string;
   section: MakeSection;
-  /** The fal image-model id this page is about (shared.ts IMAGE_MODELS),
-   *  for the /models listing. Only the image pages carry one. */
-  model?: string;
+  /** The model ids this page is about -- catalog `model` ids for a video
+   *  page, shared.ts IMAGE_MODELS ids for an image page -- so the /models
+   *  listing can link each model to its page. */
+  modelIds?: string[];
   /** <title> without the site suffix (layout.tsx adds " — Zero Page"). */
   title: string;
   description: string;
@@ -121,7 +126,19 @@ export type MakePage = {
 };
 
 // In the order the Solutions menu and the Tools column list them.
-export const MAKE_PAGES: MakePage[] = [AD_GENERATOR, SEEDANCE, NANO_BANANA, FLUX, SEEDREAM, GPT_IMAGE, IDEOGRAM];
+export const MAKE_PAGES: MakePage[] = [
+  AD_GENERATOR,
+  LTX,
+  WAN,
+  KLING,
+  SEEDANCE,
+  VEO,
+  NANO_BANANA,
+  FLUX,
+  SEEDREAM,
+  GPT_IMAGE,
+  IDEOGRAM,
+];
 
 export function getMakePage(slug: string, section?: MakeSection): MakePage | undefined {
   return MAKE_PAGES.find((p) => p.slug === slug && (!section || p.section === section));

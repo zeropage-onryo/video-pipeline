@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/wordmark";
 import { makePath, pagesIn } from "@/landing-pages/pages";
-import { IMAGE_MODELS } from "@/landing-pages/shared";
+import { pageLabel } from "@/landing-pages/shared";
 
 const COLUMNS: { title: string; links: [string, string][] }[] = [
   {
@@ -22,12 +22,9 @@ const COLUMNS: { title: string; links: [string, string][] }[] = [
     links: pagesIn("make").map((page) => [page.h1, makePath(page)]),
   },
   {
-    // the image-model pages, under /models (2026-10-05, Mike's call)
-    title: "Image models",
-    links: pagesIn("models").map((page) => [
-      IMAGE_MODELS.find((m) => m.id === page.model)?.label ?? page.h1,
-      makePath(page),
-    ]),
+    // every model's own page, under /models (2026-10-05, Mike's call)
+    title: "Models",
+    links: pagesIn("models").map((page) => [pageLabel(page), makePath(page)]),
   },
   {
     title: "Plans",

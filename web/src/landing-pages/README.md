@@ -40,10 +40,12 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
   Next refuses a hook there). Reduced motion renders the finished state.
 
 Each entry names its `section`: `make` renders at `/make/<slug>` (the Ad
-Generator, Seedance; the header's Solutions menu and the footer's Tools column)
-and `models` at `/models/<slug>` (the five image models; listed on `/models`
-under "Image models" and in the footer's Image models column, 2026-10-05,
-Mike's call). `makePath(page)` follows the section. The two Next routes,
+Generator only; the header's Solutions menu and the footer's Tools column)
+and `models` at `/models/<slug>` (every model's own page -- LTX, Wan, Kling,
+Seedance, Veo, and the five image models; 2026-10-05, Mike's call). A model
+page carries `modelIds` (catalog ids for a video page, `IMAGE_MODELS` ids for
+an image page) so `/models` links each model card to its page
+(`pageForModel`) and the footer's Models column names it (`pageLabel`). `makePath(page)` follows the section. The two Next routes,
 `src/app/make/[slug]/page.tsx` and `src/app/models/[slug]/page.tsx`, are thin
 bindings of `route.tsx`: static params for the section, metadata (title,
 description, canonical, OG) and the JSON-LD; a slug under the wrong section

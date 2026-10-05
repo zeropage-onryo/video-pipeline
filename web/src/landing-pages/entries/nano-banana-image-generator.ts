@@ -33,7 +33,7 @@ const TILES = plateTiles([
 export const NANO_BANANA: MakePage = {
   slug: "nano-banana-image-generator",
   section: "models",
-  model: "nano-banana-pro",
+  modelIds: ["nano-banana-pro"],
   title: "Nano Banana Pro AI Image Generator",
   description:
     "Draw a still on Google's Nano Banana Pro from one line and your reference photos, in any of ten frames, then make it an element and shoot it. Credits per still shown before you send.",
