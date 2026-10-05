@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { ShotTimeline } from "./shot-timeline";
 import { ReferenceStack } from "./reference-stack";
 import { FramePicker } from "./frame-picker";
+import { EditLoop } from "./edit-loop";
 import type { MakePage } from "../pages";
 
 // A page's ONE signature interaction (2026-10-05): the section that gives
@@ -18,6 +19,8 @@ export const SIGNATURES = {
   "reference-stack": ReferenceStack,
   /** The ten frames, morphing to exact pixel sizes (FLUX). */
   "frame-picker": FramePicker,
+  /** The draw and the edit under one divider (Seedream). */
+  "edit-loop": EditLoop,
 } satisfies Record<string, ComponentType<{ page: MakePage }>>;
 
 export type SignatureKey = keyof typeof SIGNATURES;

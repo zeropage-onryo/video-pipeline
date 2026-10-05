@@ -15,6 +15,7 @@ import { AD_GENERATOR } from "./entries/ai-product-ad-generator";
 import { SEEDANCE } from "./entries/seedance-video-generator";
 import { NANO_BANANA } from "./entries/nano-banana-image-generator";
 import { FLUX } from "./entries/flux-image-generator";
+import { SEEDREAM } from "./entries/seedream-image-generator";
 
 // One tile in the wall under the hero (the InVideo-style wall, 2026-10-01).
 // A tile with no `src` draws as a gradient plate, the way the
@@ -108,7 +109,7 @@ export type MakePage = {
 };
 
 // In the order the Solutions menu and the Tools column list them.
-export const MAKE_PAGES: MakePage[] = [AD_GENERATOR, SEEDANCE, NANO_BANANA, FLUX];
+export const MAKE_PAGES: MakePage[] = [AD_GENERATOR, SEEDANCE, NANO_BANANA, FLUX, SEEDREAM];
 
 export function getMakePage(slug: string): MakePage | undefined {
   return MAKE_PAGES.find((p) => p.slug === slug);
