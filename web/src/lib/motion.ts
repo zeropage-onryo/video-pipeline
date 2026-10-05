@@ -77,15 +77,8 @@ export function reveal(i: number, opts: RevealOptions) {
   };
 }
 
-/** A single element arriving as it reaches the view (whileInView, once). */
-export function inViewReveal(still: boolean, y = 20, duration = 0.6, delay = 0) {
-  return {
-    initial: still ? (false as const) : { opacity: 0, y },
-    whileInView: { opacity: 1, y: 0 },
-    viewport: { once: true, amount: 0.5 },
-    transition: { duration, ease: EASE_OUT, delay } as Transition,
-  };
-}
+/** The in-view entrance's hidden and shown states (section titles). */
+export const RISE = { hidden: { opacity: 0, y: 20 }, shown: { opacity: 1, y: 0 } } as const;
 
 /** Rest / hover variants for a card and the pieces inside it. */
 export const HOVER: Record<"card" | "glyph" | "dim", Variants> = {
