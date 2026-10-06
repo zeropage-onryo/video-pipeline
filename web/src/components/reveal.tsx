@@ -1,6 +1,7 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
+import { useStill } from "@/components/motion/use-still";
 import type { ReactNode } from "react";
 
 // A section that arrives as you reach it. `once` is deliberate: content
@@ -15,7 +16,7 @@ export function Reveal({
   delay?: number;
   className?: string;
 }) {
-  const reduce = useReducedMotion();
+  const reduce = useStill();
   if (reduce) return <div className={className}>{children}</div>;
 
   return (

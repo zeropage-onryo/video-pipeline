@@ -1,4 +1,5 @@
 import { Reveal } from "@/components/reveal";
+import { KineticText } from "@/components/motion/kinetic-text";
 // Who the studio is for: three cards in the same warm-black card system as
 // the rest of the page. Copy carried over from the previous section.
 const TILES = [
@@ -21,9 +22,10 @@ export function WorkSection() {
     <section id="work" className="mx-auto max-w-[1200px] px-6 py-24 md:py-28">
       <Reveal className="max-w-[640px]">
         <span className="eyebrow">Who it&apos;s for</span>
-        <h2 className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]">
-          Made for your kind of creative.
-        </h2>
+        <KineticText
+          text="Made for your kind of creative."
+          className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]"
+        />
       </Reveal>
       <div className="mt-12 grid gap-3 md:grid-cols-3">
         {TILES.map((tile, i) => (
