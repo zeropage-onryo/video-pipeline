@@ -2,6 +2,7 @@ import { EditorialSkin } from "@/components/editorial-skin";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { HeroSection } from "@/components/landing/hero-section";
+import { PipelineSequence } from "@/components/landing/pipeline-sequence";
 import { FeatureSection } from "@/components/landing/feature-section";
 import { FramesSection } from "@/components/landing/frames-section";
 import { WorkSection } from "@/components/landing/work-section";
@@ -14,6 +15,7 @@ export default function Home() {
       <SiteHeader />
       <main className="flex-1">
         <HeroSection />
+        <PipelineSequence />
         <FeatureSection />
         <FramesSection />
         <WorkSection />

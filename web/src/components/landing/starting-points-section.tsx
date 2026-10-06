@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Reveal } from "@/components/reveal";
+import { KineticText } from "@/components/motion/kinetic-text";
 
 // The five ways in. Same canvas as every other section -- separation on
 // this page is done by hairlines and spacing, never by inverting the
@@ -19,9 +21,10 @@ export function StartingPointsSection() {
       <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
         <div className="max-w-[640px]">
           <span className="eyebrow">Start where you are</span>
-          <h2 className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]">
-            A blank page is only one way in.
-          </h2>
+          <KineticText
+            text="A blank page is only one way in."
+            className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]"
+          />
         </div>
         <Button size="lg" variant="outline" render={<Link href="/studio" />}>
           Bring your starting point
@@ -30,14 +33,15 @@ export function StartingPointsSection() {
       </div>
       <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {STARTS.map(([title, body], i) => (
+          <Reveal key={title} delay={i * 0.07}>
           <article
-            key={title}
-            className="rounded-[14px] border border-border bg-card p-6 transition-colors hover:border-[#343331]"
+            className="h-full rounded-[14px] border border-border bg-card p-6 transition-colors hover:border-[#343331]"
           >
             <span className="eyebrow">0{i + 1}</span>
             <h3 className="serif mt-8 text-2xl">{title}</h3>
             <p className="mt-3 text-sm leading-relaxed text-[#afafaf]">{body}</p>
           </article>
+          </Reveal>
         ))}
       </div>
     </section>
