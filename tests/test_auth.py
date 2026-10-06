@@ -230,10 +230,29 @@ def test_signup_with_email_confirmation_on_makes_no_session_yet(clean_slate, got
     gotrue.confirm_email = True
     response = signup()
     assert response.status_code == 303
-    assert "check%20your%20email" in response.headers["location"]
     assert auth_mod.SESSION_COOKIE not in response.cookies
     # and no mirror row: the person has not proved the address yet
     assert accounts.get_user_by_email("new@example.com", dsn=clean_slate) is None
+
+
+def test_signup_with_email_confirmation_on_lands_on_the_code_step(clean_slate, gotrue):
+    """The confirmation mail carries a CODE and says to type it on the page
+    you came from (2026-10-05). The route used to send the person back to
+    the password form, which has no code box."""
+    gotrue.confirm_email = True
+    response = signup()
+    location = response.headers["location"]
+    assert location.startswith("/signin?step=code")
+    assert "new%40example.com" in location
+    assert "notice=" in location and "confirm" in location
+    assert "then sign in" not in location     # /auth/verify signs them in itself
+    page = client.get(location)
+    assert "Check your email" in page.text
+    assert 'action="/auth/verify"' in page.text
+    assert 'name="email" value="new@example.com"' in page.text
+    assert "to confirm your address" in page.text
+    assert "We sent a code to" not in page.text   # the notice replaces that line
+    assert 'action="/auth/email"' in page.text    # "Send a new code" is still there
 
 
 def test_logout_clears_the_session(clean_slate, gotrue):

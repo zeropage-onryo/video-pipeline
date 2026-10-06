@@ -389,7 +389,7 @@ def _site_origin(url: Optional[str]) -> Optional[str]:
 def signin(request: Request, error: Optional[str] = None,
            mode: Optional[str] = None, email: Optional[str] = None,
            next: Optional[str] = None, step: Optional[str] = None,
-           open: Optional[str] = None):
+           open: Optional[str] = None, notice: Optional[str] = None):
     """The one door (2026-09-24, InVideo's shape): Google / Discord /
     Apple, or an email that gets a one-time code. Logging in and signing
     up are the same form -- `mode=signup` only changes the heading -- and
@@ -430,6 +430,9 @@ def signin(request: Request, error: Optional[str] = None,
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
          "email": email, "step": screen,
+         # the code step's own line, when the door that sent the code has
+         # something to say about it (a sign-up: the code confirms the address)
+         "notice": notice if screen == "code" else None,
          # the terms and privacy pages live on the public site (web/), the
          # origin STUDIO_URL names; no front end, no legal line
          "site_url": _site_origin(auth.studio_url()),

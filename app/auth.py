@@ -660,10 +660,16 @@ def _provision(user_id: str, email: Optional[str],
 OTP_EMAIL_KEY = "sb_otp_email"
 
 
-def _code_page(email: str, error: Optional[str] = None) -> RedirectResponse:
+def _code_page(email: str, error: Optional[str] = None,
+               notice: Optional[str] = None) -> RedirectResponse:
+    """The code step for `email`. `error` is the red box; `notice` replaces
+    the step's "we sent a code" line (the sign-up door says what the code
+    is FOR)."""
     query = {"step": "code", "email": email}
     if error:
         query["error"] = error
+    if notice:
+        query["notice"] = notice
     return RedirectResponse(f"/signin?{urlencode(query)}", status_code=303)
 
 
@@ -753,10 +759,17 @@ async def signup(request: Request, email: str = Form(...),
                 "password, or reset it", "signin", open_step="password")
         return _signin_error(text, "signup", open_step="signup")
     if not body.get("access_token"):
-        # confirmation email on: Supabase made the user, no session yet
-        return RedirectResponse(
-            f"/signin?error={quote('check your email to confirm the address, then sign in')}"
-            f"&mode=signin&email={quote(email)}&open=password", status_code=303)
+        # Confirmation email on: Supabase made the user and mailed a code,
+        # no session yet. Land on the CODE step (2026-10-05: the mail says
+        # "type it on the page you came from", and this route used to send
+        # the person back to the password form with no code box). The
+        # emailed code verifies as type "email" exactly like a sign-in
+        # code, so /auth/verify finishes it and the person is signed in;
+        # "Send a new code" there is /auth/email, whose OTP also confirms.
+        request.session[OTP_EMAIL_KEY] = email
+        return _code_page(
+            email, notice=f"We emailed a code to {email} to confirm your "
+                          "address. Enter it below.")
     response = _finish(request, body)
     _stamp_password(body)
     return response

@@ -75,6 +75,35 @@ def code_sign_in(email="new@example.com", code="123456"):
 
 # ---------- the email code door ----------
 
+def test_a_password_signup_awaiting_confirmation_finishes_through_the_code_step(
+        clean_slate, gotrue):
+    """Confirm-email ON: the sign-up lands on the code step, "Send a new
+    code" there goes through /auth/email without an error, and the code
+    verifies as type "email" -- so the person ends up signed in with a
+    mirror row, never bounced to a password form."""
+    gotrue.confirm_email = True
+    signed = client.post("/auth/signup",
+                         data={"email": "new@example.com", "password": "hunter2hunter2"},
+                         follow_redirects=False)
+    assert signed.headers["location"].startswith("/signin?step=code")
+    assert auth_mod.SESSION_COOKIE not in signed.cookies
+    # "Send a new code" on that page: the address already has a (confirmed
+    # or not) user, and GoTrue's OTP is fine with that
+    resent = client.post("/auth/email", data={"email": "new@example.com"},
+                         follow_redirects=False)
+    assert resent.status_code == 303
+    assert resent.headers["location"].startswith("/signin?step=code")
+    assert "error=" not in resent.headers["location"]
+    assert gotrue.calls[-1][1] == "/otp"
+    # the code from the mail signs them in through the same /auth/verify
+    done = client.post("/auth/verify", data={"email": "new@example.com", "token": "123456"},
+                       follow_redirects=False)
+    assert done.status_code == 303
+    assert gotrue.calls[-1][1] == "/verify" and gotrue.calls[-1][2]["type"] == "email"
+    assert accounts.get_user_by_email("new@example.com", dsn=clean_slate) is not None
+    assert client.get("/api/capabilities").status_code in (200, 403)
+
+
 def test_the_email_door_sends_a_code_and_lands_on_the_code_step(clean_slate, gotrue):
     response = client.post("/auth/email", data={"email": " New@Example.com "},
                            follow_redirects=False)
