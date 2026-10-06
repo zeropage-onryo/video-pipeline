@@ -110,6 +110,17 @@
     },
     {
       "provider": "fal",
+      "model": "seedance2.5",
+      "name": "Seedance 2.5",
+      "blurb": "ByteDance's newest, with sound, up to 30 seconds; 1080p is premium.",
+      "tier": "creator",
+      "max_seconds": null,
+      "seconds": 5,
+      "credits": 568,
+      "frame": "720p"
+    },
+    {
+      "provider": "fal",
       "model": "veo3.1",
       "name": "Veo 3.1",
       "blurb": "Google's top model, with sound. Premium only.",

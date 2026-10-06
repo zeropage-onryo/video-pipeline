@@ -6,22 +6,25 @@ Started 2026-10-06. Route `/models/seedance-video-generator`, entry
 Preview: `preview_start web`, then http://localhost:3000/models/seedance-video-generator.
 One commit per finished section, or one at the end: `feat(web): /models/seedance-video-generator -- <what changed>`.
 
-What the page rests on (checked 2026-10-05 against `src/fal.py VIDEO_MODELS`
-and the Queue): Seedance 2.0 Fast (480p/720p) and Seedance 2.0 (adds 1080p,
-the premium band), 4-15 s a clip as a string on the wire, image-to-video off
-the shot's keyframe, both on Creator and up. Seedance 2.5 is on fal
-(text / image / reference-to-video, 4-30 s, 480p and 720p with audio) and
-NOT in the catalog -- the page must not name it until the model is added and
-`python -m src.pricing export` has run.
+What the page rests on (re-checked 2026-10-06 against `src/fal.py
+VIDEO_MODELS` and fal's pages): **the page is the Seedance 2.5 page**
+(Mike's call, 2026-10-06). Seedance 2.5 was added to the catalog that day
+(`seedance2.5`: `bytedance/seedance-2.5/{text,image}-to-video`, 4-30 s a
+clip as a string on the wire, 480p $0.2205/s, 720p $0.4730/s, 1080p
+$1.164/s, audio generated with the picture and included in the rate, no
+fast tier; Creator band, 1080p premium; `python -m src.pricing export`
+run). Seedance 2.0 Fast (480p/720p) and Seedance 2.0 (adds 1080p) stay on
+the page as the family, 4-15 s a clip. Image-to-video off the shot's
+keyframe on all three.
 
 ## 1. Hero
 
-- [ ] `title` (the <title>): "Seedance AI Video Generator"
-- [ ] `h1`: "Seedance Video Generator" (menu line the same)
-- [ ] `subhead`: "Write a scene, anchor every shot on your reference photos, and render it on Seedance, 4 to 15 seconds a clip, up to 1080p."
-- [ ] CTA label "Make a scene"; secondary "See the shots" -> `#shots`
-- [ ] The spark the composer opens on: "A 15-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance."
-- [ ] `description` (meta + OG): one line naming both tiers, 4-15 s, up to 1080p
+- [x] `title` (the <title>): "Seedance 2.5 AI Video Generator"
+- [x] `h1`: "Seedance 2.5 Video Generator" (menu line the same)
+- [x] `subhead`: "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.5, 4 to 30 seconds a clip with sound, up to 1080p."
+- [x] CTA label "Make a scene"; secondary "See the shots" -> `#shots`
+- [x] The spark the composer opens on: "A 30-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance 2.5."
+- [x] `description` (meta + OG): one line, 2.5, 4-30 s with sound, 480p to 1080p, priced before approve
 
 ## 2. Signature: the scroll-scrubbed scene (`shot-timeline.tsx`)
 

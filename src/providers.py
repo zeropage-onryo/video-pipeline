@@ -222,11 +222,13 @@ BANDS: dict[tuple[str, str], Band] = {
     ("fal", "kling3-turbo-pro"): Band("creator"),
     ("fal", "seedance2-fast"): Band("creator"),
     ("fal", "seedance2"): Band("creator"),
+    ("fal", "seedance2.5"): Band("creator"),
     ("fal", "veo3.1"): Band("premium", max_seconds=8),
 }
 
 BAND_BY_FRAME: dict[tuple[str, str, str], Band] = {
     ("fal", "seedance2", "1080p"): Band("premium"),
+    ("fal", "seedance2.5", "1080p"): Band("premium"),
 }
 
 

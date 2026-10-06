@@ -39,7 +39,7 @@ Gates before a commit: `npx tsc --noEmit`, `npx eslint src`, a look at 375 / 768
 2. **LTX 2.3** -- 6/8/10 s, 1080p/1440p/2160p, every plan, open weights. Lowest credits per second in the catalog (the feature card checks this at build and rewords itself if it stops being true). No signature: a frame ladder (1080p -> 2160p) was the idea.
 3. **Wan 3.0** -- 2-10 s, 480p/720p/1080p, every plan; "motion" is the pitch. No signature: a length strip (2 -> 10 s) was the idea. Native audio and first/last frame exist in the model and are not in the Queue.
 4. **Kling 3 Turbo Pro** -- 3-15 s, 1080p flat rate, Creator and up; "people". No signature: a horizontal scroll-snap strip of takes was the idea. Kling's multi-shot storyboard is the model's, not the Queue's.
-5. **Seedance** -- covers both tiers (2.0 and 2.0 Fast). Seedance 2.5 is on fal and NOT in `src/fal.py`; naming it needs the model added and `python -m src.pricing export` first.
+5. **Seedance** -- the Seedance 2.5 page since 2026-10-06 (`seedance2.5` added to `src/fal.py` and the catalog that day); the 2.0 tiers stay on it as the family.
 6. **Veo 3.1** -- 4/6/8 s, 720p/1080p, sound on (the rate the card prices), Studio plan only. No signature: an animated sound-bar frame was the idea. Reference images, extend and 4K are the model's, not the Queue's.
 7. **Nano Banana Pro** -- two routes (Gemini key, 33 credits a Pro still off the catalog; fal, 1K/2K). Draws every element sheet. The reference-stack signature reads the wall's first six tiles.
 8. **FLUX.2 Pro** -- up to eight references in the studio, priced per megapixel (a reference edit costs more). Frame-picker shows the ten `IMAGE_SIZES`.

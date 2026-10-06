@@ -3,10 +3,12 @@ import { INDIGO } from "../theme";
 import { MODELS_TITLE, PLAN_FOR, model, modelCards, plate } from "../shared";
 import type { MakePage, MakeTile } from "../pages";
 
-// The Seedance page's two renderers, off the catalog like the three above.
+// The Seedance page's renderers, off the catalog like the three above:
+// 2.5 is the page's model (2026-10-06, Mike's call), the two 2.0 tiers
+// stay on the page as the family it belongs to.
+const sd25 = model("seedance2.5");
 const sd = model("seedance2");
 const sdFast = model("seedance2-fast");
-const kling = model("kling3-turbo-pro");
 
 // TODO(media): eight Seedance stills from the studio go here as `src`
 // (public/make/seedance-video-generator/<name>.jpg, 928x1152, the Ad
@@ -23,29 +25,28 @@ const SEEDANCE_TILES: MakeTile[] = [
   { title: "Night exterior", tag: "Shot 8", plate: plate("#1e1b4b", "#312e81", "#6366f1") },
 ];
 
-// Seedance (2026-10-05, Mike's call). What renders today is Seedance 2.0
-// and Seedance 2.0 Fast through fal (src/fal.py VIDEO_MODELS; 4-15 s a
-// clip, 480p/720p, 1080p on the full model as the premium band). Seedance
-// 2.5 is on fal and NOT in the catalog, so no line here names it: the copy
-// names the models the Queue offers, and `sd`/`sdFast` read the catalog
-// so a re-export changes the page. TODO(media): the wall's eight tiles are
+// Seedance (2026-10-05, Mike's call; 2.5 since 2026-10-06). What renders
+// is Seedance 2.5 (src/fal.py VIDEO_MODELS: 4-30 s a clip with sound,
+// 480p/720p/1080p, 1080p the premium band) beside Seedance 2.0 and 2.0
+// Fast (4-15 s). The copy names the models the Queue offers, and `sd25`/
+// `sd`/`sdFast` read the catalog so a re-export changes the page. TODO(media): the wall's eight tiles are
 // gradient plates until Seedance renders from the studio replace them
 // (`src: "/make/seedance-video-generator/<name>.jpg"`, 928x1152).
 export const SEEDANCE: MakePage = {
     slug: "seedance-video-generator",
     section: "models",
-    modelIds: ["seedance2", "seedance2-fast"],
-    title: "Seedance AI Video Generator",
+    modelIds: ["seedance2.5", "seedance2", "seedance2-fast"],
+    title: "Seedance 2.5 AI Video Generator",
     description:
-      "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.0 or Seedance 2.0 Fast, 4 to 15 seconds a clip, up to 1080p.",
-    h1: "Seedance Video Generator",
-    menu: "Seedance Video Generator",
+      "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.5: 4 to 30 seconds a clip with synchronized sound, 480p to 1080p, priced before you approve.",
+    h1: "Seedance 2.5 Video Generator",
+    menu: "Seedance 2.5 Video Generator",
     subhead:
-      "Write a scene, anchor every shot on your reference photos, and render it on Seedance, 4 to 15 seconds a clip, up to 1080p.",
+      "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.5, 4 to 30 seconds a clip with sound, up to 1080p.",
     cta: {
       label: "Make a scene",
       spark:
-        "A 15-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance.",
+        "A 30-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance 2.5.",
       secondary: { label: "See the shots", href: "#shots" },
       startLabel: "Start a scene",
     },
@@ -110,7 +111,7 @@ export const SEEDANCE: MakePage = {
     },
     models: {
       title: MODELS_TITLE,
-      items: modelCards([sd, sdFast, kling]),
+      items: modelCards([sd25, sd, sdFast]),
     },
     howTo: {
       title: "How to render on Seedance",

@@ -271,6 +271,30 @@ VIDEO_MODELS: dict[str, dict] = {
         "checked": "2026-09-26",
         "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
     },
+    # Seedance 2.5 (added 2026-10-06, Mike's call: the Seedance page is the
+    # 2.5 page). Read off the model page's rate card and the /api schema
+    # that day: 4-30 s a clip as a string enum ("auto" or "4".."30" -- we
+    # always send a number), 480p/720p/1080p, audio generated with the
+    # picture by default and included in the rate ("720p with audio
+    # ~$0.4730 / second"; 480p $0.2205, 1080p $1.164 -- fal's own Aug-13
+    # comparison still listed 2.5 as 480p/720p only, the schema and rate
+    # card today carry 1080p). No fast tier exists for 2.5. 1080p is the
+    # premium band (providers.BAND_BY_FRAME), as on 2.0. image_url is the
+    # start frame; `end_image_url` and the reference-to-video endpoint
+    # (`image_urls`, up to 30) are not wired.
+    "seedance2.5": {
+        "t2v": "bytedance/seedance-2.5/text-to-video",
+        "i2v": "bytedance/seedance-2.5/image-to-video",
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (4, 30),
+        "duration_wire": "str",
+        "resolutions": ("480p", "720p", "1080p"),
+        "default_resolution": "720p",
+        "prices": {"480p": 0.2205, "720p": 0.4730, "1080p": 1.164},
+        "platform": "seedance",
+        "checked": "2026-10-06",
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video",
+    },
     # Veo 3.1 through fal (2026-09-26). It was deliberately absent while
     # src/veo.py owned the platform on the Gemini key -- two adapters, one
     # daily cap, two invoices. veo.py is gone, so fal is the one door to it.

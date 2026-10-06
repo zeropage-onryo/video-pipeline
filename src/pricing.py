@@ -726,6 +726,7 @@ CATALOG_MODELS: tuple[tuple[str, str, str, str], ...] = (
     ("fal", "kling3-turbo-pro", "Kling 3 Turbo Pro", "Cinematic motion, strong on people."),
     ("fal", "seedance2-fast", "Seedance 2.0 Fast", "ByteDance's quick tier, up to 720p."),
     ("fal", "seedance2", "Seedance 2.0", "Seedance at full quality; 1080p is premium."),
+    ("fal", "seedance2.5", "Seedance 2.5", "ByteDance's newest, with sound, up to 30 seconds; 1080p is premium."),
     ("fal", "veo3.1", "Veo 3.1", "Google's top model, with sound. Premium only."),
 )
 
