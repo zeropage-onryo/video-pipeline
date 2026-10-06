@@ -148,7 +148,11 @@ input:focus{outline:0;border-color:var(--line-hi)}
 
       {% if step == 'code' %}
       <h1>Check your email</h1>
+      {% if notice %}
+      <p class="sub">{{ notice }}</p>
+      {% else %}
       <p class="sub">We sent a code to <b>{{ email }}</b>.<br>Enter it below, or click the link in that email.</p>
+      {% endif %}
       {% if error %}<div class="err">{{ error }}</div>{% endif %}
       <form method="post" action="/auth/verify">
         <input type="hidden" name="email" value="{{ email }}">
