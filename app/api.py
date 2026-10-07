@@ -686,6 +686,15 @@ async def creative_guide_reply(request: Request,
     # The Guide talks inside the same project a Create would write into
     # (2026-09-28), so its suggestions follow that project's brief and memory.
     project = _form_project(form, account_id)
+    if (form.get("project_id") or "").strip() and project is None:
+        return _error(404, "no_project", f"no project {form.get('project_id')}")
+    # THE PROJECT'S CHAT HISTORY (2026-10-07): a turn inside a project
+    # workspace is written to project_messages as it happens -- the
+    # person's message and the reply, once there is one -- so reopening
+    # the project carries the conversation on where it left off. Only
+    # when the client asks (`remember=1`) and only inside a project: the
+    # studio-wide thread outside any project stays working memory.
+    remember = project is not None and (form.get("remember") or "").strip() in ("1", "true", "on")
     # A link the person pasted (2026-10-01, src/linkrefs.py): read off
     # THEIR OWN last message, here, never off a tool argument -- the
     # model never handles a URL (guide_tools.check_args). Its frames go
@@ -694,6 +703,12 @@ async def creative_guide_reply(request: Request,
     pasted = linkrefs.extract_links(conversation.messages[-1].content)
 
     def work(job):
+        result = _guide_turn(job)
+        if remember:
+            _remember_turn(project["id"], conversation, result["reply"], account_id)
+        return result
+
+    def _guide_turn(job):
         # Grounded through scene_chain.ground -- the same scoped set a
         # Create would be handed (named in the idea, or explicitly
         # picked), so what the guide proposes is shaped by the material
@@ -734,7 +749,8 @@ async def creative_guide_reply(request: Request,
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
-                brain=brain, assistant=assistant, links=links, output=output)
+                brain=brain, assistant=assistant, links=links, output=output,
+                project=project)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -747,6 +763,26 @@ async def creative_guide_reply(request: Request,
     job = jobs.start("guide", "creative guide", _in_project(project, work),
                      account_id=account_id)
     return {"job_id": job["id"]}
+
+
+# What a reply carries beside its words, kept with the turn so a reopened
+# conversation draws the same cards (src/projects.py project_messages).
+_REMEMBERED_REPLY_KEYS = ("proposal", "tool_runs", "choices", "questions",
+                          "directions", "nudge", "stage", "brief")
+
+
+def _remember_turn(project_id: int, conversation, reply: dict, account_id: int) -> None:
+    """The person's last message and the Guide's answer, into the
+    project's history. Best-effort: history is bookkeeping on top of a
+    turn that already happened, and must never fail it."""
+    try:
+        projects.append_message(project_id, "user", conversation.messages[-1].content,
+                                account_id=account_id)
+        extras = {k: reply.get(k) for k in _REMEMBERED_REPLY_KEYS if reply.get(k)}
+        projects.append_message(project_id, "assistant", reply.get("message") or "",
+                                account_id=account_id, tool_calls=extras or None)
+    except Exception as exc:                      # pragma: no cover - never fails the turn
+        print(f"  project history not written: {exc}", file=sys.stderr)
 
 
 def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
@@ -799,6 +835,22 @@ async def creative_guide_act(request: Request,
         return _error(400, "bad_tool", f"`{tool}` is made by the studio's send, not here")
     if not isinstance(args, dict):
         return _error(400, "bad_request", "args must be an object")
+    if guide_tools.is_project(tool):
+        # PROJECTS ARE MADE THROUGH THE GUIDE (2026-10-07, Mike's call):
+        # create_project names one; save_as_project turns the conversation
+        # the person has been having into one, carrying its turns and the
+        # scenes it made. Both need the thread, which only the client holds
+        # -- it rides on this body, bounded, and is user content filed
+        # under the account that posts it.
+        try:
+            result = guide_tools.run_project_tool(
+                tool, args, account_id=account_id,
+                conversation=(body or {}).get("conversation"),
+                scenes=(body or {}).get("scenes"))
+        except guide_tools.Refused as exc:
+            return _error(400, "refused", str(exc))
+        return {"ok": True, "tool": tool, "result": result["summary"],
+                "project": result["project"]}
     if not guide_tools.is_local(tool) and not guide_tools.available():
         return _error(503, "tools_unavailable", "the board's tools are not installed here")
     extra = {}
@@ -1224,7 +1276,13 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
     from datetime import datetime, timezone
 
     items = []
-    for asset in _assets_all(account_id, scope):
+    assets = _assets_all(account_id, scope)
+    # which project each render's scene sits in (2026-10-07): one query
+    # for the wall, so a solo render says "no project" rather than nothing
+    linked = projects.for_concepts(
+        [(a.get("meta") or {}).get("concept_id") for a in assets
+         if a["category"] == "generated"], account_id=account_id)
+    for asset in assets:
         generated = asset["category"] == "generated"
         media = asset.get("media") or [
             {"url": url, "kind": "image"} for url in asset["photos"]]
@@ -1274,6 +1332,11 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
                     "model": meta.get("model"),
                     "concept_id": meta.get("concept_id"),
                     "shot_n": meta.get("shot_n"),
+                    # the project its scene is filed under, or None: a
+                    # video made outside any project lands here and on no
+                    # board (2026-10-07, Mike's call)
+                    "project_id": (linked.get(meta.get("concept_id")) or {}).get("id"),
+                    "project_title": (linked.get(meta.get("concept_id")) or {}).get("title"),
                     "prompt": asset.get("text") or "",
                     "folder": asset.get("folder"),
                     "starred": bool(asset.get("starred")),
@@ -1895,6 +1958,10 @@ def _concept_card(c: dict, subscription_ids: Optional[set] = None,
         "is_scene": c.get("is_scene", False),
         "picked": c.get("picked", False),
         "archived": c.get("archived", False),
+        # the project this scene is filed under (2026-10-07), or None for
+        # a scene made outside any -- which is what decides where its
+        # canvas opens (/studio/projects/<id> or /studio/scene/<id>)
+        "project_id": c.get("project_id"),
         # parked = the chain took it as far as it can without spending;
         # it is waiting in the Queue on a human. An explicit marker, not
         # "has a reference_image" -- see preprod.set_shot_parked.
@@ -2489,10 +2556,12 @@ async def scenes_run(request: Request, account_id: int = Depends(auth.current_ac
 
 # --- studio projects (2026-09-28) ---------------------------------------------
 # One brief and one memory per piece of work -- src/projects.py says why.
-# The Projects page is the only door: it creates a project (brief typed, or
-# drafted from three answers), shows what the project has learned, and
-# opens the Studio composer inside it (?project=<id>), which posts
-# `project_id` to /scenes/run.
+# Since 2026-10-07 (Mike's call) the Projects BOARD is the studio's home
+# and a project is made only through the Guide (guide_tools.PROJECT_TOOLS,
+# run by /creative-guide/act): POST /projects stays as the door that click
+# posts to and for the CLI, but no page offers a "New project" form. A
+# project's workspace (/studio/projects/<id>) is its scenes, the Director
+# canvas and the pill scoped to it; its chat history lives here too.
 
 
 class ProjectBody(BaseModel):
@@ -2587,6 +2656,42 @@ def projects_forget(project_id: int, body: ProjectForgetBody,
     except ValueError as e:
         return _error(404, "not_found", str(e))
     return {"ok": True, "removed": removed}
+
+
+@router.get("/projects/{project_id}/scenes")
+def projects_scenes(project_id: int, account_id: int = Depends(auth.current_account_id)):
+    """Every scene filed under the project and whether it is rendered --
+    what the delete confirm lists as "left detached" (2026-10-07). Not
+    the board's window: the board is bounded, this is the whole project."""
+    if projects.get(project_id, account_id=account_id) is None:
+        return _error(404, "not_found", f"no project {project_id}")
+    return {"items": projects.scenes_to_detach(project_id, account_id=account_id)}
+
+
+@router.delete("/projects/{project_id}")
+def projects_delete(project_id: int, request: Request,
+                    account_id: int = Depends(auth.current_account_id)):
+    """Delete a project for good (2026-10-07, Mike's call) -- its brief,
+    look, memory and chat history. Its scenes are detached, never
+    deleted, so a rendered clip stays on the Assets wall. The one place
+    this app deletes rather than archives; the confirm is the page's."""
+    model_connections.mutation_header(request)
+    try:
+        counts = projects.delete(project_id, account_id=account_id)
+    except ValueError as e:
+        return _error(404, "not_found", str(e))
+    return {"ok": True, **counts}
+
+
+@router.get("/projects/{project_id}/messages")
+def projects_messages(project_id: int, before: Optional[int] = None, limit: int = 40,
+                      account_id: int = Depends(auth.current_account_id)):
+    """The project's chat history, newest `limit` turns oldest-first;
+    `?before=<message id>` pages back. Written by the Guide turn itself
+    (`remember=1` on /creative-guide inside a project)."""
+    if projects.get(project_id, account_id=account_id) is None:
+        return _error(404, "not_found", f"no project {project_id}")
+    return projects.messages(project_id, account_id=account_id, limit=limit, before=before)
 
 
 # --- the research scout -----------------------------------------------------

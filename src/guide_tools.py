@@ -137,6 +137,76 @@ MAKE_SPECS = (
     },
 )
 
+# PROJECTS ARE MADE THROUGH THE GUIDE (2026-10-07, Mike's call: "projects
+# are only created through the Guide -- either the user tells the Guide
+# to make one, or a Guide conversation is saved as a project. There is no
+# 'New project' form or button on the board."). Two WRITE tools in the
+# proposal sense -- the turn ends on the call, the pill or the composer
+# draws the confirm card, and the click posts /creative-guide/act, which
+# runs `run_project_tool` with the thread the client holds:
+#   create_project    -- a named project (title, optional brief). The
+#                        conversation stays an ordinary chat.
+#   save_as_project   -- the conversation so far BECOMES a project: its
+#                        turns are copied into the project's history and
+#                        the scenes it made are filed under it.
+# Published on every local turn (the pill, the composer's brain). A turn
+# that already runs inside a project is told so (creative_guide.project_note)
+# and asked not to propose either. Nothing here spends.
+PROJECT_TOOLS = ("create_project", "save_as_project")
+WRITE_LABELS["create_project"] = "Create this project"
+WRITE_LABELS["save_as_project"] = "Save this conversation as a project"
+MAX_PROJECT_TITLE = 120
+MAX_PROJECT_BRIEF = 8000
+MAX_SAVED_TURNS = 200
+MAX_SAVED_SCENES = 40
+PROJECT_SPECS = (
+    {
+        "name": "create_project",
+        "description": (
+            "Create a studio PROJECT -- the container a piece of work's scenes live "
+            "in, with its own brief and memory. Call it ONLY when the person asked "
+            "for a project in so many words ('make a project for the Nike spot', "
+            "'start a new project called X') and never when they are just talking "
+            "about an idea. Never call it inside a conversation that is already in "
+            "a project. The title is theirs or a short name for the work; the brief "
+            "is only what they said about who it is for, the look, and the rules."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "The project's name."},
+                "brief": {"type": "string",
+                          "description": "Optional: FOR / LOOK / ALWAYS / NEVER lines "
+                                         "from what the person said. Leave empty "
+                                         "rather than invent one."},
+            },
+            "required": ["title"],
+        },
+        "write": True,
+    },
+    {
+        "name": "save_as_project",
+        "description": (
+            "Turn THIS conversation into a project: it is saved with every turn so "
+            "far and the scenes made in it, under the title given. Call it ONLY "
+            "when the person asked to save or keep this conversation as a project "
+            "('make this a project', 'save this as a project called X'). Never "
+            "inside a conversation already in a project."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string",
+                          "description": "The project's name -- theirs, or a short "
+                                         "name for what the conversation is about."},
+                "brief": {"type": "string",
+                          "description": "Optional: the brief as agreed so far, in "
+                                         "FOR / LOOK / ALWAYS / NEVER lines."},
+            },
+            "required": ["title"],
+        },
+        "write": True,
+    },
+)
+
 MAX_TOOL_CALLS = 6      # read calls per turn; a Guide answer, not a crawl
 
 _URL = re.compile(r"(?i)\b(?:https?|ftp)://|\bwww\.|\.(?:jpe?g|png|webp|gif)(?:\?|$)")
@@ -152,11 +222,18 @@ HIDDEN_WITH_LOCAL = frozenset({"images_for"})
 
 
 def is_write(name: str) -> bool:
-    return name in WRITE_TOOLS or name in LOCAL_WRITE or name in MAKE_TOOLS
+    return (name in WRITE_TOOLS or name in LOCAL_WRITE or name in MAKE_TOOLS
+            or name in PROJECT_TOOLS)
 
 
 def is_local(name: str) -> bool:
     return name in LOCAL_TOOLS
+
+
+def is_project(name: str) -> bool:
+    """A project tool: proposed by the model, run by /creative-guide/act
+    with the conversation the client holds (run_project_tool)."""
+    return name in PROJECT_TOOLS
 
 
 def is_make(name: str) -> bool:
@@ -186,7 +263,8 @@ def check_args(name: str, args: dict) -> dict:
     The URL rule is checked on every string argument, not only the two
     named `*_url`: a model told "no URLs" puts one in `title` next.
     """
-    if name not in TOOLS and name not in LOCAL_TOOLS and name not in MAKE_TOOLS:
+    if (name not in TOOLS and name not in LOCAL_TOOLS and name not in MAKE_TOOLS
+            and name not in PROJECT_TOOLS):
         raise Refused(f"`{name}` is not reachable from the Guide")
     args = dict(args or {})
     for key, value in args.items():
@@ -230,6 +308,12 @@ def check_args(name: str, args: dict) -> dict:
                     continue
                 clean[key] = max(lo, min(hi, value))
         args = clean
+    if name in PROJECT_TOOLS:
+        title = " ".join(str(args.get("title") or "").split())
+        if not title:
+            raise Refused(f"`{name}` needs a title for the project")
+        args = {"title": title[:MAX_PROJECT_TITLE],
+                "brief": str(args.get("brief") or "").strip()[:MAX_PROJECT_BRIEF]}
     if name == "reference":
         for key in ("image_url", "source_url"):
             if args.get(key):
@@ -278,6 +362,9 @@ def run(name: str, args: dict, *, dsn: Optional[str] = None,
         # where the price, the charge and the job are; a server that made
         # a still off this body would be a second spend door with no card
         raise Refused(f"`{name}` is made by the studio's own send, not here")
+    if is_project(name):
+        # needs the conversation the client holds: run_project_tool
+        raise Refused(f"`{name}` takes the conversation; the act route runs it")
     if is_local(name):
         from . import assistant_brain
         return assistant_brain.run_local(name, args, brand=brand, account_id=account_id,
@@ -289,6 +376,42 @@ def run(name: str, args: dict, *, dsn: Optional[str] = None,
         async with Client(build(dsn=dsn, account_id=account_id)) as client:
             return await call(client, name, args)
     return _sync(go())
+
+
+def run_project_tool(name: str, args: dict, *, account_id: int, conversation=None,
+                     scenes=None, dsn: Optional[str] = None) -> dict:
+    """The confirm card's click on create_project / save_as_project.
+
+    `conversation` is the thread as the client holds it -- [{role,
+    content, tool_calls?}] -- and `scenes` the concept ids its sends
+    made; both are user content filed under `account_id` and nothing
+    else is read off them. A concept that is not this account's is
+    simply not filed (projects.tag_concepts' own predicate). Returns
+    {project, summary}; raises Refused for a bad call."""
+    from . import projects
+
+    if not is_project(name):
+        raise Refused(f"`{name}` is not a project tool")
+    args = check_args(name, args)
+    try:
+        project = projects.create(args["title"], args.get("brief") or "", dsn,
+                                  account_id=account_id)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    copied = filed = 0
+    if name == "save_as_project":
+        turns = [t for t in (conversation if isinstance(conversation, list) else [])
+                 if isinstance(t, dict)][-MAX_SAVED_TURNS:]
+        copied = projects.copy_messages(project["id"], turns, dsn, account_id=account_id)
+        ids = [int(i) for i in (scenes if isinstance(scenes, list) else [])
+               if isinstance(i, int) and not isinstance(i, bool) and i > 0][:MAX_SAVED_SCENES]
+        if ids:
+            filed = projects.tag_concepts(ids, project["id"], dsn, account_id=account_id)
+    summary = f"project “{project['title']}” created"
+    if name == "save_as_project":
+        summary += (f" with {copied} turn{'s' if copied != 1 else ''}"
+                    + (f" and {filed} scene{'s' if filed != 1 else ''}" if filed else ""))
+    return {"project": project, "summary": summary}
 
 
 def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
@@ -330,6 +453,10 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
         # contact-sheet hunt is published it is the only image search.
         tool_specs = [s for s in tool_specs if s.get("name") not in HIDDEN_WITH_LOCAL]
         tool_specs = tool_specs + [dict(s) for s in assistant_brain.LOCAL_SPECS]
+        # projects are made through the Guide (2026-10-07): offered on the
+        # same turns the assistant's own tools are, i.e. the pill and the
+        # composer's brain -- never to a caller that asked for the board alone
+        tool_specs = tool_specs + [dict(s) for s in PROJECT_SPECS]
     if maker:
         tool_specs = tool_specs + [dict(s) for s in MAKE_SPECS]
 
