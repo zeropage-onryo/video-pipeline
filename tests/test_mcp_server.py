@@ -651,3 +651,284 @@ def test_the_clip_is_still_not_reachable_from_here(tmp_db, stills):
         elif isinstance(node, ast.Import):
             imported.update(alias.name.split(".")[0] for alias in node.names)
     assert not (FORBIDDEN & imported)
+
+
+# ---------- what the directory publishes (2026-10-07) ----------
+#
+# A listed connector is read by strangers. Every tool's title, description
+# and hints come from constants (TITLES / DESCRIPTIONS / HINTS) and the
+# test pins them there, screens the vocabulary, and checks the caps and
+# error shapes the connector checklist grades.
+
+def _published(server):
+    return {t.name: t for t in _tools(server)}
+
+
+def _result(call_result):
+    """The dict a tool returned, read off the SDK's text content (a
+    `-> dict` return is serialised as JSON text, not structured content)."""
+    import json
+
+    return json.loads(call_result.content[0].text)
+
+
+def test_every_tool_is_published_from_its_constant(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(dsn=tmp_db, job_status=lambda i, account_id=None: None,
+                                     approve_render=lambda *a: {},
+                                     approve_keyframes=lambda *a: {})
+    tools = _published(server)
+    assert set(tools) == set(mcp_server.TITLES) == set(mcp_server.DESCRIPTIONS) \
+        == set(mcp_server.HINTS)
+    for name, tool in tools.items():
+        assert tool.title == mcp_server.TITLES[name]
+        assert tool.description == mcp_server.DESCRIPTIONS[name]
+        hints = mcp_server.HINTS[name]
+        ann = tool.annotations
+        assert ann.title == tool.title
+        assert ann.read_only_hint is hints["read"]
+        assert ann.destructive_hint is hints["destructive"]
+        assert ann.idempotent_hint is hints["idempotent"]
+        assert ann.open_world_hint is hints["open_world"]
+        assert len(name) <= 64
+
+
+def test_descriptions_carry_no_operator_vocabulary(tmp_db, monkeypatch):
+    """"The nightly", "the Dev Studio", a venv command: words a directory
+    user does not have, screened out of every title and description."""
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(dsn=tmp_db, job_status=lambda i, account_id=None: None,
+                                     approve_render=lambda *a: {},
+                                     approve_keyframes=lambda *a: {})
+    for name, tool in _published(server).items():
+        text = f"{tool.title} {tool.description}".lower()
+        for word in mcp_server.INTERNAL_WORDS:
+            assert word.lower() not in text, f"{name}: {word!r}"
+    assert "nightly" not in mcp_server.INSTRUCTIONS.lower()
+
+
+def test_hints_are_true_to_what_the_tool_does(tmp_db):
+    """archive is reversible (not destructive); imagine_reference spends
+    (destructive); a read is read-only and idempotent; the tools that reach
+    the web say so."""
+    h = mcp_server.HINTS
+    assert h["archive"]["destructive"] is False and h["archive"]["idempotent"] is True
+    assert h["imagine_reference"]["destructive"] is True
+    assert h["imagine_reference"]["read"] is False
+    assert all(h[n]["read"] and h[n]["idempotent"]
+               for n in ("board", "idea", "search", "stats", "sparks", "tonight", "images", "job"))
+    assert all(h[n]["open_world"] for n in ("images_for", "reference", "research"))
+    assert not any(h[n]["read"] for n in ("capture", "pick", "shoot", "archive", "add_spark"))
+
+
+def test_vocabularies_are_published_as_enums(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(dsn=tmp_db)
+    tools = _published(server)
+    status = tools["board"].input_schema["properties"]["status"]
+    assert status["enum"] == list(mcp_server.STATUSES)
+    brand = tools["capture"].input_schema["properties"]["brand"]
+    assert brand["enum"] == list(preprod.BRANDS)
+    assert brand["default"] == mcp_server.DEFAULT_BRAND
+    lanes = tools["research"].input_schema["properties"]["lanes"]
+    assert any(opt.get("items", {}).get("enum") == list(scout.KNOWN_LANES)
+               for opt in lanes.get("anyOf", [lanes]))
+
+
+def test_a_stranger_can_capture_without_naming_a_brand(tmp_db):
+    server = mcp_server.build_server(dsn=tmp_db)
+    import asyncio
+
+    out = _result(asyncio.run(server.call_tool("capture", {"title": "A door that breathes"})))
+    assert out["brand"] == mcp_server.DEFAULT_BRAND
+    assert out["status"] == "open"
+
+
+def test_the_listing_cap_is_said_out_loud(tmp_db):
+    """A list that stops at the cap with no word looks complete."""
+    preprod.save_concept_ideas([_idea(f"Idea {i}") for i in range(30)],
+                               brand="zeropage", dsn=tmp_db, account_id=None)
+    out = mcp_server.list_ideas(dsn=tmp_db)
+    assert out["count"] == mcp_server.LIST_LIMIT == len(out["ideas"])
+    assert out["truncated"] is True and "narrow" in out["note"]
+    assert mcp_server.list_ideas(limit=100, dsn=tmp_db)["truncated"] is False
+    hits = mcp_server.search_ideas("Idea", limit=10, dsn=tmp_db)
+    assert hits["count"] == 10 and hits["truncated"] is True
+    assert mcp_server.search_ideas("Idea 7", dsn=tmp_db)["truncated"] is False
+    # the cap is named in the description a stranger reads
+    assert "maximum 100" in mcp_server.DESCRIPTIONS["board"]
+
+
+def test_images_for_an_unknown_direction_is_an_error_not_an_empty_list(tmp_db):
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    server = mcp_server.build_server(dsn=tmp_db)
+    with pytest.raises(ToolError, match="no finding 424242"):
+        asyncio.run(server.call_tool("images", {"finding_id": 424242}))
+    fid = _banked(tmp_db)
+    assert mcp_server.spark_images(fid, dsn=tmp_db)["count"] == 2
+
+
+def test_writes_act_as_the_explicit_account_the_server_was_built_for(pg):
+    """build_server(account_id=X) is how the Guide opens a server for a
+    signed-in request. capture/pick/shoot/archive used to ignore it and
+    fall through to the bootstrap account (AUDIT.md F-9)."""
+    import asyncio
+
+    from conftest import seed_two
+
+    from src import accounts
+
+    preprod.init(pg)
+    scout.init(pg)
+    seed_two("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        other = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+    bootstrap = accounts.resolve_account(dsn=pg)
+    assert bootstrap != other
+
+    server = mcp_server.build_server(dsn=pg, account_id=other)
+    card = _result(asyncio.run(server.call_tool("capture", {"title": "Theirs"})))
+    picked = _result(asyncio.run(server.call_tool("pick", {"idea_id": card["id"]})))
+    assert picked["status"] == "picked"
+    assert [c["title"] for c in preprod.list_concepts(dsn=pg, account_id=other)] == ["Theirs"]
+    assert preprod.list_concepts(dsn=pg, account_id=bootstrap) == []
+
+
+# ---------- Claude writes the scene, the studio renders it (2026-10-07) ----
+
+SCENE = ("Ultra-realistic grounded video in 9:16; the attached photo is the exact face. "
+         "Style: soft window light, true colour, a 35mm frame at chest height. "
+         "(0-4s) Sam lifts the lid of a dented biscuit tin and freezes. "
+         "(4-10s) Hard cut to the hallway: Sam backs away from the open door, the tin "
+         "still in one hand. No background music. Only diegetic sound: the tin lid, "
+         "a floorboard. Avoid: plastic sheen, cartoon reactions.")
+FACE = "/characters/sam/photo/face.jpg"
+
+
+@pytest.fixture
+def studio(tmp_db, monkeypatch):
+    """One idea and one element photo, the catalogue stood in for (the
+    photos live on disk and in R2; what is under test is the gate)."""
+    from src import asset_shelf
+
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
+    monkeypatch.delenv("QUOTE_SIGNING_SECRET", raising=False)
+    monkeypatch.setattr(asset_shelf, "catalogue",
+                        lambda dsn=None, account_id=None:
+                        [{"category": "character", "name": "Sam", "text": "a tired courier",
+                          "photos": [FACE, "/characters/sam/photo/side.jpg"]},
+                         {"category": "prop", "name": "Tin", "text": "", "photos": []}])
+    (idea_id,) = preprod.save_concept_ideas(
+        [{"title": "The Tin", "hook": "a dented tin", "logline": "Sam finds a tin."}],
+        brand="zeropage", dsn=tmp_db, account_id=None)
+    return tmp_db, idea_id
+
+
+def test_elements_lists_the_accounts_photos_as_refs(studio):
+    path, _ = studio
+    out = mcp_server.list_elements(dsn=path)
+    assert [e["name"] for e in out["elements"]] == ["Sam", "Tin"]
+    assert out["elements"][0]["photos"][0] == {"ref": FACE, "label": "face.jpg"}
+    assert out["elements"][1]["photos"] == []
+
+
+def test_write_scene_refuses_what_elements_did_not_issue(studio):
+    path, idea = studio
+    with pytest.raises(ValueError, match="not one of your elements"):
+        mcp_server.write_scene(idea, SCENE, refs=["https://example.com/face.jpg"], dsn=path)
+    with pytest.raises(ValueError, match="not one of your elements"):
+        mcp_server.write_scene(idea, SCENE, refs=["/characters/other/photo/x.jpg"], dsn=path)
+    with pytest.raises(ValueError, match="too short"):
+        mcp_server.write_scene(idea, "a man and a tin", refs=[FACE], dsn=path)
+    with pytest.raises(ValueError, match="placeholder"):
+        mcp_server.write_scene(idea, SCENE + " {look}", refs=[FACE], dsn=path)
+    with pytest.raises(ValueError, match="no idea 424242"):
+        mcp_server.write_scene(424242, SCENE, refs=[FACE], dsn=path)
+
+
+def test_write_scene_with_no_photos_is_refused_by_the_reference_gate(studio, monkeypatch):
+    path, idea = studio
+    monkeypatch.setattr(preprod, "refs_required", lambda: True)
+    with pytest.raises(ValueError, match="attach at least one"):
+        mcp_server.write_scene(idea, SCENE, refs=[], dsn=path)
+    # and nothing was written
+    assert preprod.get_concept(idea, dsn=path, account_id=None)["shots"] == []
+
+
+def test_write_scene_saves_the_timed_shots_without_a_model_call(studio):
+    from src import timeline
+
+    path, idea = studio
+    out = mcp_server.write_scene(idea, SCENE, seconds=10, refs=[FACE, FACE], dsn=path)
+    assert out["shots_written"] == 2 and out["seconds"] == 10
+    shot = preprod.get_concept(idea, dsn=path, account_id=None)["shots"][0]
+    assert shot["prompt"] == SCENE and shot["refs"] == [FACE]
+    assert shot["n"] == 1 and shot["source"] == "AI" and shot["written_by"] == "chat"
+    tl = shot["timeline"]
+    assert tl["planner"] == "split" and [p["n"] for p in tl["parts"]] == [1, 2]
+    assert tl["parts"][0]["refs"] == [FACE]
+    assert timeline.is_current(shot)          # ensure() will not re-plan it
+    assert preprod.reference_gate(preprod.get_concept(idea, dsn=path, account_id=None)) is None
+    # a prompt with no windows is one shot
+    out = mcp_server.write_scene(idea, SCENE.replace("(0-4s) ", "").replace("(4-10s) ", ""),
+                                 seconds=8, refs=[FACE], dsn=path)
+    shot = preprod.get_concept(idea, dsn=path, account_id=None)["shots"][0]
+    assert out["shots_written"] == 1 and "timeline" not in shot and shot["seconds"] == 8
+
+
+def test_quote_prices_the_stills_and_the_clip_and_says_what_is_affordable(studio):
+    path, idea = studio
+    with pytest.raises(ValueError, match="no scene prompt yet"):
+        mcp_server.quote_render(idea, dsn=path)
+    mcp_server.write_scene(idea, SCENE, refs=[FACE], dsn=path)
+    q = mcp_server.quote_render(idea, dsn=path)
+    assert q["keyframes"]["stills"] == 2 and q["keyframes"]["credits"] > 0
+    assert q["clip"]["timed"] is True and len(q["clip"]["renders"]) == 2
+    assert q["clip"]["signed"] is False and q["clip"]["renders"][0]["token"] is None
+    assert q["credits_needed"] == q["keyframes"]["credits"] + q["clip"]["credits"]
+    # the unowned pool has no balance to check, so nothing is refused here
+    assert q["balance"] is None and q["affordable"] is True
+    with pytest.raises(ValueError, match="bad renderer choice"):
+        mcp_server.quote_render(idea, model="no-such-model", dsn=path)
+
+
+def test_approve_runs_the_injected_bodies_and_translates_a_refusal(studio):
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from src.approvals import ApproveRefused
+
+    path, idea = studio
+    seen = []
+
+    def render(concept_id, account_id, body):
+        seen.append(("clip", concept_id, body))
+        if not body.get("tokens"):
+            raise ApproveRefused(400, "missing_quote", "no quote for this render")
+        return {"job_id": 7, "render": {"provider": body["provider"]}}
+
+    def keyframes(concept_id, account_id):
+        seen.append(("keyframes", concept_id))
+        raise ApproveRefused(402, "out_of_credits", "top up")
+
+    server = mcp_server.build_server(dsn=path, approve_render=render,
+                                     approve_keyframes=keyframes)
+    assert "approve" in {t.name for t in _tools(server)}
+    with pytest.raises(ToolError, match="missing_quote.*`quote`"):
+        asyncio.run(server.call_tool("approve", {"idea_id": idea, "provider": "fal"}))
+    out = _result(asyncio.run(server.call_tool(
+        "approve", {"idea_id": idea, "provider": "fal", "tokens": ["zpfq.x.y"]})))
+    assert out["job_id"] == 7 and "job" in out["note"]
+    with pytest.raises(ToolError, match="out_of_credits: top up"):
+        asyncio.run(server.call_tool("approve", {"idea_id": idea, "what": "keyframes"}))
+    assert [s[0] for s in seen] == ["clip", "clip", "keyframes"]
+    assert seen[1][2]["tokens"] == ["zpfq.x.y"]
+
+
+def test_approve_is_absent_without_the_approve_bodies(tmp_db):
+    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db))}
+    assert "quote" in names and "approve" not in names
