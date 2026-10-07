@@ -1,259 +1,198 @@
-# The Seedance 2.5 page's media: concepts, design, prompts
+# The Seedance 2.5 page's media: snippets, one feature each
 
-Drafted 2026-10-07 for Mike's review; revised the same day (v2) so every
-video demonstrates ONE named Seedance 2.5 feature, the way OpenArt's model
-page labels its demos (openart.ai/ai-model/seedance-2-5, read 2026-10-07).
-NOTHING here has been rendered.
-Every prompt below is a draft to mark up; nothing spends until it is
-approved line by line.
+v3, 2026-10-07, after Mike: "every video different, no 30-second video,
+these are all just snippets." Supersedes v1 (one story, three clips) and
+v2 (one 30 s hero cut into excerpts). NOTHING here has been rendered;
+every prompt is a draft to mark up.
 
 Prompt shape follows `.claude/skills/video-prompting/references/models/seedance25/`:
-constraints and timing at the top, a style block, a texture block, every
-shot starting mid-motion, explicit blocking, audio as its own section.
+constraints and timing first, a style block, every clip starting
+mid-motion, explicit blocking, audio as its own section. The feature
+labels follow OpenArt's model page (openart.ai/ai-model/seedance-2-5): each
+demo names the one thing it shows.
 
 ---
 
-## 1. Concepts: one world for the story slots
+## 1. The rules every snippet follows
 
-The overview's four blocks and the signature's three shots should be ONE
-short film, so the page shows what 2.5 is sold on: the same thing held
-across shots, timed beats, sound with the picture. Three candidates:
+- **Twelve different subjects.** No two videos share a person, a place or
+  a product. Each one demonstrates ONE named feature.
+- **Short.** 5 s each (6 s for the timed-beats one). Seedance's floor is
+  4 s.
+- **Look:** photoreal, large-format film, real grain, soft halation, cool
+  shadows and warm practical highlights. The page's indigo may appear in
+  one object or in the shadows, never as a colour filter.
+- **Never:** text, logos, signage, screens, watermarks, recognisable faces.
+  Faces turned away, at distance or out of focus; hands are welcome.
+- **Sound:** diegetic only, never music.
+- **Start mid-motion:** no clip begins or ends on a still subject. Every
+  snippet loops on the page, so the last frame should sit close to the first.
+- **Compose to the slot:** the subject in the centre third, because tiles
+  are cropped to fit.
+- **Only features the studio delivers.** Not on the page: region editing,
+  50 references, multi-character scenes, 3D blockout (none are wired), and
+  OpenArt's "20% better accuracy" and "near real-time" (not on ByteDance's
+  own page).
 
-**A. The Cup (recommended).** A ceramicist's studio at dawn. Clay rises on
-the wheel, the glazed cup comes off the shelf, coffee is poured into it by
-the window. The cup is the "product" held steady across clips, which is
-the claim ad customers care about. Sound is rich and tactile (wheel hum,
-wet clay, the wire, the pour, the set-down). Cool dawn light against warm
-tungsten matches the page's indigo. It is also what the signature already
-describes (a workshop at dawn, a piece set down, lifted to the window).
+## 2. How each one is made
 
-**B. Last Train.** A night platform in the rain; a courier with a parcel
-waits, the train arrives, the doors close on the parcel. Indigo night,
-huge sound (rain, the train), the parcel is the held object. Harder:
-crowds and trains are where video models break.
+A Seedream 4.5 still (through zeropage's `generate_image`, text only) is the
+first frame; Seedance 2.5 animates it, image-to-video, so the clip keeps the
+still's framing. The overview's four render at 720p (they are shown large),
+the wall's eight at 480p (they are small tiles).
 
-**C. Night Swim.** An outdoor pool at blue hour; a swimmer dives, the
-camera follows under the surface, she comes up as the pool lights switch
-on. The most beautiful and the most on-palette, but nothing is "held"
-across shots, so it demonstrates the reference claim worst.
-
-Everything below is written for A.
-
-## 2. Design rules (all media on the page)
-
-- **Look:** photoreal, large-format film, real grain, soft halation. Cool
-  blue-hour shadows, warm practical highlights. The indigo lives in the
-  shadows and in one object (the cup's glaze), never as a colour filter.
-- **No** text, logos, signage, screens or watermarks in frame. No
-  recognisable people: faces turned away, at distance or out of focus.
-  Hands are welcome.
-- **Sound:** diegetic only, never music, the studio's house rule.
-- **Start mid-motion:** no clip begins or ends on a still subject.
-- **Compose to the slot:** the subject sits in the centre third, because
-  every tile is cropped `object-cover` and the bento crops hard.
-- **Honesty:** the wall is titled "Shots Seedance Renders", so every tile
-  is a real Seedance 2.5 render: a short clip, or a frame pulled from one.
-  Seedream draws only the first frames the clips start on.
-
-## 2b. Every video names its feature (v2)
-
-OpenArt sells 2.5 as a list of named features, each with a demo. The page
-should do the same, but only for features this studio actually delivers.
-
-| Feature (OpenArt's / ByteDance's wording) | On our page? | Why |
-|---|---|---|
-| 30 seconds in one pass, no stitching | YES, the hero | The headline of 2.5, and v1 had no clip longer than 8 s |
-| Opening, product moment, closing frame (OpenArt's "30-second ad in one pass") | YES, the hero's three beats | Exactly the studio's ad use case |
-| Reference / appearance consistency | YES | The cup at second 12 is the cup at second 28 |
-| Native audio sync | YES | The pour and the set-down land on the frame |
-| Camera control (rack focus, follow, overhead) | YES, on the wall | Every wall loop is one named camera move |
-| Motion physics (water, steam, spray, fabric) | YES, on the wall | ByteDance: "smoother, more consistent motion" |
-| 480p / 720p / 1080p | YES, block 4 | The draft-then-approve workflow |
-| Region-level editing | NO | Not wired: the studio has no video edit step |
-| 50 multimodal references | NO | Not wired: only the keyframe reaches the model today |
-| Multi-character scenes | NO | Needs per-character references, same gap |
-| 3D blockout / previz | NO | The composer takes no mesh or viewport input |
-| "20% better prompt accuracy", "near real-time" | NO | OpenArt's numbers, not on ByteDance's own page |
-| Dialogue with lip sync | LATER | Real in 2.5, but the scene writer does not write dialogue yet |
-
-Each label goes on the media's existing chip (`tag`) and on wall tiles as
-the bold `title`, so no component change is needed for the labels.
-
-## 3. The slots (v2)
-
-ONE 30-second take carries the story slots, which is cheaper than v1's
-three clips and demonstrates the one thing v1 missed. It is a single
-continuous take with no cuts, because that is how the studio renders a
-scene asked for as one take; a scene with cuts renders one clip per shot
-(the signature shows that path).
-
-| Slot | Feature chip | What goes there | Made by |
-|---|---|---|---|
-| Overview 1 | 30 seconds · one take | The hero clip, all 30 s | K1, Seedance 2.5 720p |
-| Overview 2 | Reference consistency | The hero's 10-16 s, the cup turned at the window | a cut of the hero, free |
-| Overview 3 | Native audio sync | The hero's 20-30 s, the pour and the set-down, with a sound toggle | a cut of the hero, free |
-| Overview 4 | 480p draft, 720p final | The same 30 s at 480p and 720p under one divider | the 480p draft, rendered first anyway |
-| Wall 1 to 3, signature frames | (see section 7) | Frames from the hero at 3 s, 14 s, 24 s | ffmpeg, free |
-| Wall 4 to 8 | one camera move or physics effect each | 5 s loops | Seedream keyframe, Seedance 2.5 480p |
-
-**The draft IS the workflow.** The 30 s clip renders at 480p first, Mike
-reviews it, and only then is the 720p bought. That draft is block 4's
-"before", so the page's claim ("draft cheap, then approve") is literally
-how its own media was made.
-
-Block 3 plays muted on autoplay, so the overview's video slot needs a
-small sound toggle (a component change, no cost).
-
-The signature says "each shot is its own Seedance clip" and shows the cut
-path; its three frames are stills from the one-take hero. If that reads as
-a mismatch, three 10 s clips at 480p for the signature cost $6.62 more.
-
-### Cost (v2)
+## 3. Cost
 
 | Item | Cost |
 |---|---|
-| 6 Seedream 4.5 keyframes (K1 + five wall) at $0.04 | $0.24 |
-| Hero draft, 30 s at 480p ($0.2205/s) | $6.62 |
-| Hero final, 30 s at 720p ($0.473/s, sound included) | $14.19 |
-| Wall loops 4 to 8, 25 s at 480p | $5.51 |
-| Cuts, frame pulls | $0.00 |
-| **Total** | **about $26.56** |
+| 15 Seedream 4.5 stills at $0.04 (12 first frames + 3 signature frames) | $0.60 |
+| Overview: 6 s + 5 s + 5 s + 5 s at 720p ($0.473/s) | $9.94 |
+| Overview 4's 480p draft, 5 s ($0.2205/s) | $1.10 |
+| Wall: 8 × 5 s at 480p | $8.82 |
+| **Total** | **about $20.46** |
 
-Stills on the wall instead of loops: about $21.05. The 480p draft is the
-cheap stop point: if it is wrong, the 720p is never bought.
+All twelve at 480p, keeping only overview 4's 720p final: about $15.
 
 ---
 
-## 4. Shared blocks (pasted into every prompt that names them)
+## 4. Shared blocks
 
 **STYLE** Photorealistic, shot on large-format film, real organic film
-grain, soft halation on highlights, high dynamic range. Cool blue-hour
-shadows, warm practical highlights. Not a 3D render, not CGI, not a game
-engine, not a cutscene.
+grain, soft halation on highlights, high dynamic range. Cool shadows, warm
+practical highlights. Not a 3D render, not CGI, not a game engine.
 
-**TEXTURE** Matte, lived-in surfaces: raw clay, worn oak, unglazed
-stoneware, linen, concrete dusted with dry clay.
-
-**STUDIO** A small ceramics studio at dawn: a kick wheel beside a tall
-steel-framed window, wooden shelves of pale bisque ware, a concrete floor
-dusted with clay, one shaft of cool morning light through the window and
-a single warm tungsten bulb over the workbench.
-
-**POTTER** A woman in her thirties, dark hair tied back, a charcoal linen
-apron over an undyed cotton shirt with the sleeves rolled, dried clay on
-her forearms. Always seen from the side or behind; her face turned away
-or out of focus.
-
-**THE CUP** A hand-thrown stoneware cup about 9 cm tall, no handle,
-slightly uneven walls, a deep indigo glaze that breaks to rust-brown
-speckles at the rim, the bottom third left as bare buff clay, one small
-thumb-dip pressed into its side.
+**TEXTURE** Matte, lived-in, real-world surfaces.
 
 **EXCLUDE** No text, no logos, no signage, no screens, no watermark, no
-extra people, no recognisable faces.
+extra people, no recognisable faces. No music.
+
+Every first-frame prompt ends with STYLE, TEXTURE, EXCLUDE; every motion
+prompt with STYLE, EXCLUDE and "starts mid-motion; one continuous take"
+unless it says otherwise.
 
 ---
 
-## 5. Keyframe K1 (Seedream 4.5, text-to-image through zeropage)
+## 5. The overview (four blocks, 4:3, 720p)
 
-**K1, the hero's first frame (4:3).** Wide shot of the STUDIO. The POTTER
-sits at the kick wheel in the left third of frame, the wheel already
-spinning, her wet hands cupped around a cone of clay, a fine spray of slip
-on the wheel head. On the shelf behind her, in soft focus, THE CUP. Dust
-hangs in the shaft of window light. Camera at seated eye height. STYLE.
-TEXTURE. EXCLUDE.
+### O1. Timed beats (block 1, "Up to 30 seconds a shot, written as timed beats")
+Chip: **Timed beats**. 6 s.
 
-The cup is in K1 on purpose: the clip is image-to-video, so a cup already
-in the first frame is the reference the model holds for 30 seconds.
+- **First frame:** Macro, a chef's knife mid-slice through a bunch of
+  scallions on a dark wooden board, green rings rolling off the blade, a
+  hand in a white sleeve at frame left. Warm kitchen light.
+- **Motion:**
+  ```
+  GOAL: one 6-second clip in three timed shots, cutting between them.
+  (0-2s) SHOT 1, macro: the knife finishes three quick slices through the scallions.
+  (2-4s) SHOT 2, medium: a carbon-steel wok tossed over a high flame, the
+  scallions and rice leaping, a burst of fire licking the rim.
+  (4-6s) SHOT 3, wide, low: the finished plate slid across a steel pass under
+  heat lamps, a hand pulling it away out of frame right.
+  AUDIO: the knife's quick taps on wood; the roar of the burner and the sizzle
+  as the wok lands; the plate's scrape on steel. Kitchen room tone.
+  ```
+
+### O2. Reference consistency (block 2, "Held to your photos")
+Chip: **Product held steady**. 5 s.
+
+- **First frame:** Close-up at chest height, two hands holding a white
+  leather sneaker with no logos against a soft grey studio wall, already
+  turning it; a cool window light from the left, a warm rim from the right.
+  Shallow depth of field, the shoe tack-sharp.
+- **Motion:**
+  ```
+  GOAL: one continuous 5-second take, no cuts.
+  The hands keep turning the sneaker through one full rotation and tilt it to
+  show the sole. Its shape, stitching, laces and sole pattern stay exactly the
+  same the whole time.
+  CAMERA: locked-off close-up, shallow focus.
+  AUDIO: the soft creak of leather, a lace tapping the upper, quiet studio tone.
+  ```
+
+### O3. Native audio sync (block 3, "Sound is generated with the frame")
+Chip: **Native audio sync**. 5 s. Needs the sound toggle on the overview's
+video slot (a small component change), or it plays muted.
+
+- **First frame:** Close side angle at table height, a tall clear glass on
+  a dark stone counter, three ice cubes mid-fall into it, a bottle of
+  amber soda tilted above it at frame right, condensation on the glass.
+- **Motion:**
+  ```
+  GOAL: one continuous 5-second take, no cuts. Every sound lands on its frame.
+  The ice cubes hit the glass one after another; the soda pours in, foams up
+  near the rim and settles; a slice of lime drops in at about 4s.
+  CAMERA: static, close, shallow focus.
+  AUDIO, synced: three distinct ice clinks; the pour's glug and rising fizz; the
+  hiss of the foam settling; the small splash of the lime. Nothing else.
+  ```
+
+### O4. 480p draft, 720p final (block 4, "Priced before you spend")
+Chip: **480p draft · 720p final**. 5 s, rendered twice from the same first
+frame and prompt: 480p first, 720p only once the draft is approved. The
+block shows the two under one divider, so the page's claim is how its own
+media was made.
+
+- **First frame:** Dusk on a coastal road, a vintage motorcycle with no
+  badges parked at the edge, its chrome catching the last orange light; a
+  gloved hand already reaching for the key; the sea a blue blur below.
+- **Motion:**
+  ```
+  GOAL: one continuous 5-second take, no cuts.
+  The gloved hand turns the key; the headlight flicks on and throws a beam
+  across the road; the engine catches and idles, the bike trembling slightly.
+  CAMERA: slow push-in from a three-quarter front angle.
+  AUDIO: the key's click; the starter; the engine catching into a low idle;
+  wind and distant surf.
+  ```
 
 ---
 
-## 6. The hero (Seedance 2.5, image-to-video from K1)
+## 6. The wall (eight tiles, 480p, 5 s each)
 
-**30 s, one continuous take. 480p draft first, then 720p.**
-Features: 30 seconds · one take; opening, product moment, closing frame;
-reference consistency; native audio sync.
+The bold label on the tile is the FEATURE; the chip under it is the shot
+type. Frames follow the bento: tiles 2 and 5 are tall, 6 is wide.
 
-```
-GOAL: one continuous 30-second take, NO CUTS: a 30-second film for a handmade
-cup, in three beats: an opening, a product moment, a closing frame.
-NO MUSIC, NO VOICE.
-(0-10s) OPENING: the POTTER at the kick wheel by the window, the wheel already
-spinning, her wet hands drawing the clay up into a cone. The camera starts wide
-and dollies slowly toward the shelf behind her.
-(10-20s) PRODUCT MOMENT: she reaches up and lifts THE CUP from the shelf, holds it
-at chest height in the window light and turns it once through a full rotation;
-the camera settles into a close-up, shallow focus, the window a soft cool blur.
-(20-30s) CLOSING FRAME: she sets the cup on the worn oak bench; a matte black
-gooseneck kettle enters from frame left and pours a thin stream of black coffee
-into it; steam rises into the light; the kettle lifts away and the camera holds
-still on the cup for the last two seconds.
-CONTINUITY: the same POTTER, wardrobe and STUDIO light throughout. THE CUP's
-shape, indigo glaze, rust speckles at the rim, bare clay foot and thumb-dip stay
-exactly the same from the shelf to the last frame.
-STYLE. TEXTURE.
-CAMERA: one slow continuous move, no cuts, no handheld shake; wide at 0s,
-close at 15s, locked off from 28s.
-AUDIO, synced: the low hum and steady knock of the kick wheel and wet clay
-under her hands (0-10s); the wheel slowing, her footsteps on concrete, the cup
-lifted off the wooden shelf with a soft knock (10-20s); the cup set on oak, the
-pour's pitch rising as it fills, the kettle set down off frame, one last drip
-(20-30s). Quiet morning room tone under all of it, one distant bird.
-RULES: start mid-motion. Her face never turns to camera. EXCLUDE.
-```
-
-The 480p draft uses the SAME prompt, so the divider in block 4 compares
-like with like.
-
----
-
-## 7. The wall, one feature per tile (v2)
-
-The bold label is the FEATURE; the chip under it is the shot type.
-
-**Tiles 1 to 3 (frames from the hero, free, cropped 4:5).**
-
-| # | Label (feature) | Chip | Frame |
-|---|---|---|---|
-| 1 | One-take opening | Wide establishing | hero at 3 s |
-| 2 | Product held steady | Close-up | hero at 14 s |
-| 3 | Steam and pour | Macro | hero at 24 s |
-
-**Tiles 4 to 8.** A Seedream keyframe, then a 5 s Seedance 2.5 loop at
-480p. Each clip prompt is one continuous take, no music, STYLE, EXCLUDE,
-and starts mid-motion.
-
-| # | Label (feature) | Chip | Frame | Keyframe | Motion (the clip prompt) |
+| # | Label (feature) | Chip | Frame | First frame | Motion + sound |
 |---|---|---|---|---|---|
+| 1 | Scale and atmosphere | Wide establishing | 4:5 | A lone figure in a long dark coat crossing a white salt flat at blue hour, tiny in the lower third, a low ridge of mountains behind | She keeps walking left to right as wind lifts the coat and drives a thin haze of salt across the ground; wind, crunching footsteps |
+| 2 | Micro detail | Macro detail | 9:16 | Extreme macro: a ribbon of honey already falling from a wooden dipper onto a honeycomb, light glowing through it | The honey folds over itself and pools into the cells, a drip stretching and snapping; the faint tick of the drip |
+| 3 | Push-in | Slow push-in | 4:5 | An empty theatre, a dancer in a pale slip dress mid-turn on a bare stage under one spotlight, seen from the stalls, face in shadow | The camera pushes slowly in as she completes the turn and sweeps into an arabesque, dress trailing; her feet on boards, the hush of the hall |
 | 4 | Spray and momentum | Handheld follow | 4:5 | A skateboarder in a dark rain jacket mid-carve through a rain-slick concrete underpass at blue hour, low camera just behind, sodium lights doubled in the puddles, face turned away | The camera follows low and close as the board carves left then right, throwing a fine spray; wheels on wet concrete, the hiss of spray, the underpass echo |
-| 5 | Multi-beat action | Top-down reveal | 9:16 | Directly overhead, a long oak table at dusk half set for dinner: indigo stoneware plates, linen, figs, bread, candle stubs, one hand placing a plate | In order: a plate set down, a glass, a napkin folded, a match struck and a candle lit; the camera rises slowly; each sound lands on its action |
-| 6 | Rack focus | Camera control | 16:9 | A clear unlabelled glass perfume bottle on wet black slate, droplets sharp on the glass; behind it a figure in a cream coat, soft and out of focus, walking past a rain-streaked window | Focus pulls from the droplets to the figure as she passes, then back to the bottle; rain on glass, one distant car |
-| 7 | Backlight and water | Golden hour | 4:5 | A surfer walking out of the sea at golden hour, board under one arm, backlit, water sheeting off the wetsuit, seen from behind at three-quarters | She walks up the wet sand out of frame right, the sun flaring through the spray, hair and wetsuit dripping; surf, wind, footsteps in wet sand |
-| 8 | Rain, steam and sound | Night exterior | 4:5 | A street noodle stall at night in rain, steam rising under one bare bulb, a cook's arm lifting noodles high with long chopsticks, rain streaks through the light, no signage | The noodles lift and drop back into the pot, steam rolls up through the rain; the boil, rain drumming on a tarp, the clack of chopsticks, each on its frame |
+| 5 | Multi-beat action | Top-down reveal | 9:16 | Directly overhead, a long oak table at dusk half set for dinner: stoneware plates, linen, figs, bread, candle stubs, one hand placing a plate | In order: a plate set down, a glass, a napkin folded, a match struck and a candle lit; the camera rises slowly; each sound on its action |
+| 6 | Rack focus | Camera control | 16:9 | A clear unlabelled glass perfume bottle on wet black slate, droplets sharp on the glass; behind it a figure in a cream coat, soft and out of focus, passing a rain-streaked window | Focus pulls from the droplets to the figure as she passes, then back to the bottle; rain on glass, one distant car |
+| 7 | Backlight and water | Golden hour | 4:5 | A surfer walking out of the sea at golden hour, board under one arm, backlit, water sheeting off the wetsuit, seen from behind at three-quarters | She walks up the wet sand toward frame right, the sun flaring through the spray, hair dripping; surf, wind, footsteps in wet sand |
+| 8 | Rain and steam | Night exterior | 4:5 | A street noodle stall at night in rain, steam rising under one bare bulb, a cook's arm lifting noodles high with long chopsticks, rain streaking through the light, no signage | The noodles lift and drop back into the pot, steam rolls up through the rain; the boil, rain drumming on a tarp, the clack of chopsticks |
 
 ---
 
-## 8. The signature's copy (shot-timeline.tsx), to match
+## 7. The signature (three stills of ONE scene, no video)
 
-30 seconds in three 10-second windows, 2.5's headline length:
+The signature is "one scene, three timed shots", so its three frames must
+be the same scene, which no longer matches the wall's first three tiles.
+It gets its own three frames (a small change: the entry carries them and
+`shot-timeline.tsx` reads them instead of `wall.tiles[0..2]`). Stills only,
+15 s as today:
 
-1. **Wide establishing, 0-10 s.** "Wide, static. A ceramics studio at dawn; dust hangs in one shaft of light over the wheel."
-2. **Macro detail, 10-20 s.** "Macro, slow push-in. Wet thumbs open the clay on the spinning wheel; slip runs over the knuckles."
-3. **The action, 20-30 s.** "Medium, handheld. She lifts the glazed cup to the window and turns it once; the indigo catches the light."
+1. **Wide establishing, 0-5 s.** A small ceramics studio at dawn, a potter
+   at a kick wheel by a tall window, dust hanging in one shaft of light.
+2. **Macro detail, 5-10 s.** Wet thumbs opening clay on the spinning wheel,
+   slip running over the knuckles.
+3. **The action, 10-15 s.** Clay-dusted hands lifting a glazed indigo cup
+   toward the window light.
+
+Copy unchanged except "workshop" becomes "ceramics studio".
 
 ---
 
-## 9. For Mike to decide
+## 8. For Mike to decide
 
-- [ ] Concept A, B or C for the story (v2 is written for A)
-- [ ] The one-take 30 s hero (v2) instead of v1's three short clips
-- [ ] Wall as real Seedance loops (about $26.56 in all) or stills (about $21.05)
-- [ ] Mark up K1, the hero prompt and the wall table
-- [ ] The signature at 30 s (three 10 s windows) or kept at 15 s
-- [ ] Teach the scene writer dialogue, so lip sync can be a feature later
+- [ ] The twelve subjects: keep, swap or rewrite any of them
+- [ ] Overview at 720p (about $20.46 in all) or everything at 480p (about $15)
+- [ ] Mark up any first frame or motion line
+- [ ] The signature's own three stills (section 7)
 
-How it renders once approved: the keyframes go through zeropage's
-`generate_image` (Seedream 4.5, filed on the Assets wall). Seedance 2.5 is
-on this branch only, so the clips render from this machine through
-`src/fal.py` on the local `FAL_KEY` until the branch is merged and deployed;
-after that they can go through the Queue instead.
+How it renders once approved: the 15 stills go through zeropage's
+`generate_image` on Seedream 4.5 and land on the Assets wall. Seedance 2.5
+is on this branch only, so the twelve clips render from this machine
+through `src/fal.py` on the local `FAL_KEY` until the branch is merged and
+deployed; after that they can go through the Queue instead.
