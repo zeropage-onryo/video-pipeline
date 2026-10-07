@@ -1703,8 +1703,8 @@ def test_a_rotation_night_is_untouched_by_any_of_this(tmp_db, monkeypatch):
 
 # --- which brain the NIGHT writes with (2026-09-09) --------------------------
 # The composer's picker and the walk share one table (gemini_utils.BRAINS)
-# and deliberately not one default. A walk is NIGHTLY_SPARKS x 2 brands =
-# 10 runs, so the expensive tier has to be something somebody turns on.
+# and deliberately not one default: an unattended run is a bill nobody
+# picked, so the expensive tier has to be something somebody turns on.
 
 def test_the_night_writes_on_the_fast_tier_unless_told_otherwise(tmp_db, monkeypatch):
     from src import gemini_utils

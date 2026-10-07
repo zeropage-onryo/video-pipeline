@@ -3,9 +3,9 @@
 # it spawns jobs with a bare minimal env, which is exactly the kind of
 # "looks healthy, isn't" failure launchd_tcc.md already burned a night on
 # once, on the Mac. Dump the real environment to a file before cron ever
-# runs, and have both cron jobs source it first, so the nightly walk sees
-# GEMINI_API_KEY / FAL_KEY / DATABASE_URL / RAG_DATABASE_URL
-# exactly as the web process does.
+# runs, and have the cron job (the Instagram token keeper, the only one
+# left) source it first, so it sees DATABASE_URL and the IG tokens exactly
+# as the web process does.
 set -e
 
 # Refuse a half-configured public machine before supervisor starts. This

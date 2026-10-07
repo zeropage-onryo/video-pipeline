@@ -1,6 +1,5 @@
-"""The Instagram token checks (src/instagram.py), their place in the
-nightly preflight, and the operator CLI that installs tokens
-(ops/ig_tokens.py). Every Meta answer here is a stub `get`: nothing reaches
+"""The Instagram token checks (src/instagram.py) and the operator CLI
+that installs tokens (ops/ig_tokens.py). Every Meta answer here is a stub `get`: nothing reaches
 the network, and no assertion may find a token value in anything printed."""
 import json
 from datetime import datetime, timedelta, timezone
@@ -8,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from ops import ig_tokens
-from src import instagram, nightly
+from src import instagram
 
 NOW = datetime(2026, 9, 26, tzinfo=timezone.utc)
 SECRET_TOKEN = "IGQ-very-secret-token-value"
@@ -119,41 +118,10 @@ def test_an_invalid_research_token_is_loud():
     assert "IG_GRAPH_TOKEN" in instagram.health_line(check)
 
 
-# --------------------------------------------------------------------------
-# the nightly preflight
-# --------------------------------------------------------------------------
-
-def test_preflight_never_stops_the_walk_over_instagram(monkeypatch):
-    monkeypatch.setattr(instagram, "token_health", lambda **k: [
-        {"name": "IG_ACCESS_TOKEN", "state": "expired", "warning": True,
-         "days_left": None, "detail": "Session has expired", "fix": "re-issue"},
-        {"name": "IG_GRAPH_TOKEN", "state": "missing", "warning": False,
-         "days_left": None, "detail": "not set", "fix": ""}])
-    monkeypatch.setattr(nightly, "check_db", lambda dsn=None: {"ok": True, "detail": "ok"})
-    monkeypatch.setattr(nightly, "check_gemini",
-                        lambda client=None: {"ok": True, "detail": "stub"})
-    monkeypatch.setattr(nightly, "check_image_cap", lambda dsn=None, account_id=None: {
-        "ok": True, "headroom": 3, "detail": "stub"})
-    report = nightly.preflight()
-    assert report["stop"] is None
-    [warning] = report["instagram"]["warnings"]
-    assert warning.startswith("IG_ACCESS_TOKEN: EXPIRED") and "re-issue" in warning
-    line = nightly.preflight_line(report)
-    assert "IG_ACCESS_TOKEN=expired" in line and line.count("\n") == 0
-
-
-def test_a_broken_check_is_reported_not_raised(monkeypatch):
-    def boom(**k):
-        raise ValueError("no")
-    monkeypatch.setattr(instagram, "token_health", boom)
-    result = nightly.check_instagram()
-    assert result["ok"] is False and "failed" in result["warnings"][0]
-
-
-def test_with_no_tokens_the_preflight_check_makes_no_call():
-    """conftest clears the IG env: the check must answer without Meta."""
-    result = nightly.check_instagram()
-    assert [c["state"] for c in result["checks"]] == ["missing", "missing"]
+def test_with_no_tokens_the_check_makes_no_call():
+    """conftest clears the IG env (and blocks the network): the check must
+    answer without Meta."""
+    assert [c["state"] for c in instagram.token_health()] == ["missing", "missing"]
 
 
 # --------------------------------------------------------------------------

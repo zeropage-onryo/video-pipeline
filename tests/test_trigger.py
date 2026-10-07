@@ -4,6 +4,8 @@ Tests for src/trigger.py -- the scheduled shadow-run trigger.
 Hermetic: orchestrator.run is patched, so nothing generates; the crash
 path runs against a throwaway schema via DATABASE_URL.
 """
+import socket
+
 import pytest
 
 from src import autonomy, trigger
@@ -105,3 +107,65 @@ def test_main_crash_still_writes_the_dead_man_row(tmp_db, monkeypatch):
     [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
     assert "trigger crashed" in row["reason"]
     assert "gemini fell over" in row["reason"]
+
+
+# ---------- classify_error: is the concept broken, or the world ----------
+
+@pytest.mark.parametrize("error", [
+    socket.gaierror(8, "nodename nor servname provided, or not known"),
+    RuntimeError("[Errno 8] nodename nor servname provided"),
+    OSError("could not translate host name \"aws-0-pooler.supabase.com\""),
+    RuntimeError("429 RESOURCE_EXHAUSTED: your prepayment credits are depleted"),
+    RuntimeError("401 UNAUTHENTICATED: API key not valid"),
+    ConnectionResetError("connection reset by peer"),
+])
+def test_systemic_errors_are_classified_systemic(error):
+    assert trigger.classify_error(error) == trigger.SYSTEMIC
+
+
+@pytest.mark.parametrize("error", [
+    ValueError("could not parse the judge's verdict"),
+    RuntimeError("deadlock detected on relation shoot_concepts"),
+    KeyError("shots"),
+    RuntimeError("429 RESOURCE_EXHAUSTED: rate limit, retry in 4.2s"),
+])
+def test_content_errors_are_classified_content(error):
+    """Unrecognised is CONTENT on purpose: erring that way costs one run,
+    erring the other way stops a loop on a healthy world."""
+    assert trigger.classify_error(error) == trigger.CONTENT
+
+
+def test_a_deadlock_is_content_even_though_it_arrives_as_an_operational_error():
+    """The ordering that matters. psycopg raises the same base class for
+    a dead socket and for one unlucky transaction; reading the content
+    markers first is what keeps a deadlock from reading as a dead database."""
+    import psycopg
+    assert trigger.classify_error(
+        psycopg.OperationalError("deadlock detected")) == trigger.CONTENT
+    assert trigger.classify_error(
+        psycopg.OperationalError("server closed the connection")) == trigger.SYSTEMIC
+
+
+# ---------- the crash path's kind and exit code ----------
+
+def test_the_trigger_labels_a_systemic_crash_and_exits_2(tmp_db, monkeypatch):
+    from src import orchestrator
+
+    def boom(*a, **k):
+        raise RuntimeError("[Errno 8] nodename nor servname provided")
+
+    monkeypatch.setattr(orchestrator, "run", boom)
+    assert trigger.main([]) == 2
+
+    [row] = autonomy.list_hold(dsn=tmp_db, account_id=None)
+    assert "systemic" in row["reason"]
+
+
+def test_run_once_returns_the_kind_instead_of_an_exit_code(tmp_db, monkeypatch):
+    from src import orchestrator
+
+    monkeypatch.setattr(orchestrator, "run",
+                        lambda *a, **k: {"spark": "used", "held_reason": "shadow"})
+    out = trigger.run_once("asked", channel="zeropage")
+    assert out == {"ok": True, "kind": None, "spark": "used", "held": "shadow",
+                   "result": {"spark": "used", "held_reason": "shadow"}}

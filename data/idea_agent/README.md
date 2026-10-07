@@ -1,9 +1,9 @@
 # The idea agent's drop box
 
-Claude leaves research here as plain JSON; `run_morning_prompts.sh` banks
-it at 6am with `python -m ops.bank ingest data/idea_agent` and moves each
-plan into `done/`. Nothing here is read at any other time, and an empty
-folder is a normal night — the crawl and `prompts/sparks.txt` carry it.
+Claude leaves research here as plain JSON; `python -m ops.bank ingest
+data/idea_agent`, run by hand, banks it and moves each plan into `done/`.
+Nothing schedules that any more (the nightly walk that ran it at 6am was
+deleted 2026-10-07), and nothing else reads this folder.
 
 One file per run, named for the day. Shape:
 

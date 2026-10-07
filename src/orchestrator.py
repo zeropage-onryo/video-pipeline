@@ -197,9 +197,8 @@ def brain_default() -> str:
     """Which model tier an unattended run writes with (2026-09-09), read
     per call like gates_mode above.
 
-    Defaults to `fast` ON PURPOSE, and that is the load-bearing half. A
-    walk is NIGHTLY_SPARKS x 2 brands = 10 runs, so making the night
-    reasoning-tier is a real bill (roughly 4x the per-token price, plus
+    Defaults to `fast` ON PURPOSE, and that is the load-bearing half.
+    Making unattended runs reasoning-tier is a real bill (roughly 4x the per-token price, plus
     thinking tokens billed at the output rate) and therefore a decision
     somebody makes with ZEROPAGE_BRAIN=reasoning, not something the
     composer's picker does to it by sharing a constant.
@@ -391,8 +390,8 @@ def scout(state: GenState) -> GenState:
 
     The guard is inside the node, not on a conditional edge, on
     purpose: this must be a no-op for every existing caller. An
-    explicit `spark=` (a Director re-fire, a hand-typed direction, the
-    16 sparks run_morning_prompts.sh walks) already knows what it
+    explicit `spark=` (a Director re-fire, a hand-typed direction,
+    `src.trigger --spark`) already knows what it
     wants, and silently overriding it with a crawl result would make
     `--spark` a lie. So the node acts only when asked -- state["scout"]
     -- and even then falls straight through when the bank has nothing
@@ -1898,8 +1897,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     displayed under a card labeled ZEROPAGE. That's exactly what
     happened to hold_queue row 13 / concept 111 on 2026-08-14: a manual
     trigger invocation set --channel without --brand and got bitten by
-    it. Passing brand explicitly (as run_morning_prompts.sh always does)
-    still lets channel and brand differ on purpose when that's really
+    it. Passing brand explicitly still lets channel and brand differ on purpose when that's really
     what's wanted -- this only changes what happens when brand is
     omitted.
 
@@ -1953,7 +1951,7 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
     token = spend.bind(account_id=account_id, run_id=run_id)
     # The run's own id IS the checkpoint thread. One thread per run, so a
     # resume names the run it is resuming and nothing else, and the
-    # checkpoint rows line up with the nightly_runs / hold_queue rows that
+    # checkpoint rows line up with the hold_queue rows that
     # already carry it. Harmless on the plain graph, which ignores it.
     graph = checkpointed_graph() or GRAPH
     config = {"configurable": {"thread_id": run_id}}
@@ -1981,11 +1979,11 @@ def run(goal: str, *, brand: Optional[str] = None, spark: Optional[str] = None,
 def resume(run_id: str) -> dict:
     """Carry on a run that was interrupted, from its last finished node.
 
-    What this is for: `nightly.walk` does ten runs in a row and the whole
-    walk dies together -- a machine that sleeps, a deploy, a kill. Before
-    checkpointing, run seven's paid keyframe and the concept row it had
-    already written were simply orphaned: a row on the board with no hold
-    explaining it, and nothing that could pick the run back up.
+    What this is for: a run dies with whatever kills its process -- a
+    machine that sleeps, a deploy, a kill. Before checkpointing, a run's
+    paid keyframe and the concept row it had already written were simply
+    orphaned: a row on the board with no hold explaining it, and nothing
+    that could pick the run back up.
 
     `invoke(None, ...)` is LangGraph's resume: no new input, start from
     the last checkpoint on this thread. The account is read back OUT of

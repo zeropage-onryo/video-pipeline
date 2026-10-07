@@ -81,8 +81,7 @@ changing your mind does not burn it.
 
 BANKED, NOT CONSUMED IN PLACE. Findings land in `scout_findings` and are
 claimed one at a time with `next_spark()` / `mark_used()`. Two reasons:
-a crashed run doesn't lose the night's research, and the 16-run nightly
-batch (2 brands x the spark list, see run_morning_prompts.sh) can't fire
+a crashed run doesn't lose the research, and a batch of runs can't fire
 the same discovered spark twice.
 
 BRAND-SCOPED throughout, same three values and the same reasoning as
