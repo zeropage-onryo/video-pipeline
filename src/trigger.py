@@ -21,13 +21,15 @@ evaluator; this just keeps the queue fed.
 Exit 0 with the hold row printed, exit 1 on anything unexpected -- a
 cron/launchd line has no one watching stderr, so the outcome lands in
 the dead-man log either way (even a crashed run writes a hold row).
-Since 2026-09-07 a crash is also CLASSIFIED (`nightly.classify_error`):
-the hold reason and the exit code say whether the failure was about
-this concept or about the world, which is what lets src/nightly.py stop
-a walk instead of running fifteen more runs into the same dead socket.
-Exit 2 is the systemic one.
+Since 2026-09-07 a crash is also CLASSIFIED (`classify_error`): the
+hold reason and the exit code say whether the failure was about this
+concept or about the world, so a caller looping over sparks can stop
+instead of running fifteen more runs into the same dead socket. Exit 2
+is the systemic one. (The nightly walk that was that caller,
+src/nightly.py, was deleted 2026-10-07, Mike's call.)
 """
 import argparse
+import socket
 import sys
 from datetime import date
 from pathlib import Path
@@ -56,19 +58,92 @@ def pick_spark(sparks: list, day: int) -> str:
     return sparks[day % len(sparks)]
 
 
+# --------------------------------------------------------------------------
+# what kind of failure this is
+# --------------------------------------------------------------------------
+
+SYSTEMIC = "systemic"
+CONTENT = "content"
+
+# The world is broken in a way the next run will hit too: the database is
+# unreachable, the name does not resolve, the card is empty, the key is
+# refused. Fifteen more attempts produce fifteen more copies of this.
+_DNS_MARKERS = (
+    "nodename nor servname",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "could not translate host name",
+    "getaddrinfo failed",
+    "connection refused",
+    "connection reset by peer",
+    "server closed the connection",
+    "could not connect to server",
+    "network is unreachable",
+    "no route to host",
+    "connection timed out",
+)
+_AUTH_MARKERS = (
+    "api key not valid",
+    "api_key_invalid",
+    "invalid api key",
+    "unauthenticated",
+    "permission_denied",
+    "401 unauthorized",
+    "403 forbidden",
+    "password authentication failed",
+)
+# A failure about THIS concept, or about one unlucky transaction. The next
+# spark is a different concept and deserves its own attempt.
+_CONTENT_MARKERS = (
+    "deadlock detected",
+    "deadlock",
+    "could not serialize access",
+)
+
+
+def classify_error(error) -> str:
+    """SYSTEMIC (the world is broken) or CONTENT (this concept is).
+
+    Order matters. A Postgres deadlock arrives as an OperationalError,
+    the same class a dead socket does, so the content markers are read
+    FIRST -- otherwise one unlucky transaction would look like a broken
+    database. Everything unrecognised is CONTENT: erring that way costs
+    one wasted run, and erring the other way stops a loop on an
+    exception nobody has seen yet.
+    """
+    from . import gemini_utils  # pulls in google-genai; --help needn't
+
+    text = str(error).lower()
+    if any(marker in text for marker in _CONTENT_MARKERS):
+        return CONTENT
+    if gemini_utils.is_depleted(error):
+        return SYSTEMIC
+    if isinstance(error, (socket.gaierror, ConnectionError)):
+        return SYSTEMIC
+    if any(marker in text for marker in _DNS_MARKERS):
+        return SYSTEMIC
+    if any(marker in text for marker in _AUTH_MARKERS):
+        return SYSTEMIC
+    try:
+        import psycopg
+        if isinstance(error, psycopg.OperationalError):
+            return SYSTEMIC
+    except Exception:      # psycopg missing is not this function's problem
+        pass
+    return CONTENT
+
+
 def run_once(spark: str, *, channel: str = "zeropage", brand=None,
              scout=None, research=None, brain=None) -> dict:
     """One graph run, as a result dict instead of an exit code.
 
-    The shape the nightly runner needs and the CLI wraps: `ok`, the
-    `held` reason a shadow run always has, and on a crash the `kind`
-    (`nightly.SYSTEMIC` / `CONTENT`) that decides whether the rest of
-    the walk is worth attempting. One implementation, so a run fired by
-    cron and a run inside the walk cannot behave differently.
+    The shape the CLI wraps: `ok`, the `held` reason a shadow run
+    always has, and on a crash the `kind` (`SYSTEMIC` / `CONTENT`) that
+    says whether another run is worth attempting.
     """
     # Imported here, not at module top: orchestrator pulls in the whole
     # generation stack, and `--help` on a cron box shouldn't need it.
-    from . import autonomy, nightly, orchestrator
+    from . import autonomy, orchestrator
 
     try:
         # Tri-state, passed through rather than collapsed: None means
@@ -81,7 +156,7 @@ def run_once(spark: str, *, channel: str = "zeropage", brand=None,
         result = orchestrator.run(spark, brand=brand, channel=channel,
                                   scout=scout, research=research, brain=brain)
     except Exception as e:
-        kind = nightly.classify_error(e)
+        kind = classify_error(e)
         # the dead-man log gets the crash too -- a silent night looks
         # exactly like a healthy night unless failures leave a row. The
         # write itself is best-effort: a systemic crash is usually the
@@ -155,8 +230,7 @@ def main(argv=None) -> int:
         # 2 is the systemic one: a caller looping over sparks can tell
         # "this concept broke" from "the world is broken" without
         # parsing stderr.
-        from . import nightly
-        return 2 if outcome["kind"] == nightly.SYSTEMIC else 1
+        return 2 if outcome["kind"] == SYSTEMIC else 1
 
     result = outcome["result"]
     used = outcome["spark"]

@@ -72,7 +72,9 @@ STATUS (2026-08-12): YouTube + Instagram half shipped. `src/refresh_metrics.py`
 sweeps every posted video per platform (never-raises) and then runs
 `promote_winners --auto`; it's wired as step 1 of `run_morning_prompts.sh`, so
 the nightly job now does refresh metrics → promote winners → generate grounded
-concepts, with no manual step. Still open:
+concepts, with no manual step. (2026-10-07: that script and `src/nightly.py` are
+deleted -- unscheduled since 2026-09-28 -- so `python -m src.refresh_metrics` is
+run by hand; it still runs `promote_winners --auto` itself.) Still open:
 
 - **Facebook** — no module yet. Needs a `facebook.py` wired into the same
   metrics/RAG loop (behind the `refresh_metrics` stub already in place), plus a

@@ -124,20 +124,6 @@
         Hand-made uploads that predate the loop are deliberately not counted here —
         this number is about what the machine published, not about the channel.</p>
       {% endif %}
-
-      {# The table is added by the nightly job and may not exist yet; the
-         line is simply absent until it does, never an error. #}
-      {% if distribution.nightly %}
-      <p class="dim mono" style="margin-top:12px">
-        Last night · {{ distribution.nightly.started_at }}
-        {%- if distribution.nightly.finished_at %} → {{ distribution.nightly.finished_at }}{% endif %} ·
-        {{ distribution.nightly.attempted }} attempted ·
-        {{ distribution.nightly.succeeded }} succeeded ·
-        {{ distribution.nightly.failed }} failed ·
-        ${{ "%.2f"|format(distribution.nightly.spent_usd or 0) }}
-        {%- if distribution.nightly.stopped_reason %} · stopped: {{ distribution.nightly.stopped_reason }}{% endif %}
-      </p>
-      {% endif %}
       {% else %}
       <p class="dim">Distribution is unavailable — the videos table could not be read.</p>
       {% endif %}

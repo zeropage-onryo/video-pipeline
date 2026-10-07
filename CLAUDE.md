@@ -89,22 +89,27 @@ venv/bin/python -m ops.ig_tokens refresh|publish
 venv/bin/python -m ops.ig_tokens keep [--days 30]
 venv/bin/python -m ops.ig_tokens research --app-id <research app id>
 
-# THE NIGHTLY WALK IS NOT SCHEDULED (2026-09-28, Mike's call). The Mac's
+# THE NIGHTLY WALK IS GONE. Unscheduled 2026-09-28 (Mike's call: the Mac's
 # com.zeropage.morningprompts and com.zeropage.shadowrun agents were unloaded
-# and renamed .disabled.20260928 in ~/Library/LaunchAgents (nothing in the
-# repo installs a LaunchAgent any more), and the Fly cron line that called
-# run_morning_prompts.sh -- which never once ran there: its first line cds
-# into the Mac's folder -- was replaced by the token keeper. Concept walks,
-# the research agent, the scout crawl and the metrics sweep now run only by
-# hand: `src.nightly walk`, `src.research_agent`, `src.scout run`,
-# `src.refresh_metrics`. Everything below that says "the nightly" or "the
-# night" describes those commands, not a schedule.
+# and renamed .disabled.20260928 in ~/Library/LaunchAgents, and the Fly cron
+# line that called run_morning_prompts.sh was replaced by the token keeper),
+# then DELETED 2026-10-07 (Mike's call): src/nightly.py, run_morning_prompts.sh,
+# ops/fly/run-nightly.sh + nightly.md, the db.nightly_runs receipt and its
+# "Last night" line on the Dev Studio, costs.spent_since. The live Postgres
+# still holds the old nightly_runs table and rows -- deliberately left, and
+# nothing reads or writes it; drop it by hand if ever wanted. classify_error
+# (SYSTEMIC / CONTENT) moved to src/trigger.py, its one remaining caller.
+# The research agent, the scout crawl and the metrics sweep run only by hand:
+# `src.research_agent`, `src.scout run`, `src.refresh_metrics`. Everything
+# below that says "the nightly" or "the night" is history, or means a graph
+# run nobody is watching (`src.trigger`, the MCP `generate`).
 
 # THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
 # ONLY: nothing schedules this. The 03:30 launchd job was removed
 # 2026-09-14 because it took neither the nightly lock nor the budget, so it
-# ran an eleventh time beside the 22:00 walk. `src.nightly walk` is the
-# batch door; this is the one-run door into the same graph.
+# ran an eleventh time beside the 22:00 walk. With the walk deleted
+# (2026-10-07) this is the CLI door into the graph; exit 2 means the crash
+# was systemic (trigger.classify_error), 1 that it was about the concept.
 # Grading happens on /holds each morning. --scout takes the direction from
 # the scout's bank instead, falling back to the rotation when the bank is
 # empty or under scout.SCORE_FLOOR.
@@ -727,10 +732,11 @@ out from under you, and racily, since it ran after Runway returned ~90s later.
 `preprod.archive_batch` stays as a tested helper with no caller.
 
 **The night does the rest (2026-08-29, Mike's call.)** *(Read as history: NOTHING IS SCHEDULED
-since 2026-09-28 -- "the nightly graph" is `src.nightly walk` or `src.trigger` run by hand -- the
+since 2026-09-28, and the walk itself was deleted 2026-10-07 -- "the nightly graph" is now
+`src.trigger` run by hand -- the
 night draws no stills since 2026-09-08 and posts nothing, `autopilot.AUTO_POST_BRANDS` being
 empty. The Fly image's one cron line is the Instagram token keeper; keep it that way unless Mike
-re-enables a walk.)* Enhancing, keyframing and
+asks for a walk back.)* Enhancing, keyframing and
 rendering happen in the **Director canvas** when Michael is steering a scene, and in the
 **nightly graph** when nobody is. `src/scene_chain.py` holds one implementation of each
 stage — `ground`, `write_scenes`, `plan_timeline`, `persist_prompt`, `keyframe_scene`,
@@ -774,8 +780,9 @@ already has a `reference_image` (re-picking must not re-bill, and Director's own
 the one a person chose) and `ZEROPAGE_KEYFRAME_ON_PICK=0` turns it off. `NANO_DAILY_CAP` is
 60: a pick draws one still per SHOT of a timed scene (one per beat of a one-window scene),
 not one per scene.
-**A walk is 5 sparks × 2 brands = 10 runs** (`NIGHTLY_SPARKS`, cut from every line of
-sparks.txt — 20 — on the same day, "we'll increase it once I see it gets better").
+**A walk was 5 sparks × 2 brands = 10 runs** (`NIGHTLY_SPARKS`, cut from every line of
+sparks.txt — 20 — on the same day, "we'll increase it once I see it gets better"; the walk
+was deleted 2026-10-07).
 The historical note: while the night did draw, only a scene whose prompt cleared the judge
 (`score_prompts`, bar `prompt_gate_min`, fails closed) earned an image, and a keyframe that
 failed parked the scene as text-to-video with the reason on its card.
@@ -1668,11 +1675,11 @@ is yours, in Resolve, by hand.
   insight metric names shift between Graph versions, so verify on bump. A `/reel/<shortcode>`
   permalink does **not** contain the numeric media id; store `ig://<media_id>` (or the raw id) in
   a video's url for refresh to work, or pass a `media_id` key. Token refresh (long-lived tokens
-  expire ~60 days) is built (2026-09-21, BACKLOG #4), and since 2026-09-26 the nightly
-  preflight also checks BOTH tokens read-only (`instagram.token_health`: IG_ACCESS_TOKEN by
-  `/me`, IG_GRAPH_TOKEN by `debug_token`) and logs `!!! INSTAGRAM TOKEN NEEDS YOU` naming the
-  token and the fix -- never a reason to stop the walk. The nightly sweep's Instagram pass calls
-  `refresh_token_step` first and prints the days left, loudly on stderr when it needs a person.
+  expire ~60 days) is built (2026-09-21, BACKLOG #4). `instagram.token_health` checks BOTH
+  tokens read-only (IG_ACCESS_TOKEN by `/me`, IG_GRAPH_TOKEN by `debug_token`); its caller is
+  `ops.ig_tokens check` (the nightly preflight that also logged it went with the walk,
+  2026-10-07). `src.refresh_metrics`'s Instagram pass calls `refresh_token_step` first and
+  prints the days left, loudly on stderr when it needs a person.
   `.env` is never written -- a NEW token Meta issues is kept in `data/ig_token.json`
   (`IG_TOKEN_STORE` overrides) beside a fingerprint of the `.env` token it replaced, and
   `access_token()`, the one reader, serves it from there exactly while `.env` still holds that

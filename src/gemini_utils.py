@@ -199,9 +199,9 @@ def is_depleted(error) -> bool:
     """A 429 that says the money ran out rather than that we are early.
 
     Kept separate from is_retriable because the two need opposite
-    behaviour from the same status code, and because the nightly
-    breaker (src/nightly.py) asks the same question to decide whether
-    the whole walk is pointless -- one opinion, two callers.
+    behaviour from the same status code, and because
+    trigger.classify_error asks the same question to call a crash
+    systemic -- one opinion, two callers.
     """
     text = str(error).lower()
     return any(marker in text for marker in DEPLETED_MARKERS)

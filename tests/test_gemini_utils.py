@@ -256,3 +256,54 @@ def test_every_offered_tier_is_priced():
     table = spend.prices()
     for option in gemini_utils.brain_options():
         assert gemini_utils.resolve_brain(option["id"])["model"] in table
+
+
+# ---------- the 429 that must not be retried ----------
+
+def test_a_depleted_429_is_not_retried(monkeypatch):
+    """Six attempts per call, times three models, for a card with no
+    money on it."""
+    calls = {"n": 0}
+
+    class Boom:
+        class models:
+            @staticmethod
+            def generate_content(model=None, contents=None):
+                calls["n"] += 1
+                raise RuntimeError(
+                    "429 RESOURCE_EXHAUSTED: your prepayment credits are depleted")
+
+    slept = []
+    monkeypatch.setattr(gemini_utils.time, "sleep", lambda s: slept.append(s))
+
+    with pytest.raises(RuntimeError):
+        gemini_utils.generate_with_retry(Boom(), "gemini-3-flash-preview", "hi")
+
+    assert calls["n"] == 1, "one attempt, no fallback models -- they bill the same card"
+    assert slept == []
+
+
+def test_a_rate_limit_429_is_still_retried(monkeypatch):
+    calls = {"n": 0}
+
+    class Boom:
+        class models:
+            @staticmethod
+            def generate_content(model=None, contents=None):
+                calls["n"] += 1
+                raise RuntimeError("429 RESOURCE_EXHAUSTED: rate limit, retry in 0.1s")
+
+    monkeypatch.setattr(gemini_utils.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError):
+        gemini_utils.generate_with_retry(Boom(), "gemini-3-flash-preview", "hi")
+    assert calls["n"] > 1, "a real rate limit still clears by waiting"
+
+
+@pytest.mark.parametrize("text,depleted", [
+    ("your prepayment credits are depleted", True),
+    ("billing account for project 123 is disabled", True),
+    ("rate limit exceeded, retry in 4s", False),
+    ("503 UNAVAILABLE", False),
+])
+def test_is_depleted_reads_the_billing_half_of_429(text, depleted):
+    assert gemini_utils.is_depleted(RuntimeError(text)) is depleted

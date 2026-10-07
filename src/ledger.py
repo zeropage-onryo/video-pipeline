@@ -151,10 +151,10 @@ LAPSE_POLICY: dict[str, bool] = {
 # can find the row a hold was taken for. See `ref_params` and `reap`.
 GENERATION_REF_KEY = "ledger_ref"
 
-# How old an unsettled hold has to be before the nightly reaper touches
-# it. Well past the longest provider poll loop in the repo (Veo's
-# timeout_s is 600s) -- reaping a hold whose render is merely slow would
-# settle or release a render that is still running.
+# How old an unsettled hold has to be before the reaper touches it. Well
+# past the longest provider poll loop in the repo (Veo's timeout_s is
+# 600s) -- reaping a hold whose render is merely slow would settle or
+# release a render that is still running.
 DEFAULT_REAP_AGE = timedelta(hours=6)
 
 
@@ -360,7 +360,7 @@ CREATE INDEX IF NOT EXISTS idx_credit_entries_account
 def init(dsn: Optional[str] = None) -> None:
     """Create both tables, own them, index them. Safe to run repeatedly.
 
-    `add_nightly_runs_table`'s idempotent shape: every statement is
+    `db.add_legacy_column`'s idempotent shape: every statement is
     CREATE ... IF NOT EXISTS, so the dev server's re-import on save runs
     this a hundred times a day for free. Registered in app/main.py's
     lifespan and in tests/test_tenancy.py::_init_everything -- without
@@ -1081,8 +1081,8 @@ def expire_due(account_id: Optional[int] = None, *, now: Optional[str] = None,
                dsn: Optional[str] = None) -> int:
     """Sweep every lot past its expiry date. Returns credits expired.
 
-    `account_id=None` sweeps the whole installation, which is what the
-    nightly walk wants; pass one to sweep a single account. The
+    `account_id=None` sweeps the whole installation; pass one to sweep a
+    single account. The
     predicate is in the SQL either way -- `%s IS NULL OR account_id IS
     NOT DISTINCT FROM %s` -- so this is a scoped query the operator is
     allowed to widen, not an unscoped one with an excuse.
@@ -1201,8 +1201,8 @@ def _generation_for(conn, account_id: Optional[int], ref: str) -> Optional[dict]
 
 def reap(older_than=DEFAULT_REAP_AGE, *, account_id: Optional[int] = None,
          dsn: Optional[str] = None) -> dict[str, Any]:
-    """Close holds that outlived their renders. Runs on the nightly's
-    schedule. Returns {"settled": [...], "released": [...], "orphaned": [...]}.
+    """Close holds that outlived their renders. Nothing schedules it
+    (the nightly walk was deleted 2026-10-07). Returns {"settled": [...], "released": [...], "orphaned": [...]}.
 
     A worker dies between submit and settle and the hold is a
     customer's balance held hostage forever. So for each outstanding
@@ -1352,7 +1352,7 @@ def hold_for_render(account_id: Optional[int], *, ref: str, provider: str,
         return None
     if account_id is None:
         # THE UNOWNED POOL IS NOBODY'S BILL. A render with no tenant is
-        # the installation's own -- the CLI, the nightly walk, a script
+        # the installation's own -- the CLI, the graph run by hand, a script
         # -- and there is no customer to debit; the daily caps and the
         # *_SPEND_OK arming are its walls. Every route a person drives
         # resolves a real account_id before it gets here.

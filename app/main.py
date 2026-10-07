@@ -698,8 +698,8 @@ def _week_starts(weeks: int = DISTRIBUTION_WEEKS) -> list:
 
 
 def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) -> dict:
-    """Posts per week per brand per platform, cost per post, and last
-    night -- read-only, and every part of it degrades rather than 500s.
+    """Posts per week per brand per platform, and cost per post --
+    read-only, and every part of it degrades rather than 500s.
 
     Only PIPELINE posts count. `videos.legacy` marks the hand-made
     uploads that predate the loop (db.add_legacy_column), and counting
@@ -707,17 +707,13 @@ def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) ->
     so the query carries db.excludes_legacy's predicate, the same one
     the teaching readers use, rather than a second hand-rolled filter
     that could disagree with it.
-
-    `nightly_runs` is queried through to_regclass because another agent
-    is landing that table in parallel: absent, the line is simply not
-    shown, and the page is correct either way.
     """
     starts = _week_starts(weeks)
     since = starts[0].isoformat()
     dist = {
         "weeks": [{"start": s.isoformat(), "label": s.strftime("%b %-d")} for s in starts],
         "rows": [], "posts": 0, "since": since,
-        "spend_usd": 0.0, "cost_per_post": None, "nightly": None,
+        "spend_usd": 0.0, "cost_per_post": None,
         "available": True,
     }
 
@@ -740,11 +736,6 @@ def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) ->
                     if start.isoformat() <= r["day"] < end.isoformat():
                         bucket[i] += 1
                         break
-            if db.table_exists(conn, "nightly_runs"):
-                night = conn.execute(
-                    "SELECT * FROM nightly_runs ORDER BY started_at DESC LIMIT 1"
-                ).fetchone()
-                dist["nightly"] = dict(night) if night else None
     except Exception:
         dist["available"] = False
         return dist

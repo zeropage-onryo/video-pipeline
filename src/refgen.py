@@ -34,9 +34,9 @@ spend twice.
 MIDJOURNEY'S OWN GATE STILL HOLDS. midjourney.generate_image refuses
 without MIDJOURNEY_SPEND_OK=1 and ACEDATA_API_KEY -- that gate was
 built so every AceData credit is an explicit approval, and this does
-not go around it. run_morning_prompts.sh exports it for the night if
-Mike wants the night to spend there; without it, this falls straight
-to Gemini and says so in the note.
+not go around it. Export it for a run if Mike wants that run to spend
+there; without it, this falls straight to Gemini and says so in the
+note.
 """
 from __future__ import annotations
 

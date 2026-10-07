@@ -784,7 +784,7 @@ def test_stamping_a_submit_does_not_disturb_the_balance(led):
 
 
 def test_installing_the_triggers_is_idempotent_and_says_what_it_did(led):
-    """`add_nightly_runs_table`'s contract: True the first time, False
+    """The add-a-migration contract: True the first time, False
     when they were already there, and safe on every dev-server reload
     in between."""
     dsn, account = led

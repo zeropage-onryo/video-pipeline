@@ -497,10 +497,10 @@ def run(brand: str, *, count: int = BANK_TARGET, dsn=None,
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """`python -m src.research_agent --brand antihero` -- one pass by hand
-    or from run_morning_prompts.sh. Exit 0 whatever happened: a skipped
-    pass ("already researched today", "bank already full", "no key") is a
-    normal night, and the script treats a non-zero as a crash."""
+    """`python -m src.research_agent --brand antihero` -- one pass by
+    hand. Exit 0 whatever happened: a skipped pass ("already researched
+    today", "bank already full", "no key") is normal, and a non-zero is
+    kept for a crash."""
     import argparse
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--brand", required=True, choices=("antihero", "zeropage"))

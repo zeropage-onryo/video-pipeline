@@ -6,10 +6,10 @@
 # cron `run_morning_prompts.sh` at 22:00 -- and it never once ran here:
 # that script's first line cds into the Mac's project folder, which does
 # not exist in this image, so it exited 1 every night into /var/log, which
-# a redeploy wipes. The concept walk, the research agent and the scout
-# crawl are no longer scheduled anywhere (the Mac's LaunchAgent went the
-# same day, and the Mac runs none at all now); `python -m src.nightly
-# walk` still runs by hand.
+# a redeploy wipes. The research agent and the scout crawl are no longer
+# scheduled anywhere (the Mac's LaunchAgent went the same day, and the Mac
+# runs none at all now), and the concept walk itself -- src/nightly.py and
+# run_morning_prompts.sh -- was deleted 2026-10-07.
 #
 # What stays is `ops.ig_tokens keep`, daily at 10:00 ET (TZ below): it
 # makes no Meta call until the publishing token's last refresh is 30 days
@@ -18,10 +18,9 @@
 # Its log lives on the volume too, so a deploy does not erase it.
 #
 # The 03:30 shadowrun (`python -m src.trigger`) was REMOVED 2026-09-14. It
-# was an eleventh generation run every night that took neither the
-# data/.nightly.lock nor the night marker run_morning_prompts.sh sets, and
-# counted against no budget -- so it could double-run beside the 22:00 walk
-# and overspend NIGHTLY_BUDGET_USD without appearing in it. src/trigger.py
+# was an eleventh generation run every night that took neither the walk's
+# lock nor its budget -- so it could double-run beside the 22:00 walk and
+# overspend without appearing in it. src/trigger.py
 # stays as a manual one-off CLI; nothing schedules it.
 #
 # Explicitly NOT included: footage/ (149GB ProRes) and the photo-root
