@@ -209,5 +209,14 @@ as the open review risk; the skill in the plugin says what the tool does
 truthfully. If the listing is refused on it, option A is the fallback and
 costs one conditional in `build_server`.
 
-Phase 5's render-and-status skill is written against B, with the Queue link
-as the path that works until `quote` / `approve` ship.
+**Built the same day** (commit `feat(mcp): Claude writes the scene, the
+studio renders it`), with one change to the shape above: Mike also asked
+that the connector use Claude for the ideation and carry the studio's
+scene-writing shape, so the listed set is `board`, `idea`, `search`,
+`capture`, `pick`, `shoot`, `archive`, `stats`, `elements`, `write_scene`,
+`quote`, `approve`, `job` -- no engine tools, no spark bank, no web image
+search, no `imagine_reference`. `write_scene` saves a prompt written in the
+chat against the person's own element photos (the reference gate's rule),
+`quote` prices stills and clip, `approve` runs the Queue's own approve
+bodies. The Create cap (step 4) is moot on the listed server: nothing on it
+calls a model. The plugin's write-scene skill carries the five-part shape.

@@ -50,3 +50,20 @@ URL arguments, the Create cap); the consent-page build and the quote/approve
 build; push + PR; the second-account live script (`OAUTH_TEST.md`) with
 `zp-billing-test`; `fly releases` for the live commit; the GitHub repo for
 the plugin; the icon; the portal. Anthropic: nothing yet.
+
+**Later the same day (Mike's three calls, all built).** (1) The spark bank
+stays off the listed server: `mcp_server.LISTED_TOOLS` is what a signed-in
+caller gets, the mount builds two servers and routes by door, the operator's
+static key and stdio keep everything; the 403 for a sign-in with no
+workspace now says to sign in once on the web. (2) Claude does the ideation
+and the MCP renders: `elements`, `write_scene` (a chat-written prompt saved
+against the person's own element photos, refs only from `elements`, the
+reference gate asked first, timed windows split with no model call),
+`quote` (pricing.display + keyframe_quote + balance), `approve` (the Queue's
+own approve bodies, lifted into `app.api.approve_keyframes` /
+`approve_render` and injected into the mount; `ApproveRefused` in
+`src/approvals.py` is what both doors raise). (3) The studio's scene-writing
+shape became the plugin's `write-scene` skill, written fresh; the other
+four skills were reworked to the listed set. Route tests (201) and the MCP
+files pass; the full suite is re-run at the end. Still open and unchanged:
+the consent page, and the directory's AI-media rule as the review risk.

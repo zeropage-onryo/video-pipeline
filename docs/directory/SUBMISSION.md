@@ -21,7 +21,7 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | C9 | response size | PASS after Phase 4 | 7.6 KB default board; `truncated` + note at the cap |
 | C10 | no conversation-data collection | PASS | |
 | C11 | first-party API | PASS | declare the image-search lanes as proxied APIs |
-| C12 | no AI image/video/audio generation | **FAIL — open review risk** | Mike's pick is B (render in chat with a quote and approval). The checklist says such connectors "aren't accepted"; the Compliance step asks for the acknowledgment. Answer it truthfully; if refused, option A is one conditional (RENDER_DESIGN.md) |
+| C12 | no AI image/video/audio generation | **FAIL — open review risk** | Built as Mike chose: `approve` renders stills and clips after a quote and a yes in chat. The checklist says such connectors "aren't accepted"; the Compliance step asks for the acknowledgment. Answer it truthfully; if refused, drop `approve` from LISTED_TOOLS (one line) and the Queue is the approve |
 | C13–C19 | OAuth, 401, metadata, AS metadata, DCR, PKCE, scopes | PASS | verified live from here 2026-10-07 |
 | C20 | callback URLs (incl. Claude Code loopback) | UNKNOWN | live check, OAUTH_TEST.md step 11 |
 | C21 | consent screen | **FAIL — build needed** | no consent page exists; OAUTH_TEST.md Finding 3 says what it needs. The connector cannot be connected from claude.ai until it does |
@@ -35,8 +35,8 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | — | rate limit | **PASS after Phase 2** | 120/min per account, 1200/min operator key; 429 + Retry-After |
 | — | token: audience, expiry, issuer | PASS after Phase 2 | issuer check added |
 | — | cross-tenant isolation (board, idea, search, capture, pick, archive, shoot, job, stats) | PASS, tested through the real transport | |
-| — | cross-tenant: sparks / images bank | **FAIL by design**, xfail(strict) | shared tables; Mike's call (OAUTH_TEST.md Finding 2) |
-| — | spend without a quote + approval | FAIL today, **answered by Mike's pick** | `imagine_reference` still spends on the call until the quote/approve build lands |
+| — | cross-tenant: sparks / images bank | **PASS** -- not on the listed server | Mike's call 2026-10-07; the operator's door keeps them |
+| — | spend without a quote + approval | **PASS on the listed server** | `quote` then `approve` (tokens, hold before submit); `imagine_reference` is not on the listed server |
 
 ### Plugin items
 
@@ -70,17 +70,17 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 
 ### What needs Mike's decision (answered 2026-10-07 unless marked open)
 
-- Render path: **B** — the connector generates, every spend quoted and
-  approved in chat. Build order in RENDER_DESIGN.md "Decision". **Not built.**
+- Render path: **B, built** — `elements` / `write_scene` / `quote` / `approve`
+  on the listed server; Claude writes the scene in chat (no model credit),
+  the studio renders after a quote and a yes. The listed set is
+  `mcp_server.LISTED_TOOLS`; the spark bank and the engine tools stay on the
+  operator's door (Mike's call).
 - First contact: **require one web sign-in**; the 403 body and the connector
   description should say so (one string in `app/mcp_mount.py`, not yet changed).
 - License: **MIT**. Support: **GitHub issues on the plugin repo**.
-- **Open**: fence the sparks bank per account, or keep those tools off the
-  listed server (OAUTH_TEST.md Finding 2).
-- **Open**: `reference` still takes a model-supplied `image_url` (AUDIT.md
-  F-6); refuse URL-shaped arguments for non-operator callers?
-- **Open**: the Create cap for `generate` / `research` before
-  `ZEROPAGE_MCP_ENGINE=1` is ever set on Fly.
+- Sparks bank: **off the listed server** (decided). `reference`'s URL
+  argument (AUDIT.md F-6) and the Create cap now concern the operator's door
+  only; neither is reachable by a stranger.
 
 ### Live checks only Mike can do
 
@@ -94,11 +94,10 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 
 **Connection** — `https://zeropage-studio.fly.dev/mcp`, Universal URL.
 
-**Tools** — sync from the server; after Phase 4 deploys every tool shows a
-title and a read-only or write hint. Read-only: board, idea, search, tonight,
-sparks, images, images_for, stats, job. Write: capture, pick, shoot, archive,
-add_spark, reference, imagine_reference (+ research, generate with the engine
-on; + quote, approve when built).
+**Tools** — sync from the server; a signed-in reviewer sees the listed set,
+every tool with a title and hints. Read-only: board, idea, search, stats,
+elements, quote, job. Write: capture, pick, shoot, archive, write_scene,
+approve (destructive: it spends).
 
 **Listing**
 
@@ -155,7 +154,8 @@ keyed) with our own keys. No personal health data. No sponsored content.
 2. Steps: sign in once at https://zeropage.studio with those credentials
    (workspace exists already); add the connector; approve the consent page;
    call `board`, `idea`, `search`, `capture`, `pick`, `archive`, `stats`,
-   `sparks`, `images_for`, `reference`, `job`.
+   `elements`, `write_scene`, `quote`, `approve` (keyframes, then clip, with
+   a balance that covers one small render), `job`.
 3. What it must NOT be able to do: read any other account's ideas (every
    id outside its board answers "no idea N"); buy credits or change a plan
    (not possible through the connector); post anywhere; delete anything.
@@ -184,13 +184,12 @@ non-App connector)
 
 | tool | reads | stores | sends to a model | sends to a provider |
 |---|---|---|---|---|
-| board, idea, search, stats, sparks, tonight, images, job | the caller's rows (sparks/images: the shared bank) | — | — | — |
-| capture, pick, shoot, archive, add_spark | — | a row under the caller's account (add_spark: the shared bank) | — | — |
-| images_for | — | candidate rows (id, URL, credit) | — | image-search APIs (Openverse; Google CSE / Unsplash / Pexels when keyed), the query text |
-| reference | — | the image bytes, normalised, under the bin | — | one fetch of the chosen image's host |
-| imagine_reference | — | the rendered still in the bin; a charge on the ledger | the hook frame text | Midjourney, else Google's image model |
-| generate (engine) | the bank | a concept row, prompt scores, a hold row | the direction and references, to Gemini | — (keyframes only if enabled) |
-| research (engine) | — | findings and images in the shared bank | crawl text, to Gemini | web search, YouTube, RSS, image hosts |
+| board, idea, search, stats, elements, quote, job | the caller's rows | — | — | — |
+| capture, pick, shoot, archive, write_scene | — | a row under the caller's account (the scene prompt and the photo refs chosen) | — | — |
+| approve (keyframes) | — | the stills under the caller's renders; a ledger charge | the scene prompt and the attached photos, to the studio's image model | Google's image model (Nano Banana) |
+| approve (clip) | — | the clip under the caller's renders; a ledger charge | the shot prompt, its still and the attached photos, to the renderer | fal.ai (the model quoted) |
+
+Not on the listed server (operator's door only): sparks, tonight, add_spark, images, reference, images_for, imagine_reference, research, generate.
 
 ## The portal fields (plugin bundle)
 
@@ -205,18 +204,16 @@ non-App connector)
 
 ## Everything Mike must do by hand, in order
 
-1. **Decide the three open items** above (sparks fence; `reference` URL args;
-   the Create cap), and schedule the quote/approve build (RENDER_DESIGN.md
-   "Decision") plus the consent page (OAUTH_TEST.md Finding 3). The consent
-   page blocks everything else.
+1. **Build the consent page** (OAUTH_TEST.md Finding 3). It blocks
+   everything else: without it nobody can connect from claude.ai.
 2. **Push this branch and open the PR** (nothing is pushed). Merging to
    `main` deploys Fly with Phase 4 and the rate limit.
 3. **Supabase dashboard** (Authentication → OAuth Server): set the
    Authorization Path to the consent route once built; confirm Site URL.
-4. **Fly**: `fly releases` to confirm the live commit. Do NOT set
-   `ZEROPAGE_MCP_ENGINE=1` until the Create cap exists. Optionally set
+4. **Fly**: `fly releases` to confirm the live commit. `QUOTE_SIGNING_SECRET`
+   is already set there, so `quote` will carry tokens. Optionally set
    `ZEROPAGE_MCP_RATE` / `ZEROPAGE_MCP_RATE_OPERATOR` (defaults 120 / 1200
-   per minute).
+   per minute) and `ZEROPAGE_SIGNUP_URL` (default https://zeropage.studio).
 5. **Walk `OAUTH_TEST.md`** with `zp-billing-test`; take the screenshots.
 6. **Populate the test account** as the reviewer instructions describe; put
    its credentials in the portal only.
