@@ -23,9 +23,8 @@
    because a missing section is presentation and not protection. */
 import { ICON, brandName, heroMarkup, heroOf, partsOf, previewRefs, previewStills,
          refThumbs, shotsLabel, windowLabel } from './cards.js';
-import { openConceptInDirector } from './genspace.js';
 import { hydrateImages, imgTag } from './preview.js';
-import { api, bus, esc, refreshQueueBadge, state, stateline } from './shared.js';
+import { api, bus, esc, openConceptInDirector, refreshQueueBadge, state, stateline } from './shared.js';
 
 let wired = false;
 

@@ -1079,8 +1079,8 @@ hand-editing a single shot turns out to be what Mike actually reaches for. What 
 `workflow_runner` gains a `part` on the image and video nodes (today it has none — the
 runner renders the shot, full stop), `seedScene` takes a part and seeds from
 `timeline.render_prompt(part, tl)` with the part's refs and still, the dock lists the parts
-under the scene, and `FLOWS.md` says so. The vanilla `genspace.js` is the reference
-implementation and would follow.
+under the scene, and `FLOWS.md` says so. The vanilla `genspace.js` was deleted on
+2026-10-07, so only the React canvas needs it.
 
 ## 18. A render that fails at the provider submit leaves no `generations` row  (found 2026-09-18, FIXED 2026-09-21)
 

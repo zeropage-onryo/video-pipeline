@@ -1244,6 +1244,12 @@ is yours, in Resolve, by hand.
   survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
   refine_prompt` against the `ai_prompting` shelf; the template is
   `prompts/direct_prompt.txt`.
+- **The vanilla Gen Space was DELETED on 2026-10-07 (Mike's call).** `genspace.js`, the
+  `/ui` shell's Director view, its bar controls, its node-editor modal and their CSS are gone;
+  the Director is the React studio's (`web/`, inside each project's workspace), and every "Open
+  in Director" on `/ui` goes through `shared.openConceptInDirector`, which hands the scene to
+  `DIRECTOR_FRONTEND_URL`. The backend it drove (`app/workflow_runner.py`, the `/api/workflows`
+  routes, the LiteGraph-shaped JSON) stays: the React canvas uses it. The history follows.
 - **The Director canvas is the Gen Space (2026-09-10, from the "ZPF Gen Space" design;
   the shape LTX Studio's gen space has).** `app/static/zpf/genspace.js` replaced
   `workflows.js` and the vendored LiteGraph: ONE shot's chain drawn as DOM cards on an
@@ -1328,7 +1334,8 @@ is yours, in Resolve, by hand.
   `/api/scene-lengths`, `/api/render-choices`, `/api/creative-guide` and the guide mode
   exist only as uncommitted work in the main checkout's overnight branch, and the Next
   composer shows those pills only when the routes answer. The vanilla Gen Space on `/ui`
-  stays as the reference implementation the React one was ported from.
+  stayed as the reference implementation the React one was ported from until it was deleted
+  on 2026-10-07.
 - **The overnight session's working tree landed on main (2026-09-12, second
   reconcile).** Everything that had sat uncommitted in the main checkout on
   `claude/overnight-20260907` -- the creative guide (`src/creative_guide.py`,
@@ -1352,8 +1359,9 @@ is yours, in Resolve, by hand.
   `/ui` hands a PLANNED concept to the React Director: `DIRECTOR_FRONTEND_URL`
   (fly.toml points it at `zeropage-web.fly.dev/studio/flows`; locally it
   defaults to `:3000`) reaches the body as `data-director-url`, and
-  `genspace.openConceptInDirector` redirects there unless `?legacy=1` asks for
-  the vanilla canvas -- ported from the `workflows.js` edit, since that file
+  `genspace.openConceptInDirector` redirected there unless `?legacy=1` asked for
+  the vanilla canvas (since 2026-10-07 `shared.openConceptInDirector` always hands over; the
+  vanilla canvas is deleted) -- ported from the `workflows.js` edit, since that file
   no longer exists. The Generate node's gate note reads `video.generate`
   (any keyed renderer), not Runway's key alone.
 - **Assets and Elements are two things, not four chips on one wall (2026-09-18, Mike's

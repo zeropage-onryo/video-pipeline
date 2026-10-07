@@ -92,7 +92,9 @@ the rest" paragraph.
 - **Visiting a workspace sets the active project** (`rememberActiveProject`, as the old "Open in
   Studio" did), so the next Create on the composer is filed into that project until its chip's ×
   is pressed. That is the existing behaviour, kept; say if a solo Create should be the default.
-- **The vanilla `/ui?legacy=1` Director** is untouched and still reachable. Delete it or keep it
-  as the reference.
+- ~~The vanilla `/ui?legacy=1` Director~~ -- deleted 2026-10-07 on Mike's word (its own PR); the
+  `/ui` shell's other views stay, and its "Open in Director" hands the scene to the studio.
+- Delete's default stays as built (Mike, 2026-10-07): chat, brief, look and memory are deleted,
+  scenes are detached.
 - A Guide proposal restored from a project's history is drawn as text only, not as a card: the
   history does not record whether it was confirmed, and a second card could bank it twice.

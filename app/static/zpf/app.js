@@ -1,11 +1,10 @@
 /* Boot: capabilities first (everything gates on them), then the field,
    the router, the palette, the brand pill, and the jobs SSE feed. */
-import { api, applyCaps, bus, closeDetail, esc, loadAssets, refreshQueueBadge, state, stateline } from './shared.js';
+import { api, applyCaps, bus, closeDetail, esc, loadAssets, openConceptInDirector, refreshQueueBadge, state, stateline } from './shared.js';
 import { initField } from './field.js';
 import { initStudio, renderStudio } from './studio.js';
 import { renderAssets } from './assets.js';
 import { initPipeline, renderPipeline } from './pipeline.js';
-import { initWorkflows, renderDirectorTab, closeWorkflowModal } from './genspace.js';
 import { renderAnalytics } from './analytics.js';
 import { initQueue, renderQueue } from './queue.js';
 
@@ -13,7 +12,6 @@ const VIEWS = {
   studio: { label: 'Studio', render: renderStudio },
   assets: { label: 'Assets', render: renderAssets },
   pipeline: { label: 'Pipeline', render: renderPipeline },
-  director: { label: 'Director', render: renderDirectorTab },
   analytics: { label: 'Analytics', render: renderAnalytics },
   queue: { label: 'Queue', render: renderQueue },
 };
@@ -171,7 +169,6 @@ async function palFilter(text) {
 initField();
 initStudio(go);
 initPipeline();
-initWorkflows();
 initQueue();
 initRail();
 paintBrand();
@@ -194,7 +191,7 @@ pq.addEventListener('keydown', e => {
 
 addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); palOpen(); return; }
-  if (e.key === 'Escape') { palClose(); closeWorkflowModal(); closeDetail(); }
+  if (e.key === 'Escape') { palClose(); closeDetail(); }
 });
 
 /* Create is an interactive workspace: keep its content opaque and in normal
@@ -215,9 +212,12 @@ addEventListener('keydown', e => {
   connectJobs();
   refreshQueueBadge();
   const params = new URLSearchParams(location.search);
-  go(params.get('view') || 'studio');
-  const concept = params.get('concept');
-  if (params.get('view') === 'director' && /^\d+$/.test(concept || '')) {
-    (await import('./genspace.js')).openConceptInDirector(Number(concept));
+  // the Director is the React studio's now: ?view=director (with or
+  // without a concept) is handed over there rather than drawn here
+  if (params.get('view') === 'director') {
+    const concept = params.get('concept');
+    openConceptInDirector(/^\d+$/.test(concept || '') ? Number(concept) : null);
+    return;
   }
+  go(params.get('view') || 'studio');
 })();
