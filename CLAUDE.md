@@ -551,7 +551,11 @@ key scheme and of the read-time mint; `storage.py` stays the boto3 layer and
   works on a card it has already drawn. The way to get both is a Worker on the custom domain
   validating a token against an R2 binding — deliberately not built until a bill says to.
 - **Migrated 2026-09-15**: 303 objects copied (139 to account 1, 164 to the shared bin), 185
-  derivatives built, all 364 legacy keys left in place, `ZEROPAGE_MEDIA=tenant` locally. 61
+  derivatives built, all 364 legacy keys left in place at the time, `ZEROPAGE_MEDIA=tenant`
+  locally. **The legacy keys did NOT stay:** on 2026-10-07 every flat `renders/nano/c<id>-...png`
+  404'd while the same still answered under `m/1/renders/nano/`, so anything hard-coding a flat
+  key (the sign-in showcase, `web/src/content/landing-media.ts`) had to move to the tenant
+  prefix. Never write a new flat-key URL; ask `media.url_for`, or use the `m/<account>/` key. 61
   objects were left where they are because NOTHING in the database references them — three prop
   folders whose rows are gone, and superseded nano keyframes. Verified by fetching: a 2,258,681
   byte location photo now draws as a 33,533 byte tile.
