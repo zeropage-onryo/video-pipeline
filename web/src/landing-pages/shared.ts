@@ -15,9 +15,10 @@ export const model = (id: string): CatalogModel => {
 /** The plan a tier reads as, in a sentence. */
 export const PLAN_FOR = { standard: "every plan", creator: "Creator and up", premium: "the Studio plan" } as const;
 
-export const modelCard = (m: CatalogModel): MakeCard => ({
+export const modelCard = (m: CatalogModel, spark?: (m: CatalogModel) => string): MakeCard => ({
   title: m.name,
-  body: `${m.blurb} ${num(m.credits)} credits for a ${m.seconds}-second clip, on ${PLAN_FOR[m.tier]}.`,
+  body: `${m.blurb} ${num(m.credits)} credits for a ${m.seconds}-second ${m.frame} clip, on ${PLAN_FOR[m.tier]}.`,
+  ...(spark ? { spark: spark(m) } : {}),
 });
 
 /** Every model name off the catalog, "A, B and C", for a FAQ answer. */
@@ -26,14 +27,17 @@ export const MODEL_NAMES = (() => {
   return n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : n.join("");
 })();
 
-/** Three named renderers off the catalog and a fourth card for the rest. */
-export const modelCards = (featured: CatalogModel[]): MakeCard[] => [
-  ...featured.map(modelCard),
+/** Three named renderers off the catalog and a fourth card for the rest,
+ *  which links to /models. `spark` gives each named card its own starting
+ *  line (a "Render on Seedance 2.0" card must not open on 2.5). */
+export const modelCards = (featured: CatalogModel[], spark?: (m: CatalogModel) => string): MakeCard[] => [
+  ...featured.map((m) => modelCard(m, spark)),
   {
     title: `${MODELS.length} Models`,
     body: `Every video model the Queue renders on, ${MODELS.filter((m) => !featured.includes(m))
       .map((m) => m.name)
       .join(", ")} included, with the price on the card before you approve.`,
+    link: { href: "/models", label: "See every model" },
   },
 ];
 

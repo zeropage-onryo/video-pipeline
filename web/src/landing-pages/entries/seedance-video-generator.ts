@@ -257,7 +257,7 @@ export const SEEDANCE: MakePage = {
     },
     models: {
       title: MODELS_TITLE,
-      items: modelCards([sd25, sd, sdFast]),
+      items: modelCards([sd25, sd, sdFast], (m) => `A 15-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on ${m.name}.`),
     },
     howTo: {
       title: "How to render on Seedance",

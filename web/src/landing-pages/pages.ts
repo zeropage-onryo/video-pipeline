@@ -49,7 +49,14 @@ export type MakeTile = {
   aspect?: string;
 };
 
-export type MakeCard = { title: string; body: string };
+export type MakeCard = {
+  title: string;
+  body: string;
+  /** This card's own starting line for the composer (default: the page's). */
+  spark?: string;
+  /** A plain link instead of the sign-up door, e.g. the full model list. */
+  link?: { href: string; label: string };
+};
 /** A feature card: the icon is a key features-grid.tsx maps to a glyph. */
 export type MakeFeature = MakeCard & { icon: FeatureIcon };
 export type FeatureIcon =

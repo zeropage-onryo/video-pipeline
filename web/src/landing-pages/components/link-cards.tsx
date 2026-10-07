@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { CreateCtaButton } from "./create-cta-button";
 import { SectionTitle } from "./section-title";
@@ -39,7 +41,17 @@ export function LinkCards({
                     {card.title}
                   </h3>
                   <p className="mt-3 flex-1 text-[15px] leading-relaxed text-[var(--ink-2)]">{card.body}</p>
-                  <CreateCtaButton variant="link" label={startLabel} spark={spark} className="mt-7" />
+                  {card.link ? (
+                    <Link
+                      href={card.link.href}
+                      className="mt-7 inline-flex items-center gap-1 text-[13px] font-semibold text-foreground transition-opacity hover:opacity-70"
+                    >
+                      {card.link.label}
+                      <ChevronRight className="size-3.5" />
+                    </Link>
+                  ) : (
+                    <CreateCtaButton variant="link" label={startLabel} spark={card.spark ?? spark} className="mt-7" />
+                  )}
                 </article>
               </BlurFade>
             </li>

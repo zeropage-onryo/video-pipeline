@@ -59,9 +59,12 @@ keyframe on all three.
 - [x] Export one MP4
 - [ ] Not on the page, not wired: reference-to-video (`image_urls`, up to 30), the end frame (`end_image_url`), dialogue in quotes with lip sync, extend; white-model / green-screen / video editing need inputs the composer does not take
 
-## 5. Models row ("6 Video Generator Models")
+## 5. Models row ("7 Video Generator Models"), done 2026-10-07
 
-- [ ] Seedance 2.0, Seedance 2.0 Fast, Kling 3 Turbo Pro, then the fourth card for the rest (off the catalog, prices included)
+- [x] Seedance 2.5, Seedance 2.0, Seedance 2.0 Fast, then the fourth card for the rest
+- [x] Each named card opens the composer on ITS model ("Render on Seedance 2.0"), not the page's 2.5 spark (`modelCards(featured, spark)`)
+- [x] The fourth card links to /models ("See every model") instead of sign-up, on every model page
+- [x] Prices name the frame they are for ("568 credits for a 5-second 720p clip"), on every model page
 
 ## 6. How to ("How to render on Seedance")
 
