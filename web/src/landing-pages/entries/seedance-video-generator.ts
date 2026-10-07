@@ -10,6 +10,9 @@ const sd25 = model("seedance2.5");
 const sd = model("seedance2");
 const sdFast = model("seedance2-fast");
 
+// RENDERED 2026-10-07 on Seedance 2.5 through Mike's Runway account
+// (session "Seedance 2.5 landing page", text-to-video, 720p, sound on,
+// 1,930 credits for all thirteen clips), so the chips read T2V.
 // The wall (2026-10-07, Mike's call): the showcase layout -- three masonry
 // columns, each tile its own Seedance 2.5 snippet in its own frame, the
 // feature it shows along the bottom, its prompt underneath on click. The
@@ -18,12 +21,12 @@ const sdFast = model("seedance2-fast");
 // public/models/seedance-video-generator/). Frames are Seedance's own
 // (3:4, 4:3, 16:9, 9:16; it takes no 4:5), and the ORDER is what deals
 // them into three even columns (showcase-wall.tsx's `deal`).
-const SNIPPET = "Seedance 2.5 · image-to-video · 5 s · 480p";
+const SNIPPET = "Seedance 2.5 · text-to-video · 5 s · 720p";
 const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Spray and momentum",
     tag: "Handheld follow",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "3:4",
     meta: SNIPPET,
     plate: plate("#e0f2fe", "#7dd3fc", "#312e81"),
@@ -33,7 +36,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Push-in",
     tag: "Slow push-in",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "4:3",
     meta: SNIPPET,
     plate: plate("#f5f3ff", "#c4b5fd", "#4338ca"),
@@ -43,7 +46,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Micro detail",
     tag: "Macro detail",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "9:16",
     meta: SNIPPET,
     plate: plate("#fff7ed", "#fdba74", "#4338ca"),
@@ -53,7 +56,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Multi-beat action",
     tag: "Top-down reveal",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "9:16",
     meta: SNIPPET,
     plate: plate("#eef2ff", "#818cf8", "#1e1b4b"),
@@ -63,7 +66,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Scale and atmosphere",
     tag: "Wide establishing",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "16:9",
     meta: SNIPPET,
     plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5"),
@@ -73,7 +76,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Rain and steam",
     tag: "Night exterior",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "3:4",
     meta: SNIPPET,
     plate: plate("#1e1b4b", "#312e81", "#6366f1"),
@@ -83,7 +86,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Backlight and water",
     tag: "Golden hour",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "3:4",
     meta: SNIPPET,
     plate: plate("#fff7ed", "#fdba74", "#312e81"),
@@ -93,7 +96,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Rack focus",
     tag: "Camera control",
-    mode: "I2V",
+    mode: "T2V",
     aspect: "16:9",
     meta: SNIPPET,
     plate: plate("#fdf4ff", "#d8b4fe", "#4c1d95"),
