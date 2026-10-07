@@ -114,11 +114,13 @@ const SEEDANCE_TILES: MakeTile[] = [
 ];
 
 // The signature's own three frames (one scene, three shots), since the
-// wall's tiles are now eight different subjects. Plates until the stills land.
+// wall's tiles are eight different subjects. Drawn on Nano Banana Pro
+// through Mike's Runway account (2026-10-07, 20 credits each, 3:4).
+const D = "/models/seedance-video-generator/";
 const SIGNATURE_FRAMES: MakeTile[] = [
-  { title: "A ceramics studio at dawn", tag: "", plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5") },
-  { title: "Wet thumbs opening the clay", tag: "", plate: plate("#ecfeff", "#67e8f9", "#3730a3") },
-  { title: "The glazed cup lifted to the window", tag: "", plate: plate("#f5f3ff", "#c4b5fd", "#4338ca") },
+  { title: "A ceramics studio at dawn, a potter at the wheel by the window", tag: "", src: `${D}sig-wide.jpg` },
+  { title: "Wet hands opening the clay on the spinning wheel", tag: "", src: `${D}sig-macro.jpg` },
+  { title: "Clay-dusted hands lifting the indigo cup to the window", tag: "", src: `${D}sig-cup.jpg` },
 ];
 
 // Seedance (2026-10-05, Mike's call; 2.5 since 2026-10-06). What renders
