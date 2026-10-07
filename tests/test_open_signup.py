@@ -371,11 +371,21 @@ def test_the_showcase_keeps_only_real_sources(clean_slate, monkeypatch):
 
 def test_the_default_showcase_reads_the_tenant_keys(clean_slate, monkeypatch):
     # The flat renders/nano/... keys are gone from R2 (they 404'd on the
-    # live page, 2026-10-07); the stills live under account 1's m/1/ prefix.
+    # live page, 2026-10-07); a keyframe on the door is read from account
+    # 1's m/1/ prefix. Since the same day the door also opens on two product
+    # ads from the public site's /make wall (Mike's pick) -- the made-up
+    # products only: a real brand's still on a sign-in page reads as an
+    # endorsement.
     monkeypatch.delenv("SIGNIN_SHOWCASE", raising=False)
     from app import main
     images = [s["image"] for s in main.signin_showcase()]
     assert len(images) == 4
-    assert all("/m/1/renders/nano/" in u for u in images)
+    keyframes = [u for u in images if "/renders/nano/" in u]
+    ads = [u for u in images if "/make/ai-product-ad-generator/" in u]
+    assert len(keyframes) + len(ads) == len(images)
+    assert keyframes and all("/m/1/renders/nano/" in u for u in keyframes)
+    assert ads and all(u.startswith("https://zeropage.studio/") for u in ads)
+    real_brands = ("energy-drink", "sneaker", "tumbler", "lip-tint")
+    assert not any(name in u for u in ads for name in real_brands)
     page = client.get("/signin").text
     assert all(u in page for u in images)
