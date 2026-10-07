@@ -588,11 +588,23 @@ def two_people(pg, env, monkeypatch):
         job = jobs.get(job_id)
         return job if job and job["account_id"] == account_id else None
 
-    app, sessions = mcp_mount.build(dsn=pg, job_status=job_status)
+    approved: list = []
+
+    def fake_render(concept_id, account_id, body):
+        approved.append(("clip", concept_id, account_id, body))
+        return {"job_id": 42, "render": {"provider": "fal"}}
+
+    def fake_keyframes(concept_id, account_id):
+        approved.append(("keyframes", concept_id, account_id))
+        return {"ok": True, "job_id": 43}
+
+    app, sessions = mcp_mount.build(dsn=pg, job_status=job_status,
+                                    approve_render=fake_render,
+                                    approve_keyframes=fake_keyframes)
     assert app is not None
     return {"app": app, "sessions": sessions, "a": a, "b": b,
             "a_concept": a_concept, "b_concept": b_concept,
-            "b_finding": b_finding}
+            "b_finding": b_finding, "approved": approved}
 
 
 def _calls(world, calls):
@@ -757,8 +769,9 @@ def test_what_an_external_caller_sees_with_the_engine_off(env, monkeypatch):
                                      job_status=lambda i, account_id=None: None)
     tools = asyncio.run(server.list_tools())
     names = [t.name for t in tools]
-    assert names == ["board", "idea", "search", "capture", "pick", "shoot", "archive",
-                     "stats", "job"] == list(mcp_server.LISTED_TOOLS)
+    # `approve` registers only when the approve bodies are injected, which
+    # the mount does and this bare build does not
+    assert names == [n for n in mcp_server.LISTED_TOOLS if n != "approve"]
     for absent in ("research", "generate", "sparks", "tonight", "add_spark", "images",
                    "reference", "imagine_reference", "images_for"):
         assert absent not in names
@@ -776,3 +789,55 @@ def test_what_an_external_caller_sees_with_the_engine_off(env, monkeypatch):
         if not t.annotations.read_only_hint:
             # a write says whether it can be undone
             assert t.annotations.destructive_hint is not None
+
+
+def test_writing_pricing_and_approving_stay_in_the_callers_account(two_people, monkeypatch):
+    """The render path end to end through the real transport, as Alice:
+    elements -> write_scene -> pick -> quote -> approve, every step on her
+    own rows, the approve bodies handed HER account id; and the same calls
+    on Bob's idea refused as 'no idea'."""
+    from src import asset_shelf
+
+    w = two_people
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
+    monkeypatch.delenv("QUOTE_SIGNING_SECRET", raising=False)
+    # Alice owns one character with one photo; Bob owns nothing
+    monkeypatch.setattr(asset_shelf, "catalogue",
+                        lambda dsn=None, account_id=None:
+                        [{"category": "character", "name": "Sam", "text": "",
+                          "photos": ["/characters/sam/photo/face.jpg"]}]
+                        if account_id == w["a"] else [])
+    scene = ("Ultra-realistic grounded video in 9:16; the attached photo is the exact "
+             "face. Style: soft window light, true colour. (0-4s) Sam lifts the lid of "
+             "a dented tin and freezes. (4-10s) Hard cut to the hallway: Sam backs away "
+             "from the open door, the tin still in one hand. No background music. "
+             "Avoid: plastic sheen, cartoon reactions.")
+    aid, bid = w["a_concept"], w["b_concept"]
+    results = _calls(w, [
+        ("alice", "elements", {}),
+        ("alice", "write_scene", {"idea_id": aid, "prompt": scene, "seconds": 10,
+                                  "refs": ["/characters/sam/photo/face.jpg"]}),
+        ("alice", "write_scene", {"idea_id": bid, "prompt": scene, "seconds": 10,
+                                  "refs": ["/characters/sam/photo/face.jpg"]}),
+        ("alice", "pick", {"idea_id": aid}),
+        ("alice", "quote", {"idea_id": aid}),
+        ("alice", "quote", {"idea_id": bid}),
+        ("alice", "approve", {"idea_id": aid, "what": "clip", "provider": "fal"}),
+        ("alice", "approve", {"idea_id": aid, "what": "keyframes"}),
+        ("bob", "elements", {}),
+    ])
+    (e0, els), (e1, written), (e2, foreign), (e3, picked), (e4, quoted), (e5, qforeign), \
+        (e6, clip), (e7, stills), (e8, bob_els) = results
+    assert not e0 and els["elements"][0]["photos"][0]["ref"] == "/characters/sam/photo/face.jpg"
+    assert not e1 and written["shots_written"] == 2 and written["seconds"] == 10
+    assert e2 and f"no idea {bid}" in foreign
+    assert not e3 and picked["status"] == "picked"
+    assert not e4 and quoted["clip"]["timed"] is True and len(quoted["clip"]["renders"]) == 2
+    assert quoted["keyframes"]["stills"] == 2 and quoted["balance"] is not None
+    assert e5 and f"no idea {bid}" in qforeign
+    assert not e6 and clip["job_id"] == 42
+    assert not e7 and stills["job_id"] == 43
+    assert [(kind, cid, acct) for kind, cid, acct, *rest in w["approved"]] == \
+        [("clip", aid, w["a"]), ("keyframes", aid, w["a"])]
+    assert w["approved"][0][3]["provider"] == "fal"
+    assert not e8 and bob_els["count"] == 0 and "upload" in bob_els["note"]

@@ -169,7 +169,10 @@ def retire_gold_standard():
 # served open when ZEROPAGE_MCP_TOKEN is unset -- see app/mcp_mount.py.
 # jobs.start/jobs.get are injected because src/ never imports app/.
 MCP_APP, MCP_SESSIONS = mcp_mount.build(
-    dsn=None, start_job=jobs.start, job_status=jobs.get
+    dsn=None, start_job=jobs.start, job_status=jobs.get,
+    # the priced approves, as callables: the MCP `approve` tool runs the
+    # same bodies the Queue's buttons post to (2026-10-07)
+    approve_render=api.approve_render, approve_keyframes=api.approve_keyframes,
 )
 
 

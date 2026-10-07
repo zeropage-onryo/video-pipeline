@@ -60,6 +60,7 @@ from src import (
     workflows,
     youtube,
 )
+from src.approvals import ApproveRefused
 from src.locations import IMAGE_EXTENSIONS
 
 from . import auth, jobs, model_connections, workflow_runner
@@ -2770,6 +2771,40 @@ def concept_pick(concept_id: int, body: PickBody, account_id: int = Depends(auth
             "pick": preprod.pick_rate(account_id=account_id)}
 
 
+def _refused(e: ApproveRefused) -> JSONResponse:
+    """An ApproveRefused as the JSON error the routes have always sent."""
+    return _error(e.status, e.code, e.message)
+
+
+def approve_keyframes(concept_id: int, account_id: Optional[int]) -> dict:
+    """The priced approve for a scene's keyframes, as a callable (2026-10-07):
+    the route below and the MCP `approve` tool run this same body, so the
+    two doors cannot drift. Returns the route's JSON; raises ApproveRefused
+    with the status and code the route answers."""
+    concept = preprod.get_concept(concept_id, account_id=account_id)
+    if concept is None:
+        raise ApproveRefused(404, "not_found", "no such concept")
+    quote = _keyframe_quote(concept)
+    if not quote:
+        from src import scene_chain
+        raise ApproveRefused(409, "nothing_to_draw",
+                             scene_chain.pick_skip_reason(concept) or "nothing to draw")
+    if not _gemini_key(account_id):
+        raise ApproveRefused(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    from src import accounts, ledger
+    from src import charge as charging
+    # the unowned pool and the operator's exempt accounts are never charged
+    # (ledger.hold_for_render), so they are never refused here either
+    if account_id is not None and not accounts.is_credit_exempt(account_id):
+        have = ledger.available(account_id)
+        if have < quote["credits"]:
+            what = f"{quote['stills']} keyframe{'s' if quote['stills'] != 1 else ''}"
+            raise ApproveRefused(402, "out_of_credits", charging.refusal(
+                ledger.InsufficientCredit(account_id, quote["credits"], have), what))
+    job_id = _keyframe_on_pick(concept, account_id)
+    return {"ok": True, "job_id": job_id, "keyframes": quote}
+
+
 @router.post("/concepts/{concept_id}/keyframes")
 def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_account_id)):
     """The priced approve for a scene's keyframes (2026-09-29, Mike's call:
@@ -2782,27 +2817,10 @@ def concept_keyframes(concept_id: int, account_id: int = Depends(auth.current_ac
     with "top up" instead (402 out_of_credits). Each still still holds and
     settles its own credit inside nano_banana, exactly as before; this is
     the check in front of them. Exempt accounts are never refused."""
-    concept = preprod.get_concept(concept_id, account_id=account_id)
-    if concept is None:
-        return _error(404, "not_found", "no such concept")
-    quote = _keyframe_quote(concept)
-    if not quote:
-        from src import scene_chain
-        return _error(409, "nothing_to_draw",
-                      scene_chain.pick_skip_reason(concept) or "nothing to draw")
-    if not _gemini_key(account_id):
-        return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
-    from src import accounts, ledger
-    # the unowned pool and the operator's exempt accounts are never charged
-    # (ledger.hold_for_render), so they are never refused here either
-    if account_id is not None and not accounts.is_credit_exempt(account_id):
-        have = ledger.available(account_id)
-        if have < quote["credits"]:
-            return _out_of_credits(
-                ledger.InsufficientCredit(account_id, quote["credits"], have),
-                f"{quote['stills']} keyframe{'s' if quote['stills'] != 1 else ''}")
-    job_id = _keyframe_on_pick(concept, account_id)
-    return {"ok": True, "job_id": job_id, "keyframes": quote}
+    try:
+        return approve_keyframes(concept_id, account_id)
+    except ApproveRefused as e:
+        return _refused(e)
 
 
 class ArchiveBody(BaseModel):
@@ -3554,18 +3572,24 @@ _QUEUE_ONLY = ("this render is billed in credits, and the Queue is where a "
                "price is quoted and approved -- pick the scene and approve it there")
 
 
-def _quote_refusal(e: Exception, account_id: Optional[int]):
-    """The response for a token that did not verify: 503 with the
+def _quote_refused(e: Exception, account_id: Optional[int]) -> ApproveRefused:
+    """A token that did not verify, as the refusal to raise: 503 with the
     generation command when nothing can be verified here, else 400 with
     the refusal's own reason as the code. wrong_account is logged at
     warning -- it cannot happen through the UI, so it is a replay."""
     if isinstance(e, pricing.SigningUnconfigured):
-        return _error(503, "signing_unconfigured", str(e))
+        return ApproveRefused(503, "signing_unconfigured", str(e))
     if e.reason == "wrong_account":
         print(f"[quote] wrong_account: a quote issued to another tenant was "
               f"presented by account {account_id!r}", file=sys.stderr)
-        return _error(400, "wrong_account", "this quote isn't valid -- get a fresh price")
-    return _error(400, e.reason, str(e))
+        return ApproveRefused(400, "wrong_account", "this quote isn't valid -- get a fresh price")
+    return ApproveRefused(400, e.reason, str(e))
+
+
+def _quote_refusal(e: Exception, account_id: Optional[int]):
+    """The response form of _quote_refused, for the routes that answer
+    HTTP directly."""
+    return _refused(_quote_refused(e, account_id))
 
 
 @router.get("/queue/{concept_id}/quote")
@@ -3649,15 +3673,29 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     need their own env flag on purpose. The daily caps are untouched and
     are now the only automatic wall -- see generative.cap_error.
     """
+    try:
+        return approve_render(concept_id, account_id, body)
+    except ApproveRefused as e:
+        return _refused(e)
+
+
+def approve_render(concept_id: int, account_id: Optional[int],
+                   body: Optional[ApproveBody] = None) -> dict:
+    """queue_approve's body as a callable (2026-10-07): the route and the
+    MCP `approve` tool run this one function. `body` may be an ApproveBody
+    or a plain dict of its fields. Returns the route's JSON; raises
+    ApproveRefused with the status and code the route answers."""
+    if isinstance(body, dict):
+        body = ApproveBody(**body)
     body = body or ApproveBody()
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
-        return _error(404, "not_found", "no such concept")
+        raise ApproveRefused(404, "not_found", "no such concept")
     if not concept["shots"]:
-        return _error(400, "no_prompt", "this concept carries no prompt to render")
+        raise ApproveRefused(400, "no_prompt", "this concept carries no prompt to render")
     if not (concept.get("picked") or concept.get("parked")):
-        return _error(400, "not_queued",
-                      "this concept isn't in the queue — pick it on the board first")
+        raise ApproveRefused(400, "not_queued",
+                             "this concept isn't in the queue — pick it on the board first")
     # Asked again HERE, not just in _waiting. The queue list and the
     # approve button are two requests, and a concept can lose its refs
     # between them; more to the point, this route is reachable by id
@@ -3665,10 +3703,10 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     # is spent, which is this function.
     ungrounded = preprod.reference_gate(concept)
     if ungrounded:
-        return _error(400, "no_reference",
-                      f"this concept has no reference photos attached "
-                      f"({ungrounded}) — rendering it would generate from "
-                      f"text alone. Attach references and try again.")
+        raise ApproveRefused(400, "no_reference",
+                             f"this concept has no reference photos attached "
+                             f"({ungrounded}) — rendering it would generate from "
+                             f"text alone. Attach references and try again.")
 
     shot = concept["shots"][0]
     shot_n = shot.get("n", 1)
@@ -3701,7 +3739,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
         # quietly rounding it spends real money on something nobody
         # picked. (The adapters clamp internally -- that is their contract
         # with the nightly graph, which has no human to refuse to.)
-        return _error(400, "bad_render_choice", str(e))
+        raise ApproveRefused(400, "bad_render_choice", str(e))
     # priced["signed"] is "billable AND a secret to sign with" -- exactly
     # the renders display() minted a token for, so the requirement and the
     # offer are one predicate and cannot disagree
@@ -3716,7 +3754,7 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
             quotes = {q.part: q for q in _verify_tokens(
                 body.tokens or [], priced, shot, concept_id, account_id)}
         except (pricing.QuoteRefused, pricing.SigningUnconfigured) as e:
-            return _quote_refusal(e, account_id)
+            raise _quote_refused(e, account_id)
     timed = priced["timed"]
     choice = {"provider": priced["provider"], "model": priced["model"],
               "duration": None if timed else priced["durations"][0],
@@ -3728,8 +3766,8 @@ def queue_approve(concept_id: int, body: Optional[ApproveBody] = None,
     label = providers.RENDER_LABELS.get(choice["provider"], choice["provider"])
     # the operator's key -- the only one since 2026-09-26
     if not module.has_key(account_id):
-        return _error(503, "renderer_unavailable",
-                      f"{label} is not configured on this server (FAL_KEY is unset)")
+        raise ApproveRefused(503, "renderer_unavailable",
+                             f"{label} is not configured on this server (FAL_KEY is unset)")
 
     # the frame axis is a resolution tier ("720p") -- providers.FRAME_AXIS
     frame_kw = "resolution"

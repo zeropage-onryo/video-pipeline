@@ -300,7 +300,8 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
     return wrapper
 
 
-def build(dsn=None, start_job=None, job_status=None):
+def build(dsn=None, start_job=None, job_status=None, approve_render=None,
+          approve_keyframes=None):
     """The (asgi_app, session_manager) pair, or (None, None) when MCP is
     off or misconfigured.
 
@@ -328,11 +329,15 @@ def build(dsn=None, start_job=None, job_status=None):
             dsn=dsn,
             start_job=start_job,
             job_status=job_status,
+            approve_render=approve_render,
+            approve_keyframes=approve_keyframes,
         )
         listed = mcp_server.build_server(
             dsn=dsn,
             start_job=start_job,
             job_status=job_status,
+            approve_render=approve_render,
+            approve_keyframes=approve_keyframes,
             listed=True,
         )
         # streamable_http_path="/" because the parent app owns the mount

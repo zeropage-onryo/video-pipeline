@@ -113,6 +113,10 @@ TITLES = {
     "research": "Run a research pass (spends)",
     "generate": "Write a scene from a direction (spends)",
     "job": "Check a background job",
+    "elements": "List your elements (reference photos)",
+    "write_scene": "Save a scene prompt onto an idea",
+    "quote": "Price the keyframes and the clip",
+    "approve": "Approve a priced render (spends credits)",
 }
 
 _CAP = f"Returns at most `limit` rows (default {LIST_LIMIT}, maximum 100)"
@@ -222,6 +226,39 @@ DESCRIPTIONS = {
         "label, progress detail and the result or error when it finished. "
         "Jobs live in memory, so a server restart forgets them. Read-only."
     ),
+    "elements": (
+        "Your elements: the characters, props and places whose photos you "
+        "uploaded in the studio, each with its photo refs. A scene is "
+        "rendered against those photographs, so `write_scene` takes refs "
+        "from this list and nothing else. Read-only."
+    ),
+    "write_scene": (
+        "Save a scene prompt you wrote onto one of your ideas, so it can be "
+        "priced and rendered. `prompt` is the full scene (the studio's shape: "
+        "an opening line naming the attached photos, a style block, timed "
+        "beats like (0-4s) each one shot, diegetic sound, an avoid list); "
+        "`seconds` is its total length (4-30); `refs` are photo refs from "
+        "`elements` -- the first one anchors the render, and at least one is "
+        "required. Timed beats become the shots. Replaces any scene the idea "
+        "already carried. Spends nothing."
+    ),
+    "quote": (
+        "What rendering one of your ideas would cost, in credits: the "
+        "keyframe stills still to draw and the clip (one render per timed "
+        "shot), with a signed token per render that `approve` takes, plus "
+        "your balance. Optional `provider`, `model`, `duration` (whole-scene "
+        "only) and `frame` pick the renderer; the defaults are the studio's. "
+        "Read-only; a quote is valid for one hour."
+    ),
+    "approve": (
+        "SPENDS CREDITS. Approve a quoted render for one of your picked "
+        "ideas: `what` is \"keyframes\" (draw the stills) or \"clip\" (render "
+        "the shots); for a clip pass the `tokens` from `quote` and the same "
+        "renderer choice. Credit is held before anything is submitted and "
+        "released if the render fails. Starts a background job; poll it with "
+        "`job`. Refused when the idea is not picked, has no reference photos, "
+        "the quote is stale, or the balance is short."
+    ),
 }
 
 # What each tool DOES, for Claude's permission model: `read` (no change),
@@ -247,6 +284,10 @@ HINTS = {
     "research":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "generate":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "job":               {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "elements":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "write_scene":       {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
+    "quote":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "approve":           {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
 }
 
 # THE LISTED SET (2026-10-07, Mike's call). What a signed-in stranger is
@@ -257,7 +298,8 @@ HINTS = {
 # person's directions are not listed to another. `build_server(listed=True)`
 # registers exactly these; the static-token door and stdio keep everything.
 LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
-                "archive", "stats", "job")
+                "archive", "stats", "elements", "write_scene", "quote",
+                "approve", "job")
 
 # Words a directory user does not have. The test screens every published
 # description and title for them (case-insensitive).
@@ -675,6 +717,196 @@ def archive_idea(idea_id: int, archived: bool = True, reason: str = "",
             f"{', '.join(preprod.ARCHIVE_REASONS)} -- use one next time so "
             "the tally can move")
     return card
+
+
+# --- Claude writes the scene, the studio renders it (2026-10-07) ------------
+#
+# Mike's call: the listed connector uses Claude for the ideation -- no
+# Gemini Create, no research pass -- and the MCP for the render. So a
+# scene prompt written in the chat is SAVED here, against the person's
+# own element photographs (the reference gate's rule, unchanged), priced
+# by the same pricing the Queue card shows, and approved through the same
+# bodies the Queue's buttons post to.
+
+MIN_SCENE_WORDS = 15
+WhatToApprove = Literal["keyframes", "clip"]
+
+
+def list_elements(dsn: Optional[str] = None,
+                  account_id: Optional[int] = None) -> dict[str, Any]:
+    """The account's characters, props and places with their photo refs --
+    the only strings `write_scene` accepts as references."""
+    from . import asset_shelf
+    account_id = _account(account_id, dsn)
+    items = asset_shelf.catalogue(dsn, account_id=account_id)
+    out = [{"kind": item["category"], "name": item["name"],
+            "description": (item.get("text") or "")[:300],
+            "photos": [{"ref": asset_shelf.storable_ref(url), "label": _photo_label(url)}
+                       for url in item.get("photos") or []]}
+           for item in items]
+    return {"count": len(out), "elements": out,
+            "note": ("" if out else
+                     "no elements yet -- upload photos of your characters, "
+                     "products or places in the studio (Elements) first; a scene "
+                     "renders only against photographs you attached")}
+
+
+def _photo_label(url: str) -> str:
+    from . import asset_shelf
+    parsed = asset_shelf.parse_ref(url) or {}
+    return parsed.get("filename") or url.rsplit("/", 1)[-1]
+
+
+def _allowed_refs(dsn, account_id) -> dict[str, str]:
+    """storable ref -> the catalogue's own URL string, for every photo the
+    account owns. The gate on `write_scene`: a ref is accepted only when
+    `elements` could have issued it, which refuses a typed URL, another
+    account's photo and a guess alike -- the candidate_id rule."""
+    from . import asset_shelf
+    allowed: dict[str, str] = {}
+    for item in asset_shelf.catalogue(dsn, account_id=account_id):
+        for url in item.get("photos") or []:
+            allowed[asset_shelf.storable_ref(url)] = url
+            allowed[url] = url
+    return allowed
+
+
+def _check_prompt(prompt: str) -> str:
+    text = " ".join((prompt or "").split())
+    if len(text.split()) < MIN_SCENE_WORDS:
+        raise ValueError(f"the scene prompt is too short ({len(text.split())} words; "
+                         f"at least {MIN_SCENE_WORDS}) -- write the whole scene")
+    if "{" in text and "}" in text:
+        raise ValueError("the scene prompt still carries a {placeholder} -- fill it in")
+    return (prompt or "").strip()
+
+
+def write_scene(idea_id: int, prompt: str, seconds: int = 10, refs=None,
+                dsn: Optional[str] = None,
+                account_id: Optional[int] = None) -> dict[str, Any]:
+    """Save a scene written in the chat onto the caller's idea.
+
+    The shot is the one `shootgen.generate_scene_concept` writes (n=1,
+    AI, the fal default tool, the prompt, its seconds, its refs), so
+    every reader -- the board, the Queue, pricing, the render loop --
+    treats it as any other scene. Timed windows in the prompt become the
+    timeline through `timeline.fallback`, the split with no model in it:
+    the chat already wrote each window as one shot, and a planner call
+    here would spend the money this door exists to save. `source` is
+    stamped so `timeline.ensure` reads it as current and never re-plans.
+
+    The reference gate is asked HERE, before the row changes: a scene
+    with no photographs never reaches the board from any other door
+    either (preprod.reference_gate), and refusing it with the reason is
+    kinder than saving a scene the Queue will refuse.
+    """
+    from . import shootgen, timeline
+    account_id = _account(account_id, dsn)
+    concept = preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id)
+    if concept is None:
+        raise ValueError(f"no idea {idea_id}")
+    prompt = _check_prompt(prompt)
+    seconds = timeline.scene_seconds(seconds)
+
+    wanted = [str(r).strip() for r in (refs or []) if str(r).strip()]
+    allowed = _allowed_refs(dsn, account_id)
+    picked: list[str] = []
+    for ref in wanted:
+        if ref not in allowed:
+            raise ValueError(
+                f"ref {ref!r} is not one of your elements' photos -- call "
+                "`elements` and pass a `ref` from its list (URLs and guesses are refused)")
+        stored = allowed[ref]
+        if stored not in picked:
+            picked.append(stored)
+
+    shot: dict[str, Any] = {
+        "n": 1, "type": "BROLL", "source": "AI",
+        "tool": shootgen.DEFAULT_SCENE_TOOL,
+        "desc": concept.get("logline") or concept.get("title") or "",
+        "prompt": prompt, "seconds": seconds, "refs": picked,
+        "written_by": "chat",
+    }
+    ungrounded = preprod.reference_gate({**concept, "shots": [shot]})
+    if ungrounded:
+        raise ValueError(
+            f"{ungrounded} -- attach at least one of your element photos "
+            "(`refs` from `elements`); the studio renders only against "
+            "photographs you attached")
+
+    windows = timeline.parse_windows(prompt)
+    if len(windows) >= 2:
+        split = timeline.fallback(prompt, windows, picked)
+        total = sum(w["seconds"] for w in windows)
+        shot["timeline"] = {"seconds": total, "planner": "split", "brain": None,
+                            "source": timeline.source_hash(prompt, picked),
+                            "continuity": split["continuity"], "parts": split["parts"]}
+        shot["seconds"] = total
+    previous = (concept.get("shots") or [{}])[0]
+    preprod.update_concept_shots(
+        int(idea_id), {"shots": [shot], "duration": f"{shot['seconds']}s"},
+        warnings=[], dsn=dsn, account_id=account_id)
+
+    out = get_idea(int(idea_id), dsn=dsn, account_id=account_id)
+    out["shots_written"] = len(windows) if len(windows) >= 2 else 1
+    out["seconds"] = shot["seconds"]
+    if previous.get("media_url") or previous.get("reference_image"):
+        out["note"] = ("the idea's earlier scene had renders attached; they stay on "
+                       "the Assets wall but are no longer this idea's")
+    out["next"] = "`pick` it, then `quote` for the price, then `approve`"
+    return out
+
+
+def quote_render(idea_id: int, provider: Optional[str] = None, model: Optional[str] = None,
+                 duration: Optional[int] = None, frame: Optional[str] = None,
+                 dsn: Optional[str] = None,
+                 account_id: Optional[int] = None) -> dict[str, Any]:
+    """The price of rendering an idea, as the Queue card prints it:
+    pricing.display for the clip (one render per timed shot, a token per
+    render when the server can sign) and scene_chain.keyframe_quote for
+    the stills, beside the balance. Nothing is held or spent."""
+    from . import accounts, ledger, pricing, scene_chain
+    account_id = _account(account_id, dsn)
+    concept = preprod.get_concept(int(idea_id), dsn=dsn, account_id=account_id)
+    if concept is None:
+        raise ValueError(f"no idea {idea_id}")
+    shot = (concept.get("shots") or [None])[0]
+    if not shot or not (shot.get("prompt") or "").strip():
+        raise ValueError(f"idea {idea_id} has no scene prompt yet -- `write_scene` first")
+    ungrounded = preprod.reference_gate(concept)
+    if ungrounded:
+        raise ValueError(f"{ungrounded} -- `write_scene` with `refs` from `elements`")
+    try:
+        clip = pricing.display(account_id=account_id, shot=shot, shot_id=int(idea_id),
+                               provider=provider, model=model, seconds=duration, frame=frame)
+    except pricing.PricingRefused as e:
+        if e.reason == "nothing_to_render":
+            clip = None
+        else:
+            raise ValueError(str(e)) from e
+    except ValueError as e:
+        raise ValueError(f"bad renderer choice: {e}") from e
+    keyframes = scene_chain.keyframe_quote(concept)
+    exempt = bool(account_id is not None and accounts.is_credit_exempt(account_id, dsn=dsn))
+    # the ledger's tables exist wherever the app booted; a bare database
+    # (stdio on a fresh clone, a test schema) gets them here, idempotently
+    ledger.init(dsn)
+    balance = None if account_id is None else ledger.available(account_id, dsn=dsn)
+    needed = (keyframes or {}).get("credits", 0) + ((clip or {}).get("credits") or 0)
+    return {
+        "idea_id": int(idea_id),
+        "picked": bool(concept.get("picked")),
+        "keyframes": keyframes,
+        "clip": clip,
+        "balance": balance,
+        "exempt": exempt,
+        "credits_needed": needed,
+        "affordable": exempt or balance is None or balance >= needed,
+        "note": ("every shot already has a clip" if clip is None else
+                 "tokens are valid for one hour; pass them to `approve` with the same "
+                 "renderer choice" if (clip or {}).get("signed") else
+                 "this server signs no quotes; `approve` takes the renderer choice alone"),
+    }
 
 
 # --- the night's direction -------------------------------------------------
@@ -1234,12 +1466,18 @@ ENGINE_TOOLS = (run_research, run_graph)
 
 def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                  start_job=None, job_status=None, account_id: Optional[int] = None,
-                 engine: Optional[bool] = None, listed: bool = False):
+                 engine: Optional[bool] = None, listed: bool = False,
+                 approve_render=None, approve_keyframes=None):
     """Wrap the functions above as an MCP server.
 
     `listed=True` registers LISTED_TOOLS only -- the set a stranger reaches
     through the directory listing -- and never the engine tools, whatever
     the flag says. The mount builds one of each and routes by door.
+
+    `approve_render` / `approve_keyframes` are app/api.py's priced approve
+    bodies, injected like `start_job` because src/ never imports app/.
+    The `approve` tool registers only when both are given; a server
+    without them (stdio, a test) has `quote` and no way to spend.
 
     `account_id` is whose board this server reads (2026-09-18): the
     Guide opens one in-process per signed-in request, and the board it
@@ -1428,6 +1666,47 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                         finding_id=finding["id"] if finding else None,
                         account_id=_account(account_id, dsn),
                         _label=f"graph {brand}")
+
+    @_reg("elements")
+    def elements() -> dict:
+        return _t(list_elements, dsn=dsn, account_id=account_id)
+
+    @_reg("write_scene")
+    def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,
+                         refs: Optional[list[str]] = None) -> dict:
+        return _t(write_scene, idea_id, prompt, seconds=seconds, refs=refs,
+                  dsn=dsn, account_id=account_id)
+
+    @_reg("quote")
+    def quote(idea_id: int, provider: Optional[str] = None, model: Optional[str] = None,
+              duration: Optional[int] = None, frame: Optional[str] = None) -> dict:
+        return _t(quote_render, idea_id, provider=provider, model=model,
+                  duration=duration, frame=frame, dsn=dsn, account_id=account_id)
+
+    if approve_render is not None and approve_keyframes is not None:
+        @_reg("approve")
+        def approve(idea_id: int, what: WhatToApprove = "clip",
+                    tokens: Optional[list[str]] = None, provider: Optional[str] = None,
+                    model: Optional[str] = None, duration: Optional[int] = None,
+                    frame: Optional[str] = None) -> dict:
+            from .approvals import ApproveRefused
+            acting = _account(account_id, dsn)
+            try:
+                if what == "keyframes":
+                    out = approve_keyframes(int(idea_id), acting)
+                else:
+                    out = approve_render(int(idea_id), acting, {
+                        "provider": provider, "model": model, "duration": duration,
+                        "frame": frame, "tokens": [t for t in (tokens or []) if t]})
+            except ApproveRefused as e:
+                hint = (" -- call `quote` and pass its tokens"
+                        if e.code in ("missing_quote", "expired", "stale_content",
+                                      "wrong_render", "bad_signature") else
+                        " -- `pick` the idea first" if e.code == "not_queued" else "")
+                raise ToolError(f"{e.code}: {e.message}{hint}") from e
+            out = dict(out)
+            out.setdefault("note", "started; poll with the `job` tool")
+            return out
 
     if job_status is not None:
         @_reg("job")
