@@ -51,7 +51,7 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | P17–P21 | skills | PASS — each under 100 lines, frontmatter `name` + `description` with a "NOT for" line |
 | P22 | `claude plugin validate` | PASS — `✔ Validation passed`, 2026-10-07, Claude Code 2.1.285 |
 | P23 | loaded on each surface | UNKNOWN — Mike: `claude --plugin-dir ./zeropage-studio-plugin`, then the zip upload on claude.ai |
-| P24 | GitHub repo, public before going live | TO DO — the folder is a local repo with one commit, not pushed |
+| P24 | GitHub repo, public before going live | PASS — https://github.com/zeropage-onryo/zeropage-studio-plugin, public |
 | P25–P28 | portal steps | drafted below |
 
 ### What changed in Phase 4 (on this branch, not deployed)
@@ -218,9 +218,10 @@ Not on the listed server (operator's door only): sparks, tonight, add_spark, ima
 5. **Walk `OAUTH_TEST.md`** with `zp-billing-test`; take the screenshots.
 6. **Populate the test account** as the reviewer instructions describe; put
    its credentials in the portal only.
-7. **Create the GitHub repo** `zeropage-onryo/zeropage-studio-plugin`, push
-   `/Users/iphone/Documents/zeropage-studio-plugin` (one commit, `main`),
-   make it public before publishing. Enable Issues (the support contact).
+7. ~~Create the GitHub repo~~ **Done 2026-10-07:**
+   https://github.com/zeropage-onryo/zeropage-studio-plugin, public, `main`,
+   Issues on (the support contact), MIT detected by GitHub. Commits are
+   authored as Zero Page Studio <noreply@zeropage.studio>.
 8. **Icon**: a square PNG.
 9. **Portal, connector**: claude.ai/directory/manage → Submit new → MCP
    connector → fill the fields above → Test & launch → Compliance → submit.
