@@ -377,11 +377,19 @@ def signin_showcase() -> list[dict]:
 # gone from the bucket and 404'd on this page until 2026-10-07. Absolute
 # keys rather than media.url_for, so the door does not depend on which
 # rung of ZEROPAGE_MEDIA the serving machine is on.
+#
+# 2026-10-07 (Mike's pick off a contact sheet): two product ads first, then
+# two cinematic keyframes, so the door shows both kinds of work the studio
+# makes and opens on something bright rather than the creature. The ads are
+# the made-up products on the /make page's wall (SOLÈNE perfume, KUMO
+# matcha), served from the public site -- never the four real-brand stills
+# on that wall, which on a sign-in page would read as endorsements.
 _R2_NANO = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/m/1/renders/nano"
+_ADS = "https://zeropage.studio/make/ai-product-ad-generator"
 SIGNIN_SHOWCASE_DEFAULT: list[dict] = [
-    {"label": "Bring a spark", "image": f"{_R2_NANO}/c361-20260911-161358.png"},
-    {"label": "Write the scene", "image": f"{_R2_NANO}/c351-20260910-135712.png"},
-    {"label": "Pick the frame", "image": f"{_R2_NANO}/c353-20260909-181442.png"},
+    {"label": "Bring a spark", "image": f"{_ADS}/fragrance.jpg"},
+    {"label": "Write the scene", "image": f"{_ADS}/matcha.jpg"},
+    {"label": "Pick the frame", "image": f"{_R2_NANO}/c361-20260911-161358.png"},
     {"label": "Render the clip", "image": f"{_R2_NANO}/c348-20260908-073120.png"},
 ]
 
