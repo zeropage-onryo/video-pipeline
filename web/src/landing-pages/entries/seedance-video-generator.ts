@@ -39,8 +39,8 @@ export const SEEDANCE: MakePage = {
     title: "Seedance 2.5 AI Video Generator",
     description:
       "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.5: 4 to 30 seconds a clip with synchronized sound, 480p to 1080p, priced before you approve.",
-    h1: "Seedance 2.5 Video Generator",
-    menu: "Seedance 2.5 Video Generator",
+    h1: "Seedance 2.5",
+    menu: "Seedance 2.5",
     subhead:
       "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.5, 4 to 30 seconds a clip with sound, up to 1080p.",
     cta: {

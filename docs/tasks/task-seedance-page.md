@@ -20,7 +20,7 @@ keyframe on all three.
 ## 1. Hero
 
 - [x] `title` (the <title>): "Seedance 2.5 AI Video Generator"
-- [x] `h1`: "Seedance 2.5 Video Generator" (menu line the same)
+- [x] `h1`: "Seedance 2.5" (menu line the same; the title tag keeps "AI Video Generator" for search)
 - [x] `subhead`: "Write a scene, anchor every shot on your reference photos, and render it on Seedance 2.5, 4 to 30 seconds a clip with sound, up to 1080p."
 - [x] CTA label "Make a scene"; secondary "See the shots" -> `#shots`
 - [x] The spark the composer opens on: "A 30-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance 2.5."
