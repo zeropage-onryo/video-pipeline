@@ -26,9 +26,27 @@ import type { MakePage, MakeTile } from "../pages";
 
 const SCENE_SECONDS = 15;
 const SHOTS = [
-  { label: "Wide establishing", start: 0, end: 5, prompt: "Wide, static. A ceramics studio at dawn; dust hangs in one shaft of light over the wheel." },
-  { label: "Macro detail", start: 5, end: 10, prompt: "Macro, slow push-in. Wet thumbs open the clay on the spinning wheel; slip runs over the knuckles." },
-  { label: "The action", start: 10, end: 15, prompt: "Medium, handheld. She lifts the glazed cup to the window and turns it once; the indigo catches the light." },
+  {
+    label: "Wide establishing",
+    start: 0,
+    end: 5,
+    prompt: "Wide, static. A ceramics studio at dawn: the potter at the wheel by the window, one bulb burning over the shelves.",
+    sound: "the wheel's low hum, a bird outside",
+  },
+  {
+    label: "Macro detail",
+    start: 5,
+    end: 10,
+    prompt: "Macro, slow push-in. Wet hands open the clay on the spinning wheel; slip runs over the knuckles.",
+    sound: "wet clay under the thumbs",
+  },
+  {
+    label: "The action",
+    start: 10,
+    end: 15,
+    prompt: "Close, handheld. Clay-dusted hands lift the indigo cup to the window and turn it once.",
+    sound: "a fingertip taps the rim",
+  },
 ] as const;
 
 export function ShotTimeline({ page }: { page: MakePage }) {
@@ -62,16 +80,16 @@ export function ShotTimeline({ page }: { page: MakePage }) {
       {/* the pinned block: two and a half screens of scroll under reduced-motion-free pointers, one plain section otherwise */}
       <div ref={outer} className={still ? "" : "h-[260svh]"}>
         <div className={still ? "" : "sticky top-[60px] flex h-[calc(100svh-60px)] flex-col justify-center"}>
-          <div className="mx-auto w-full max-w-[1100px] px-4 py-14 md:px-6 md:py-16">
+          <div className="mx-auto w-full max-w-[1100px] px-4 py-6 md:px-6 md:py-16">
             <div className="flex flex-col items-center gap-3 text-center">
               <span className="eyebrow">One scene, three timed shots</span>
               <h2 className="serif text-[clamp(1.75rem,4.2vw,3rem)]">
-                Each shot is its own Seedance clip.
+                Each shot is its own Seedance 2.5 clip.
               </h2>
             </div>
 
             {/* the rail: 0 to 15 s, one mark per shot, filled by the scroll */}
-            <div className="mt-8 md:mt-10">
+            <div className="mt-5 md:mt-10">
               <div className="flex items-center justify-between text-[12px] font-medium text-[var(--ink-3)]">
                 <span>0s</span>
                 <span className="inline-flex items-center gap-2 tabular-nums text-foreground">
@@ -100,7 +118,7 @@ export function ShotTimeline({ page }: { page: MakePage }) {
             </div>
 
             {/* the three shots */}
-            <div className="mt-6 grid grid-cols-3 gap-3 md:mt-8 md:gap-4">
+            <div className="mt-4 grid grid-cols-3 gap-3 md:mt-8 md:gap-4">
               {SHOTS.map((shot, i) => (
                 <ShotCard
                   key={shot.label}
@@ -116,7 +134,7 @@ export function ShotTimeline({ page }: { page: MakePage }) {
             </div>
 
             {/* the active shot's line, swapped as the ring moves */}
-            <div aria-live="polite" className="mx-auto mt-6 min-h-[4.5rem] max-w-[56ch] text-center md:mt-8">
+            <div aria-live="polite" className="mx-auto mt-4 min-h-[4.5rem] max-w-[56ch] text-center md:mt-8">
               <AnimatePresence mode="wait" initial={false}>
                 <motion.p
                   key={active}
@@ -124,12 +142,13 @@ export function ShotTimeline({ page }: { page: MakePage }) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={still ? undefined : { opacity: 0, y: -8 }}
                   transition={{ duration: 0.28, ease: EASE_OUT }}
-                  className="text-[15px] leading-relaxed text-[var(--ink-2)] md:text-[16px]"
+                  className="text-[14px] leading-relaxed text-[var(--ink-2)] md:text-[16px]"
                 >
                   <span className="font-semibold text-foreground">
                     Shot {active + 1} of {SHOTS.length} ({SHOTS[active].start}–{SHOTS[active].end}s):
                   </span>{" "}
-                  {SHOTS[active].prompt}
+                  {SHOTS[active].prompt}{" "}
+                  <span className="text-[var(--ink-3)]">Sound: {SHOTS[active].sound}.</span>
                 </motion.p>
               </AnimatePresence>
             </div>
@@ -181,7 +200,7 @@ function ShotCard({
       )}
       <motion.div
         style={{ opacity: still ? 1 : lit }}
-        className="relative h-[clamp(150px,34svh,400px)] w-full overflow-hidden rounded-xl bg-card"
+        className="relative h-[clamp(140px,30svh,400px)] md:h-[clamp(150px,34svh,400px)] w-full overflow-hidden rounded-xl bg-card"
       >
         {tile?.src ? (
           <Image src={tile.src} alt={tile.title} fill sizes="(min-width: 1024px) 30vw, 33vw" quality={70} className="object-cover" />

@@ -26,13 +26,13 @@ keyframe on all three.
 - [x] The spark the composer opens on: "A 30-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on Seedance 2.5."
 - [x] `description` (meta + OG): one line, 2.5, 4-30 s with sound, 480p to 1080p, priced before approve
 
-## 2. Signature: the scroll-scrubbed scene (`shot-timeline.tsx`)
+## 2. Signature: the scroll-scrubbed scene (`shot-timeline.tsx`), done 2026-10-07
 
-- [ ] The three shots' labels and lines (`SHOTS` in the component: "Wide establishing" / "Macro detail" / "The action", a workshop at dawn)
-- [ ] The scene length (15 s, three 5-second windows) -- matches what Seedance renders
-- [ ] The eyebrow and title: "One scene, three timed shots" / "Each shot is its own Seedance clip."
-- [ ] Frames read the wall's first three tiles; a real still on a tile shows here too
-- [ ] Pin length (2.6 screens) and feel on a phone
+- [x] Three shots matched to the signature's own stills (`signatureFrames`, a ceramics studio at dawn), each line now carrying its sound: "the wheel's low hum, a bird outside" / "wet clay under the thumbs" / "a fingertip taps the rim"
+- [x] Length kept at 15 s in three 5 s windows (the page's clips are snippets)
+- [x] Eyebrow "One scene, three timed shots"; title "Each shot is its own Seedance 2.5 clip."
+- [x] Frames: three Nano Banana Pro stills drawn on Runway (60 credits)
+- [x] Phone: the pinned block was 698 px in a 607 px pin on 375x667; tightened below md only (padding, gaps, card height, caption size) to 572 px
 
 ## 3. The wall (`SEEDANCE_TILES`)
 
