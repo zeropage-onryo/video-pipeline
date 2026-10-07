@@ -15,7 +15,8 @@
    on the left, the tiles under it. A make proposal is never a card. */
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Clapperboard, Film, ImagePlus, Play, RotateCcw, Workflow } from "lucide-react";
+import { Clapperboard, Film, ImagePlus, ListVideo, Play, RotateCcw } from "lucide-react";
+import { sceneHref } from "@/lib/studio-api";
 import { cssAspect, isMake, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
@@ -34,6 +35,8 @@ type Handlers = {
   onSelect: (madeId: string, n: number) => void;
   onChip: (text: string) => void;
   onDecide: (i: number, yes: boolean) => void;
+  /** a written scene's Send to Queue: the pick, never a render */
+  onPick: (m: Made) => void;
   onToggleFrame: (i: number, id: string) => void;
   onKeep: (i: number, sheet: ContactSheet) => void;
 };
@@ -149,7 +152,9 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
     );
   }
 
-  const director = m.conceptId ? `/studio/flows?concept=${m.conceptId}&shot=${m.output === "video" ? selected : 1}` : null;
+  // the scene's canvas: inside its project's workspace when it is filed
+  // under one, else on its own (/studio/scene resolves which)
+  const director = m.conceptId ? sceneHref(m.conceptId, m.output === "video" ? selected : 1) : null;
 
   return (
     <>
@@ -167,14 +172,14 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
               </button>
             </>
           ) : null}
-          {m.output === "video" ? (
-            <Link href="/studio/pipeline" className="zc-act">
-              <Workflow strokeWidth={1.6} /> Pick on Pipeline
-            </Link>
+          {m.output === "video" && m.conceptId ? (
+            <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onPick(m)}>
+              <ListVideo strokeWidth={1.6} /> Send to Queue
+            </button>
           ) : null}
           {director ? (
             <Link href={director} className="zc-act">
-              <Clapperboard strokeWidth={1.6} /> Open in Director
+              <Clapperboard strokeWidth={1.6} /> Open the canvas
             </Link>
           ) : null}
           <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>

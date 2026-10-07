@@ -320,6 +320,10 @@ OWNED_TABLES = (
     # studio projects (2026-09-28, src/projects.py): one client's brief and
     # what that project has learned -- the addressed half of the memory
     "projects",
+    # a project's chat history (2026-10-07, src/projects.py): the Guide
+    # turns had inside it -- user content, kept until the project is
+    # deleted and never fed to the shared shelves
+    "project_messages",
     # the LLM meter (2026-09-04): a metered call is one account's spend
     "llm_calls",
     # the prepaid credit ledger (2026-09-08, docs/CREDIT_LEDGER_DESIGN.md).

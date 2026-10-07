@@ -53,8 +53,21 @@ Three settings, the same on either host, all fixed at BUILD time:
 | setting | value | why |
 |---|---|---|
 | `API_UPSTREAM` | `https://zeropage-studio.fly.dev` | the proxy's target; the rewrites are computed by `next build` |
-| `NEXT_PUBLIC_AUTH_ORIGIN` | `https://zeropage-studio.fly.dev` | where Sign in / Sign out navigate |
+| `NEXT_PUBLIC_AUTH_ORIGIN` | `https://api.zeropage.studio` (Production); `https://zeropage-studio.fly.dev` (Preview) | where Sign in / Sign out navigate |
 | `NEXT_PUBLIC_API_URL` | *unset* | leaving it unset keeps fetches same-origin |
+
+**Why sign-in goes to `api.zeropage.studio` (2026-10-07).** Chrome showed a
+"Did you mean zeropage.studio?" lookalike warning when Sign in on
+`zeropage.studio` navigated to `zeropage-studio.fly.dev`. The API now also
+answers on `api.zeropage.studio` (a Fly certificate on `zeropage-studio`,
+and an `api` CNAME to `d6rkm5r.zeropage-studio.fly.dev` in the Vercel DNS
+zone), and only the Production sign-in/sign-out NAVIGATION moved there.
+`API_UPSTREAM`, the proxy, the handoff and the cookie are unchanged, and the
+`fly.dev` hostname keeps serving: Preview builds still sign in there, and it
+is still the proxy's target. The API builds Supabase's `redirect_to` from the
+request host, so `https://api.zeropage.studio/auth/callback` has to be on
+Supabase's Redirect URLs list beside the `fly.dev` one. The rest of the move
+(direct fetches, a shared cookie domain) is `docs/tasks/task-api-domain-move.md`.
 
 ### Vercel (git-connected; the recommended host)
 
@@ -78,6 +91,16 @@ Three settings, the same on either host, all fixed at BUILD time:
    the skip. The file is only read because Root Directory is `web`; move
    the root and the setting moves to the dashboard (Settings -> Git ->
    Ignored Build Step) with the same command.
+   **So a `NEXT_PUBLIC_*` change cannot be rebuilt by redeploying.** A
+   redeploy builds the same commit, the diff is empty, and the build is
+   canceled. Deploy from the CLI instead, which skips the step. Run it from
+   the REPOSITORY ROOT (Root Directory is `web`, so a deploy from inside
+   `web/` fails with "Root Directory does not exist"), on a clean checkout of
+   the commit production runs, with `.claude` listed in a temporary
+   `.vercelignore` (the CLI does not read `.gitignore`):
+   `npx vercel@latest link --yes --project zpf-web --scope zero-page-ai`, then
+   `npx vercel@latest deploy --prod --scope zero-page-ai`. `vercel link`
+   also writes `.env.local` and appends to `.gitignore`; remove both after.
 5. On the API, once the hostname is known (e.g. `zpf-web.vercel.app`):
    it must be in `FRONTEND_ORIGINS` (preview hosts match
    `FRONTEND_ORIGIN_REGEX`), and `STUDIO_URL` should point at it so `/ui`,
@@ -87,7 +110,7 @@ Three settings, the same on either host, all fixed at BUILD time:
 ### Fly (`zeropage-web`)
 
 ```bash
-cd web && fly deploy --remote-only --yes --build-arg NEXT_PUBLIC_AUTH_ORIGIN=https://zeropage-studio.fly.dev
+cd web && fly deploy --remote-only --yes --build-arg NEXT_PUBLIC_AUTH_ORIGIN=https://api.zeropage.studio
 ```
 
 `web/Dockerfile` bakes `API_UPSTREAM` in with a default of the API's

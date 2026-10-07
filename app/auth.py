@@ -208,8 +208,12 @@ def studio_handoff(user_id: str, path: str = "/studio") -> Optional[RedirectResp
 
 
 # how the Jinja shell's `?view=` addresses map onto the React studio's pages
+# pipeline and director both land on the Projects board since 2026-10-07
+# (Mike's call: one board of projects replaced both tabs); /studio/flows
+# is the redirect that keeps a Director link's ?concept= and forwards it
+# to that scene's workspace.
 STUDIO_VIEWS = {"studio": "/studio", "assets": "/studio/assets",
-                "pipeline": "/studio/pipeline", "director": "/studio/flows",
+                "pipeline": "/studio/projects", "director": "/studio/flows",
                 "elements": "/studio/elements", "queue": "/studio/queue"}
 
 

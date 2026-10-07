@@ -1,441 +1,267 @@
 "use client";
 
-/* Projects (2026-09-28, Mike's call).
+/* Projects — the studio's home (2026-10-07, Mike's call).
 
-   The studio stopped being two in-house channels the day ANTIHERO was
-   folded into Zero Page. A piece of work -- a client's ad, a filmmaker's
-   short, a launch -- is a PROJECT now, and each one carries its own saved
-   memory: the brief (typed, or drafted from three answers and then edited)
-   and what the project has learned from every pick, pass and hand edit
-   made inside it. Every Create inside a project is written against both,
-   which is what keeps its renders consistent with each other.
+   A concept is one scene; a PROJECT is what holds scenes -- a client's ad,
+   a short, a launch -- with its own brief, look and memory. This board of
+   projects replaced both the Pipeline tab and the standalone Director tab:
+   a card opens the project's workspace (its scenes, the Director canvas and
+   the assistant pill scoped to it), where the deciding and the canvas work
+   happen.
 
-   This page is the only door. "Open in Studio" hands the project to the
-   composer (?project=<id>); the composer carries it until the chip is
-   cleared. Archiving hides a project and never deletes it. */
-/* eslint-disable @next/next/no-img-element */
-import { useCallback, useEffect, useState } from "react";
+   Two things this page deliberately does not have:
+   - a "New project" control. Projects are made only through the Guide --
+     tell the pill "make a project for …", or "save this as a project" after
+     a conversation. An empty board says so and points at the pill.
+   - a section for scenes outside any project. A single video made with no
+     project is finished on the Assets wall, not here; the board is projects
+     only.
+
+   Archive hides a project and keeps everything. Delete is the one real
+   delete in the studio and takes the project's chat history with it; its
+   scenes are detached, never deleted (components/studio/project-delete). */
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Archive, ArchiveRestore, FolderKanban, Plus, Sparkles, X } from "lucide-react";
-import {
-  archiveProject,
-  boardConcepts,
-  createProject,
-  draftProjectBrief,
-  forgetProjectMemory,
-  getProject,
-  listProjects,
-  rememberActiveProject,
-  updateProject,
-  type Concept,
-  type Project,
-  type ProjectQuestion,
-} from "@/lib/studio-api";
+import { Archive, ArchiveRestore, MessageCircle, Search, Trash2 } from "lucide-react";
+import { archiveProject, listProjects, workspaceHref, type Project } from "@/lib/studio-api";
+import { CARD, ICON_BTN, RefImg } from "@/components/studio/concept-card";
+import { DeleteProjectDialog } from "@/components/studio/project-delete";
 import { useShell } from "@/components/studio/shell";
 
-const CARD = "rounded-xl border border-white/10 bg-white/[0.03]";
-const BTN = "rounded-lg px-3 py-1.5 text-[13px] transition disabled:opacity-40";
-const FIELD =
-  "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[13px] text-white/90 outline-none focus:border-white/30";
+type Shelf = "active" | "archived";
 
-const KIND_LABEL: Record<string, string> = {
-  pick: "picked",
-  pass: "passed",
-  edit: "edited",
-  note: "note",
-};
+/** "today", "yesterday", "3 days ago", else the date */
+function touched(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const days = Math.floor((Date.now() - t) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
 
-function NewProject({
-  questions,
-  onMade,
-  onCancel,
-}: {
-  questions: ProjectQuestion[];
-  onMade: (p: Project) => void;
-  onCancel: () => void;
-}) {
-  const { toast } = useShell();
-  const [title, setTitle] = useState("");
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [brief, setBrief] = useState("");
-  const [busy, setBusy] = useState("");
+/** the brief's first real line, for the card -- never the label lines' keys */
+function briefLine(p: Project): string {
+  const line = (p.brief || "")
+    .split("\n")
+    .map((l) => l.replace(/^\s*(FOR|LOOK|PEOPLE & PRODUCT|ALWAYS|NEVER)\s*:\s*/i, "").trim())
+    .find(Boolean);
+  return line || "No brief yet — the scenes follow what you ask for.";
+}
 
-  const draft = async () => {
-    setBusy("drafting the brief…");
+export default function ProjectsBoard() {
+  const { me, brand, toast } = useShell();
+  const [shelf, setShelf] = useState<Shelf>("active");
+  const [query, setQuery] = useState("");
+  // keyed by what it was read for, so an account switch never shows the
+  // previous account's projects
+  const [read, setRead] = useState<{ key: string; items: Project[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Record<number, boolean>>({});
+  const [doomed, setDoomed] = useState<Project | null>(null);
+  const seq = useRef(0);
+  const key = `${brand}:${shelf}`;
+
+  const load = () => {
+    const mine = ++seq.current;
+    const at = key;
+    // archived=true is every project; the Archived shelf is its archived half
+    listProjects(shelf === "archived")
+      .then((r) => {
+        if (mine !== seq.current) return;
+        setRead({ key: at, items: shelf === "archived" ? r.items.filter((p) => p.archived) : r.items });
+        setError(null);
+      })
+      .catch((e) => {
+        if (mine === seq.current) setError(e instanceof Error ? e.message : "Projects unavailable");
+      });
+  };
+  useEffect(() => {
+    if (!me) return; // the shell has not said who this is yet
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, brand, shelf]);
+
+  const items = read && read.key === key ? read.items : null;
+  const needle = query.trim().toLowerCase();
+  const shown = useMemo(
+    () => (items || []).filter((p) => !needle || `${p.title} ${p.brief}`.toLowerCase().includes(needle)),
+    [items, needle],
+  );
+
+  const toggleArchive = async (p: Project) => {
+    setBusy((b) => ({ ...b, [p.id]: true }));
     try {
-      const r = await draftProjectBrief(title || "untitled", answers);
-      setBrief(r.brief);
+      await archiveProject(p.id, !p.archived);
+      toast(p.archived ? `“${p.title}” is back on the board` : `“${p.title}” archived — nothing in it was deleted`);
+      load();
     } catch (e) {
-      toast(e instanceof Error ? e.message : "couldn't draft the brief", "err");
+      toast(e instanceof Error ? e.message : "That did not go through", "err");
     } finally {
-      setBusy("");
+      setBusy((b) => ({ ...b, [p.id]: false }));
     }
   };
-
-  const save = async () => {
-    setBusy("saving…");
-    try {
-      onMade(await createProject(title.trim(), brief));
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "couldn't save the project", "err");
-      setBusy("");
-    }
-  };
-
-  const answered = questions.some((q) => (answers[q.key] || "").trim());
 
   return (
-    <section className={`${CARD} flex flex-col gap-3 p-4`}>
-      <header className="flex items-center gap-2">
-        <h2 className="text-[14px]">New project</h2>
-        <button type="button" onClick={onCancel} className="ml-auto text-white/40 hover:text-white/80" aria-label="Cancel">
-          <X size={16} />
-        </button>
-      </header>
-      <input
-        className={FIELD}
-        placeholder="Name — e.g. Nike trail spot, “Undertow” short, Juno cocktail menu"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        autoFocus
-      />
-      <p className="text-[12px] text-white/50">
-        Answer what you can and let the assistant draft the brief — or skip straight to writing it yourself.
-      </p>
-      {questions.map((q) => (
-        <label key={q.key} className="flex flex-col gap-1">
-          <span className="text-[12px] text-white/60">{q.label}</span>
-          <textarea
-            className={`${FIELD} min-h-[56px]`}
-            value={answers[q.key] || ""}
-            onChange={(e) => setAnswers((a) => ({ ...a, [q.key]: e.target.value }))}
+    <section className="view" style={{ paddingTop: 0 }}>
+      <div className="vhead" style={{ marginTop: 8 }}>
+        <h2>Projects</h2>
+        <span className="spacer" />
+        <span className="m">
+          {items ? `${items.length} ${shelf === "archived" ? "archived" : "active"}` : brand || "—"}
+        </span>
+      </div>
+      <div className="chead">
+        <h3>{shelf === "archived" ? "Archived" : "Your projects"}</h3>
+        <span className="spacer" />
+        <label className="csearch">
+          <Search strokeWidth={1.6} />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Find a project…"
+            aria-label="Find a project"
           />
         </label>
-      ))}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          disabled={!answered || !!busy}
-          onClick={() => void draft()}
-          className={`${BTN} border border-white/15 hover:bg-white/10`}
-        >
-          <Sparkles size={13} className="mr-1 inline" /> Draft the brief
-        </button>
-        {busy && <span className="text-[12px] text-white/50">{busy}</span>}
+        <div className="cats" style={{ margin: 0, padding: 0 }}>
+          {(["active", "archived"] as Shelf[]).map((s) => (
+            <button type="button" key={s} className="cat" aria-pressed={shelf === s} onClick={() => setShelf(s)}>
+              {s === "active" ? "Active" : "Archived"}
+            </button>
+          ))}
+        </div>
       </div>
-      <label className="flex flex-col gap-1">
-        <span className="text-[12px] text-white/60">Brief — every scene in this project is written against it</span>
-        <textarea
-          className={`${FIELD} min-h-[160px] font-mono text-[12px]`}
-          value={brief}
-          onChange={(e) => setBrief(e.target.value)}
-          placeholder={"FOR: …\nLOOK: …\nPEOPLE & PRODUCT: …\nALWAYS: …\nNEVER: …"}
-        />
-      </label>
-      <div className="flex justify-end">
-        <button
-          type="button"
-          disabled={!title.trim() || !!busy}
-          onClick={() => void save()}
-          className={`${BTN} border border-white/25 bg-white/15 text-white hover:bg-white/25`}
-        >
-          Create project
-        </button>
+
+      {error ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{error}</div> : null}
+      {items && !shown.length ? (
+        needle && items.length ? (
+          <p className="stateline" style={{ padding: "0 42px" }}>
+            Nothing here matches “{query.trim()}”
+          </p>
+        ) : shelf === "archived" ? (
+          <p className="stateline" style={{ padding: "0 42px" }}>
+            Nothing archived
+          </p>
+        ) : (
+          <EmptyBoard />
+        )
+      ) : null}
+
+      <div className="mx-auto mb-24 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(340px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
+        {!items && !error
+          ? Array.from({ length: 3 }, (_, i) => (
+              <div key={i} aria-hidden className={`${CARD} border-noir-line2 motion-safe:animate-pulse`}>
+                <div className="aspect-video w-full rounded-t-[9px] bg-noir-slate" />
+                <div className="flex flex-col gap-3 px-4 pb-4 pt-3.5">
+                  <div className="h-[26px] w-2/3 rounded-[4px] bg-noir-slate" />
+                  <div className="h-4 w-5/6 rounded-[4px] bg-noir-raise" />
+                </div>
+              </div>
+            ))
+          : null}
+        {shown.map((p) => (
+          <article
+            key={p.id}
+            data-id={p.id}
+            className={`${CARD} border-noir-line2 ${p.archived ? "opacity-60 focus-within:opacity-100 hover:opacity-100" : ""}`}
+          >
+            <Link
+              href={workspaceHref(p.id)}
+              aria-label={`Open ${p.title}`}
+              className="group relative block aspect-video w-full overflow-hidden rounded-t-[9px] bg-noir-slate focus-visible:rounded-t-[9px]!"
+            >
+              {p.cover ? (
+                <RefImg
+                  url={p.cover}
+                  thumb
+                  small={p.cover_thumb || ""}
+                  className="block size-full object-cover group-hover:brightness-110"
+                  deadLabel="COVER UNAVAILABLE"
+                  deadClassName="absolute inset-0 text-[11px] tracking-[0.16em]"
+                />
+              ) : (
+                <span className="flex size-full items-center justify-center font-plex text-[11px] tracking-[0.16em] text-bone3">
+                  NO SCENES YET
+                </span>
+              )}
+            </Link>
+            <div className="flex min-w-0 flex-col gap-2 px-4 pb-4 pt-3.5">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <Link href={workspaceHref(p.id)} className="min-w-0 flex-1 text-bone! hover:text-bone!">
+                  <h4 className="m-0 truncate font-bebas text-[26px] font-normal leading-none tracking-[0.03em]" title={p.title}>
+                    {p.title}
+                  </h4>
+                  <p className="m-0 mt-1 truncate text-[14px] text-bone2" title={p.brief || undefined}>
+                    {briefLine(p)}
+                  </p>
+                </Link>
+                <div className="flex flex-none gap-1.5">
+                  <button
+                    type="button"
+                    className={ICON_BTN}
+                    disabled={busy[p.id]}
+                    title={p.archived ? "Put back on the board" : "Archive — hide it, keep everything"}
+                    aria-label={p.archived ? `Restore ${p.title}` : `Archive ${p.title}`}
+                    onClick={() => void toggleArchive(p)}
+                  >
+                    {p.archived ? <ArchiveRestore size={18} strokeWidth={2} aria-hidden /> : <Archive size={18} strokeWidth={2} aria-hidden />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${ICON_BTN} hover:enabled:border-noir-red! hover:enabled:text-noir-red!`}
+                    disabled={busy[p.id]}
+                    title="Delete the project and its chat history"
+                    aria-label={`Delete ${p.title}`}
+                    onClick={() => setDoomed(p)}
+                  >
+                    <Trash2 size={18} strokeWidth={2} aria-hidden />
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-plex text-[11px] tracking-[0.06em] text-bone3">
+                <span>
+                  {p.concepts ?? 0} SCENE{p.concepts === 1 ? "" : "S"}
+                </span>
+                <span>{p.picked ?? 0} PICKED</span>
+                <span>{p.rendered ?? 0} RENDERED</span>
+                <span className="ml-auto">UPDATED {touched(p.updated_at).toUpperCase()}</span>
+              </div>
+            </div>
+          </article>
+        ))}
       </div>
+
+      <DeleteProjectDialog
+        project={doomed}
+        onClose={() => setDoomed(null)}
+        onDeleted={(p) => {
+          setDoomed(null);
+          toast(`“${p.title}” and its chat history are deleted — its scenes were kept`);
+          load();
+        }}
+      />
     </section>
   );
 }
 
-function ProjectDetail({ id, onChanged }: { id: number; onChanged: () => void }) {
-  const { toast } = useShell();
-  const [project, setProject] = useState<Project | null>(null);
-  const [brief, setBrief] = useState("");
-  const [concepts, setConcepts] = useState<Concept[]>([]);
-  const [saving, setSaving] = useState(false);
-
-  const fetchAll = useCallback(
-    () => Promise.all([getProject(id), boardConcepts(undefined, "all", id)]),
-    [id],
-  );
-  const apply = useCallback(([p, board]: [Project, { items: Concept[] }]) => {
-    setProject(p);
-    setBrief(p.brief);
-    setConcepts(board.items);
-  }, []);
-  const load = useCallback(
-    () =>
-      fetchAll()
-        .then(apply)
-        .catch((e) => toast(e instanceof Error ? e.message : "couldn't open the project", "err")),
-    [fetchAll, apply, toast],
-  );
-
-  useEffect(() => {
-    let alive = true;
-    fetchAll()
-      .then((r) => alive && apply(r))
-      .catch((e) => alive && toast(e instanceof Error ? e.message : "couldn't open the project", "err"));
-    return () => {
-      alive = false;
-    };
-  }, [fetchAll, apply, toast]);
-
-  if (!project) return <p className="p-4 text-[12px] text-white/50">opening…</p>;
-
-  const saveBrief = async () => {
-    setSaving(true);
-    try {
-      setProject(await updateProject(id, { brief }));
-      toast("Brief saved — the next Create in this project uses it");
-      onChanged();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "couldn't save the brief", "err");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const forget = async (at: string) => {
-    try {
-      await forgetProjectMemory(id, at);
-      await load();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "couldn't remove that", "err");
-    }
-  };
-
-  const toggleArchive = async () => {
-    try {
-      await archiveProject(id, !project.archived);
-      await load();
-      onChanged();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "couldn't archive", "err");
-    }
-  };
-
-  const memory = [...project.memory].reverse();
-
+/* Zero projects is the first thing a new account sees, so it says how a
+   project starts: through the assistant, never a form. */
+function EmptyBoard() {
   return (
-    <div className="flex flex-col gap-4">
-      <header className="flex flex-wrap items-center gap-2">
-        <h2 className="text-[16px]">{project.title}</h2>
-        {project.archived && (
-          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[11px] text-white/60">archived</span>
-        )}
-        <Link
-          href={`/studio?project=${project.id}`}
-          onClick={() => rememberActiveProject(project.id)}
-          className={`${BTN} ml-auto border border-white/25 bg-white/15 text-white hover:bg-white/25`}
-        >
-          Open in Studio
-        </Link>
-        <button type="button" onClick={() => void toggleArchive()} className={`${BTN} border border-white/10 hover:bg-white/10`}>
-          {project.archived ? (
-            <>
-              <ArchiveRestore size={13} className="mr-1 inline" /> Restore
-            </>
-          ) : (
-            <>
-              <Archive size={13} className="mr-1 inline" /> Archive
-            </>
-          )}
-        </button>
-      </header>
-
-      <section className={`${CARD} flex flex-col gap-2 p-4`}>
-        <span className="text-[12px] text-white/60">Brief</span>
-        <textarea
-          className={`${FIELD} min-h-[150px] font-mono text-[12px]`}
-          value={brief}
-          onChange={(e) => setBrief(e.target.value)}
-          placeholder="No brief yet — scenes follow the idea you type alone."
-        />
-        <div className="flex justify-end">
-          <button
-            type="button"
-            disabled={saving || brief === project.brief}
-            onClick={() => void saveBrief()}
-            className={`${BTN} border border-white/15 hover:bg-white/10`}
-          >
-            Save brief
-          </button>
-        </div>
-      </section>
-
-      <section className={`${CARD} flex flex-col gap-2 p-4`}>
-        <span className="text-[12px] text-white/60">
-          What this project has learned — every Create here reads the newest of these
-        </span>
-        {memory.length === 0 ? (
-          <p className="text-[12px] text-white/40">
-            Nothing yet. Pick, pass on or edit scenes written in this project and it remembers.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1.5">
-            {memory.map((m) => (
-              <li key={m.at} className="group flex items-start gap-2 text-[12px] leading-snug">
-                <span
-                  className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                    m.kind === "pass" ? "bg-red-400/15 text-red-200" : "bg-emerald-400/15 text-emerald-200"
-                  }`}
-                >
-                  {KIND_LABEL[m.kind] || m.kind}
-                </span>
-                <span className="text-white/75">{m.text}</span>
-                <button
-                  type="button"
-                  onClick={() => void forget(m.at)}
-                  className="ml-auto shrink-0 text-white/30 opacity-0 transition hover:text-white/80 group-hover:opacity-100"
-                  title="Forget this — it stops steering the project"
-                  aria-label="Forget"
-                >
-                  <X size={13} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-2">
-        <span className="text-[12px] text-white/60">
-          Scenes in this project · {concepts.length}
-        </span>
-        {concepts.length === 0 ? (
-          <p className="text-[12px] text-white/40">None yet — open it in Studio and press Create.</p>
-        ) : (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            {concepts.map((c) => {
-              const still = c.reference_image || c.refs[0];
-              return (
-                <Link key={c.id} href={`/studio/pipeline#c${c.id}`} className={`${CARD} block overflow-hidden`}>
-                  {still ? (
-                    <img src={still} alt="" className="h-28 w-full object-cover" />
-                  ) : (
-                    <div className="h-28 w-full bg-white/5" />
-                  )}
-                  <span className="block px-2 pt-1.5 text-[12px] text-white/85">{c.title}</span>
-                  <span className="block px-2 pb-2 text-[11px] text-white/40">
-                    {c.media_url ? "rendered" : c.picked ? "picked" : c.archived ? "passed" : "open"}
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-export default function ProjectsPage() {
-  const { toast } = useShell();
-  const [items, setItems] = useState<Project[]>([]);
-  const [questions, setQuestions] = useState<ProjectQuestion[]>([]);
-  const [showArchived, setShowArchived] = useState(false);
-  const [making, setMaking] = useState(false);
-  const [selected, setSelected] = useState<number | null>(null);
-
-  const load = useCallback(
-    () =>
-      listProjects(showArchived)
-        .then((r) => {
-          setItems(r.items);
-          setQuestions(r.questions);
-        })
-        .catch((e) => toast(e instanceof Error ? e.message : "couldn't read the projects", "err")),
-    [showArchived, toast],
-  );
-
-  useEffect(() => {
-    let alive = true;
-    listProjects(showArchived)
-      .then((r) => {
-        if (!alive) return;
-        setItems(r.items);
-        setQuestions(r.questions);
-      })
-      .catch((e) => alive && toast(e instanceof Error ? e.message : "couldn't read the projects", "err"));
-    return () => {
-      alive = false;
-    };
-  }, [showArchived, toast]);
-
-  return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
-      <header className="flex flex-wrap items-center gap-2">
-        <FolderKanban size={18} className="text-white/60" />
-        <h1 className="text-[15px] tracking-wide">Projects</h1>
-        <span className="text-[12px] text-white/40">
-          each project keeps its own brief and memory, so its scenes stay consistent
-        </span>
-        <label className="ml-auto flex items-center gap-1.5 text-[12px] text-white/50">
-          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-          archived
-        </label>
-        <button
-          type="button"
-          onClick={() => {
-            setMaking(true);
-            setSelected(null);
-          }}
-          className={`${BTN} border border-white/25 bg-white/15 text-white hover:bg-white/25`}
-        >
-          <Plus size={13} className="mr-1 inline" /> New project
-        </button>
-      </header>
-
-      <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-        <aside className={`${CARD} max-h-[75vh] overflow-auto p-2`}>
-          {items.length === 0 && (
-            <p className="p-3 text-[12px] text-white/50">No projects yet. Start one for each client or film.</p>
-          )}
-          {items.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => {
-                setSelected(p.id);
-                setMaking(false);
-              }}
-              className={`mb-1 block w-full rounded-lg p-2 text-left transition ${
-                selected === p.id ? "bg-white/10" : "hover:bg-white/[0.06]"
-              }`}
-            >
-              <span className="block text-[13px] text-white/85">
-                {p.title}
-                {p.archived ? <span className="ml-1 text-[11px] text-white/40">· archived</span> : null}
-              </span>
-              <span className="block text-[11px] text-white/40">
-                {p.concepts ?? 0} scenes · {p.picked ?? 0} picked · {p.rendered ?? 0} rendered ·{" "}
-                {p.memory.length} learned
-              </span>
-            </button>
-          ))}
-        </aside>
-
-        <main>
-          {making ? (
-            <NewProject
-              questions={questions}
-              onCancel={() => setMaking(false)}
-              onMade={(p) => {
-                setMaking(false);
-                setSelected(p.id);
-                void load();
-                toast(`“${p.title}” created`);
-              }}
-            />
-          ) : selected ? (
-            <ProjectDetail key={selected} id={selected} onChanged={() => void load()} />
-          ) : (
-            <p className="p-4 text-[12px] text-white/50">
-              Pick a project to see its brief, what it has learned and its scenes — or start a new one.
-            </p>
-          )}
-        </main>
-      </div>
+    <div className="mx-auto mb-6 flex max-w-[640px] flex-col items-center gap-3 px-6 py-10 text-center">
+      <MessageCircle size={28} strokeWidth={1.4} className="text-bone3" aria-hidden />
+      <h3 className="m-0 font-bebas text-[34px] font-normal leading-none tracking-[0.03em] text-bone">No projects yet</h3>
+      <p className="m-0 text-[15px] leading-normal text-bone2">
+        Projects are made through the assistant. Open it at the bottom of the screen and say{" "}
+        <b className="text-bone">“make a project for …”</b>, or talk an idea through and then say{" "}
+        <b className="text-bone">“save this as a project”</b>. The conversation and the scenes it made go with it.
+      </p>
+      <p className="m-0 text-[13.5px] text-bone3">
+        A single video does not need one: make it on <Link href="/studio">Create</Link> and it lands on{" "}
+        <Link href="/studio/assets">Assets</Link> when it finishes.
+      </p>
     </div>
   );
 }

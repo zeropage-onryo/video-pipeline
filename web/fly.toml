@@ -1,5 +1,8 @@
 # The Next.js studio, as its own Fly app beside zeropage-studio (the API).
-# Deploy from web/:  fly deploy --build-arg NEXT_PUBLIC_AUTH_ORIGIN=https://zeropage-studio.fly.dev
+# Deploy from web/:  fly deploy --build-arg NEXT_PUBLIC_AUTH_ORIGIN=https://api.zeropage.studio
+#   (api.zeropage.studio is the API on its own domain's subdomain, 2026-10-07:
+#    navigating to zeropage-studio.fly.dev drew Chrome's lookalike warning;
+#    API_UPSTREAM below stays on fly.dev, which keeps serving)
 #   (NEXT_PUBLIC_API_URL stays empty: fetches go through this origin's proxy so
 #    the session cookie is first-party; sign-in navigates to the API origin and
 #    comes back via /auth/handoff -- see web/Dockerfile and app/auth.py)

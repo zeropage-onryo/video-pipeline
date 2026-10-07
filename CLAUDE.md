@@ -623,7 +623,9 @@ a tighten-don't-summarise instruction that names those four categories as untouc
 the output constraints → style → texture → blocking, and forbids "cinematic"/"masterpiece"
 padding. The test asserts what it protects, not its wording.
 
-**One idea box, one board, one spend gate (2026-08-28, Mike's call.)** Scenes and
+**One idea box, one board, one spend gate (2026-08-28, Mike's call.)** *(The board half is
+superseded since 2026-10-07: the Pipeline and Director tabs were folded into ONE PROJECTS BOARD,
+below. The Queue as the one spend gate is unchanged.)* Scenes and
 concepts were never two things — a concept IS one scene IS one prompt, one
 `shoot_concepts` row — so keeping them as two Pipeline tabs meant two places to look for
 the same card. The three surfaces are now split by *what you are doing*, not by what the
@@ -724,7 +726,11 @@ one, both survive — but with approval *as* the pick, approving take 1 archives
 out from under you, and racily, since it ran after Runway returned ~90s later.
 `preprod.archive_batch` stays as a tested helper with no caller.
 
-**The night does the rest (2026-08-29, Mike's call.)** Enhancing, keyframing and
+**The night does the rest (2026-08-29, Mike's call.)** *(Read as history: NOTHING IS SCHEDULED
+since 2026-09-28 -- "the nightly graph" is `src.nightly walk` or `src.trigger` run by hand -- the
+night draws no stills since 2026-09-08 and posts nothing, `autopilot.AUTO_POST_BRANDS` being
+empty. The Fly image's one cron line is the Instagram token keeper; keep it that way unless Mike
+re-enables a walk.)* Enhancing, keyframing and
 rendering happen in the **Director canvas** when Michael is steering a scene, and in the
 **nightly graph** when nobody is. `src/scene_chain.py` holds one implementation of each
 stage — `ground`, `write_scenes`, `plan_timeline`, `persist_prompt`, `keyframe_scene`,
@@ -886,7 +892,7 @@ a spark (typed, or scouted)  +  reference IMAGES  +  RAG library  +  brand brief
                                                   |
                         no refs? -> archived immediately (preprod.NO_REFERENCE, never boards)
                                                   |
-              Pipeline board: Pick (draws the keyframe) / Not this one (archives + reason)
+     a project's workspace (or a solo scene's canvas): Pick / Not this one (archives + reason)
                                                   |
                           Queue: Approve -> THE ONLY PLACE MONEY IS SPENT
                                                   |
@@ -1795,6 +1801,44 @@ is yours, in Resolve, by hand.
   a bare `scout run` (as the bootstrap account) all ask it; an explicit lane list is honoured
   either way. The MCP tool used to default to its own `LANES`, which ran Instagram for every
   caller and had drifted (named `feeds`, missed `pinterest`); it is `scout.KNOWN_LANES` now.
+- **ONE PROJECTS BOARD (2026-10-07, Mike's calls; `docs/tasks/task-projects-board.md`).** A
+  concept is one scene and a project holds scenes, so the board of PROJECTS replaced both the
+  Pipeline tab and the standalone Director tab. `/studio/projects` is the home (first in the
+  rail, the brand mark and the header's first tab): one card per project -- cover (the newest
+  scene's still, else its first reference, minted through `media.url_for` in `GET /api/projects`),
+  title, one line of brief, scenes / picked / rendered, last touched -- with Archive (hide, keep
+  everything) and **Delete**. **There is no "New project" form**: a project is made only through
+  the Guide -- `guide_tools.PROJECT_TOOLS` (`create_project`, `save_as_project`), write tools in
+  the proposal sense, offered on every local turn, confirmed on a card in the pill or the
+  composer and run by `/creative-guide/act` (`guide_tools.run_project_tool`), which for
+  `save_as_project` takes the client's thread and the concept ids its sends made
+  (`lib/assistant.asProjectConversation`) and files both under the new project. A turn inside a
+  project is told so (`creative_guide.project_note`) and not to propose either.
+  **The workspace** (`/studio/projects/<id>?scene=&shot=`, `components/studio/project-workspace`):
+  the project's scenes on the left (the board's cards narrowed to it: Pick, Not this one, the
+  drawer -- `components/studio/scene-drawer`, moved out of the old Pipeline page), the Director
+  canvas for the selected scene in the centre (the SAME `FlowWorkspace`, told it is embedded
+  through `CanvasNav`: its links stay in the workspace and a scene change goes through its own
+  save first, `registerLeave`), and the brief / look / memory on the right. No second chat: the
+  floating pill IS the Guide, and on a workspace it is scoped to the project
+  (`assistant-thread.tsx`: `turns` are the project's history, each turn posts `project_id` +
+  `remember=1`). **Chat history** is the OWNED `project_messages` table (`src/projects.py`:
+  `append_message`, `messages` paged by id, `copy_messages`), written by the `/creative-guide`
+  route as each turn happens, read by `GET /api/projects/{id}/messages`, never fed to a RAG shelf,
+  kept until the project is deleted. **Delete** (`DELETE /api/projects/{id}`, guarded,
+  `projects.delete`) removes the project, brief, look, memory and history in one transaction and
+  DETACHES its scenes (`project_id` NULL) -- never deletes them, so a rendered clip stays on the
+  Assets wall; the confirm (`components/studio/project-delete`) lists the unrendered scenes
+  that will be left on no board (`GET /api/projects/{id}/scenes`). **A project is not
+  required**: a video made outside one is written with `project_id NULL`, opens on its own canvas
+  at `/studio/scene/<id>` (which redirects into the workspace when the scene IS filed), is picked
+  with the composer's Send to Queue, and once rendered lands on the Assets wall, whose rows now
+  carry `project_id` / `project_title` ("no project" on the detail rail). It never gets a board
+  card. **The old doors redirect** (`web/src/lib/legacy-routes.ts`, tested): `/studio/pipeline`
+  and `/studio/flows` go to the board, `?concept=` to that scene, `?draft` to
+  `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
+  `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
+  still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
 - **`src/projects.py`** + **`src/project_context.py`** — studio PROJECTS (2026-09-28, Mike's
   call, the day ANTIHERO was merged into Zero Page): one brief and one memory per piece of
   work (a client's ad, a short). `projects` is OWNED; `shoot_concepts.project_id` files a

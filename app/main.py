@@ -372,7 +372,12 @@ def signin_showcase() -> list[dict]:
 # (web/src/content/landing-media.ts), under the landing hero's four steps
 # (hero-media.ts HERO_STEPS) -- so the door looks like the site the person
 # just left, and never shows stock or a mock-up.
-_R2_NANO = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/renders/nano"
+# They live under account 1's tenant prefix (`m/1/...`, the 2026-09-15
+# media migration); the flat `renders/nano/...` keys this pointed at are
+# gone from the bucket and 404'd on this page until 2026-10-07. Absolute
+# keys rather than media.url_for, so the door does not depend on which
+# rung of ZEROPAGE_MEDIA the serving machine is on.
+_R2_NANO = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/m/1/renders/nano"
 SIGNIN_SHOWCASE_DEFAULT: list[dict] = [
     {"label": "Bring a spark", "image": f"{_R2_NANO}/c361-20260911-161358.png"},
     {"label": "Write the scene", "image": f"{_R2_NANO}/c351-20260910-135712.png"},

@@ -1185,6 +1185,23 @@
     display: none;
   }
 }
+/* the same, keyed on the CANVAS's own width (2026-10-07): inside a
+   project's workspace the canvas sits between the scene list and the brief,
+   so it is narrow on a wide screen and the viewport rule above never fires */
+.flows-workspace {
+  container-type: inline-size;
+}
+@container (max-width: 1100px) {
+  .flow-bottom {
+    padding-right: 22px;
+  }
+  .flows-workspace .react-flow__minimap {
+    display: none;
+  }
+  .gs-chips {
+    display: none;
+  }
+}
 
 /* ── modals and the toast ── */
 .flow-modal-backdrop {

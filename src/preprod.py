@@ -616,7 +616,7 @@ def get_concept(concept_id: int, dsn: Optional[str] = None, *,
 # it on legacy rows, and it is empty everywhere today).
 _CARD_COLUMNS = ("id, created_at, brand, spark, title, hook, logline, card_line, "
                  "ai_json, shot_done, warnings_json, use_pov, judge_overall, "
-                 "picked_at, archived_at, archive_reason, account_id")
+                 "picked_at, archived_at, archive_reason, account_id, project_id")
 # ...and inside the first shot, the keys no card draws: the model's own
 # drafts (`written_prompt`, `model_prompt` -- a third of shots_json, read
 # only when ONE scene is opened: Director, edit-teach, the grade queue,

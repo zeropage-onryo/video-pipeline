@@ -489,6 +489,24 @@
   cursor: default;
 }
 
+/* a write the Guide proposed (2026-10-07: create_project, save_as_project,
+   a spark): what it will do, and the click that does it */
+.zpa-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #2a2a2a;
+  background: #111;
+}
+.zpa-confirm .zpa-msg {
+  margin: 0;
+}
+.zpa-older {
+  align-self: center;
+}
+
 /* credits, on the Queue */
 .zpa-credits {
   display: flex;
@@ -637,13 +655,13 @@
   display: block;
   height: 72px;
 }
-/* Director: the minimap owns the corner and the prompt bar the bottom
+/* a canvas page (a project workspace, a scene): the minimap owns the corner and the prompt bar the bottom
    middle, so the collapsed pill is just the face, above the minimap */
-.zps[data-view="director"] .zpa:not(.open) {
+.zps[data-canvas="1"] .zpa:not(.open) {
   bottom: 160px;
   right: 22px;
 }
-.zps[data-view="director"] .zpa:not(.open) .zpa-pill {
+.zps[data-canvas="1"] .zpa:not(.open) .zpa-pill {
   width: 58px;
   max-width: 58px;
   padding: 0;
@@ -651,11 +669,11 @@
   position: absolute;
   inset: 0;
 }
-.zps[data-view="director"] .zpa:not(.open) .zpa-perch {
+.zps[data-canvas="1"] .zpa:not(.open) .zpa-perch {
   margin: 0;
   pointer-events: none;
 }
-.zps[data-view="director"] .zpa:not(.open) .zpa-bubble {
+.zps[data-canvas="1"] .zpa:not(.open) .zpa-bubble {
   position: absolute;
   right: 66px;
   bottom: 8px;
@@ -724,12 +742,12 @@
   /* the Queue's Approve bars and the Director's prompt bar run the full
      width of a phone: there the pill is just the face, at the edge */
   .zps[data-view="queue"] .zpa:not(.open),
-  .zps[data-view="director"] .zpa:not(.open) {
+  .zps[data-canvas="1"] .zpa:not(.open) {
     left: auto;
     right: 12px;
   }
   .zps[data-view="queue"] .zpa:not(.open) .zpa-pill,
-  .zps[data-view="director"] .zpa:not(.open) .zpa-pill {
+  .zps[data-canvas="1"] .zpa:not(.open) .zpa-pill {
     position: absolute;
     inset: 0;
     width: 52px;
@@ -738,11 +756,11 @@
     opacity: 0;
   }
   .zps[data-view="queue"] .zpa:not(.open) .zpa-perch,
-  .zps[data-view="director"] .zpa:not(.open) .zpa-perch {
+  .zps[data-canvas="1"] .zpa:not(.open) .zpa-perch {
     margin: 0;
   }
   .zps[data-view="queue"] .zpa:not(.open) .zpa-bubble,
-  .zps[data-view="director"] .zpa:not(.open) .zpa-bubble {
+  .zps[data-canvas="1"] .zpa:not(.open) .zpa-bubble {
     position: absolute;
     right: 60px;
     bottom: 6px;
@@ -761,13 +779,13 @@
   /* ...sitting on the rail, so the rail stays reachable and nothing
      covers the sheet's own input */
   .zpa.open,
-  .zps[data-view="director"] .zpa.open {
+  .zps[data-canvas="1"] .zpa.open {
     left: 0;
     right: 0;
     bottom: calc(64px + env(safe-area-inset-bottom));
   }
   .zpa-card,
-  .zps[data-view="director"] .zpa.open .zpa-card {
+  .zps[data-canvas="1"] .zpa.open .zpa-card {
     width: 100%;
     max-height: calc(100dvh - 64px - 90px);
     border-radius: 26px 26px 0 0;
@@ -792,11 +810,11 @@
 
 /* Director, opened: above the minimap and the prompt bar, never on them */
 @media (min-width: 721px) {
-  .zps[data-view="director"] .zpa.open {
+  .zps[data-canvas="1"] .zpa.open {
     bottom: 160px;
     right: 22px;
   }
-  .zps[data-view="director"] .zpa.open .zpa-card {
+  .zps[data-canvas="1"] .zpa.open .zpa-card {
     max-height: calc(100vh - 160px - 150px);
   }
 }
