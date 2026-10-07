@@ -24,6 +24,10 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A green run takes ~11 minutes (7-22 across 40 runs, 2026-10-07). Without
+    # this GitHub's 360-minute default applies, and a re-run on 2026-10-07 sat
+    # in the ffmpeg install for 40+ minutes without ever reaching pytest.
+    timeout-minutes: 30
     # The suite runs against a real Postgres since 2026-09-03 (pipeline.db
     # moved off SQLite -- docs/tasks/task-postgres-migration.md). conftest's
     # `pg` fixture gives every test its own schema on this box and drops it
@@ -72,7 +76,15 @@ jobs:
         # the cut's render tests (tests/test_cut_assemble.py) build fixture
         # clips with testsrc/sine and render them for real; without ffmpeg
         # they skip, which would make a green run mean nothing about them
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        #
+        # Usually ~25s, but a slow mirror has taken 2-12 minutes on runs that
+        # still passed, and once hung for 40+. The step cap ends a hang; the
+        # apt options make a stalled connection retry instead of waiting.
+        timeout-minutes: 10
+        run: |
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends ffmpeg
 
       - name: Lint with ruff
         run: ruff check .
