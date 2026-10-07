@@ -1,19 +1,23 @@
 "use client";
 
 import Image from "next/image";
-import { motion } from "motion/react";
-import { reveal } from "@/lib/motion";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { Volume2, VolumeX } from "lucide-react";
+import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from "motion/react";
+import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
-import type { MakeOverviewBlock, MakePage } from "../pages";
+import type { MakeOverviewBlock, MakePage, MakeTile } from "../pages";
 
 // The overview (2026-10-07, Mike's call): the shape of ByteDance's own
 // Seedance 2.5 page -- a run of headline claims, each one line of serif,
 // a sentence or two, and a demo beside it -- carried on the entry as
 // `overview.items` so any model page can have one. The text and the media
 // alternate sides; the media slot is a wall tile (a plate until a real
-// still or clip lands, `src`/`video` when one does). Blocks rise in with a
-// stagger off ONE observer on the section (lib/motion's rule); nothing
-// moves under reduced motion. A page with no `overview` draws nothing.
+// still or clip lands). Two extras a block can ask for: `sound` (an
+// unmute toggle, since autoplay is always muted) and `compare` (a second
+// clip under a draggable divider, a draft against its final). Clips play
+// only while on screen. Blocks rise in off ONE observer; nothing moves
+// under reduced motion. A page with no `overview` draws nothing.
 
 const PLATES = ["var(--plate-1)", "var(--plate-2)"];
 
@@ -46,8 +50,7 @@ function Block({
   still: boolean;
   show: boolean;
 }) {
-  const media = block.media;
-  const plate = media?.plate ?? PLATES[index % PLATES.length];
+  const plate = block.media?.plate ?? PLATES[index % PLATES.length];
   return (
     <motion.div
       {...reveal(index, { still, show })}
@@ -68,28 +71,128 @@ function Block({
           </ul>
         )}
       </div>
-      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-card md:aspect-[5/4]">
-        {media?.video ? (
-          <video
-            className="absolute inset-0 size-full object-cover"
-            src={media.video}
-            poster={media.src}
-            autoPlay={!still}
-            muted
-            loop
-            playsInline
-          />
-        ) : media?.src ? (
-          <Image src={media.src} alt={media.title || block.title} fill sizes="(min-width: 768px) 50vw, 100vw" quality={70} className="object-cover" />
-        ) : (
-          <div aria-hidden className="absolute inset-0" style={{ background: plate }} />
-        )}
-        {media?.tag && (
-          <span className="absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-            {media.tag}
-          </span>
-        )}
-      </div>
+      {block.compare ? (
+        <Compare left={block.compare.media} right={block.media} leftLabel={block.compare.label} rightLabel={block.compare.mediaLabel} plate={plate} still={still} />
+      ) : (
+        <Media tile={block.media} title={block.title} plate={plate} still={still} sound={Boolean(block.sound)} />
+      )}
     </motion.div>
+  );
+}
+
+/** Play a clip only while its frame is on screen (the landing page's rule). */
+function useOnScreenPlay(ref: React.RefObject<HTMLElement | null>, still: boolean) {
+  useEffect(() => {
+    const el = ref.current;
+    const videos = el ? Array.from(el.querySelectorAll("video")) : [];
+    if (!el || !videos.length || still) return;
+    const io = new IntersectionObserver(
+      ([entry]) => videos.forEach((v) => (entry.isIntersecting ? v.play().catch(() => {}) : v.pause())),
+      { threshold: 0.25 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, still]);
+}
+
+function Fill({ tile, alt, plate }: { tile?: MakeTile; alt: string; plate: string }) {
+  if (tile?.video)
+    return <video className="absolute inset-0 size-full object-cover" src={tile.video} poster={tile.src} muted loop playsInline preload="none" />;
+  if (tile?.src)
+    return <Image src={tile.src} alt={alt} fill sizes="(min-width: 768px) 50vw, 100vw" quality={70} className="object-cover" />;
+  return <div aria-hidden className="absolute inset-0" style={{ background: plate }} />;
+}
+
+const CHIP = "rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm";
+
+function Media({ tile, title, plate, still, sound }: { tile?: MakeTile; title: string; plate: string; still: boolean; sound: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [muted, setMuted] = useState(true);
+  useOnScreenPlay(ref, still);
+  const toggle = () => {
+    const v = ref.current?.querySelector("video");
+    if (!v) return;
+    v.muted = !v.muted;
+    if (!v.muted) v.play().catch(() => {});
+    setMuted(v.muted);
+  };
+  return (
+    <div ref={ref} className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-card">
+      <Fill tile={tile} alt={tile?.title || title} plate={plate} />
+      {tile?.tag && <span className={`absolute bottom-3 left-3 ${CHIP}`}>{tile.tag}</span>}
+      {sound && tile?.video && (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-pressed={!muted}
+          className="absolute right-3 bottom-3 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-[12px] font-medium text-white backdrop-blur-sm outline-none transition-colors hover:bg-black/75 focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          {muted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
+          {muted ? "Sound off" : "Sound on"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Two clips under one divider: the left one revealed up to the handle. */
+function Compare({
+  left,
+  right,
+  leftLabel,
+  rightLabel,
+  plate,
+  still,
+}: {
+  left: MakeTile;
+  right?: MakeTile;
+  leftLabel: string;
+  rightLabel: string;
+  plate: string;
+  still: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useOnScreenPlay(ref, still);
+  const raw = useMotionValue(0.5);
+  const x = useSpring(raw, still ? { stiffness: 1000, damping: 100 } : SPRINGS.glow);
+  const clip = useMotionTemplate`inset(0 ${useTransform(x, (v) => (1 - v) * 100)}% 0 0)`;
+  const handle = useMotionTemplate`${useTransform(x, (v) => v * 100)}%`;
+  const set = (clientX: number) => {
+    const r = ref.current?.getBoundingClientRect();
+    if (r) raw.set(Math.min(1, Math.max(0, (clientX - r.left) / r.width)));
+  };
+  const onMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch" && e.buttons === 0) return;
+    set(e.clientX);
+  };
+  return (
+    <div
+      ref={ref}
+      onPointerMove={onMove}
+      onPointerDown={(e) => set(e.clientX)}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft") raw.set(Math.max(0, raw.get() - 0.1));
+        if (e.key === "ArrowRight") raw.set(Math.min(1, raw.get() + 0.1));
+      }}
+      tabIndex={0}
+      role="slider"
+      aria-label={`${leftLabel} against ${rightLabel}`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={50}
+      className="relative aspect-[4/3] w-full touch-pan-y overflow-hidden rounded-2xl bg-card outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50"
+    >
+      <Fill tile={right} alt={rightLabel} plate={plate} />
+      <motion.div aria-hidden style={{ clipPath: clip }} className="absolute inset-0">
+        <Fill tile={left} alt={leftLabel} plate={left.plate ?? "var(--plate-2)"} />
+      </motion.div>
+      <span className={`absolute top-3 left-3 ${CHIP}`}>{leftLabel}</span>
+      <span className={`absolute top-3 right-3 ${CHIP}`}>{rightLabel}</span>
+      <motion.div aria-hidden style={{ left: handle }} className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white/90">
+        <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground">
+          drag
+        </span>
+      </motion.div>
+    </div>
   );
 }

@@ -79,6 +79,12 @@ export type MakeOverviewBlock = {
   body: string;
   points?: string[];
   media?: MakeTile;
+  /** The clip carries sound worth hearing: the slot gets an unmute toggle
+   *  (autoplay is always muted). */
+  sound?: boolean;
+  /** A second clip under a draggable divider, e.g. a 480p draft against
+   *  the 720p final: `media` is the right side, this is the left. */
+  compare?: { media: MakeTile; label: string; mediaLabel: string };
 };
 export type MakeFaq = {
   q: string;
