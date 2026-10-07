@@ -717,7 +717,9 @@ def test_ui_legacy_keeps_the_reference_shell(clean_slate, gotrue, studio):
     login("mike@example.com", "mikes-password-1")
     response = client.get("/ui?legacy=1", follow_redirects=False)
     assert response.status_code == 200
-    assert 'data-view="director"' in response.text
+    # the shell itself stays; its own Director canvas was deleted 2026-10-07
+    assert 'data-view="queue"' in response.text
+    assert 'data-view="director"' not in response.text
 
 
 def test_ui_signed_out_goes_to_signin_with_the_studio_as_next(clean_slate, gotrue, studio):

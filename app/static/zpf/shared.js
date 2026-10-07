@@ -249,3 +249,25 @@ export async function refreshQueueBadge() {
     badge.hidden = true;
   }
 }
+
+/* Open a scene's canvas (2026-10-07). The vanilla Gen Space canvas was
+   deleted when the Director moved into the React studio's project
+   workspaces, so every "Open in Director" here hands the scene to that
+   studio: DIRECTOR_FRONTEND_URL, on the body as data-director-url, is its
+   /studio/flows route, which opens the scene inside its project (or on its
+   own canvas when it has none). With no address configured there is
+   nowhere to send it, and the page says so rather than doing nothing. */
+export function openConceptInDirector(id) {
+  const director = document.body.dataset.directorUrl;
+  if (!director) {
+    alert('The Director lives in the studio now, and this server has no studio address '
+      + '(DIRECTOR_FRONTEND_URL) to send you to.');
+    return;
+  }
+  const destination = new URL(director, location.origin);
+  if (id) {
+    destination.searchParams.set('concept', id);
+    destination.searchParams.set('shot', 1);
+  }
+  location.assign(destination.href);
+}
