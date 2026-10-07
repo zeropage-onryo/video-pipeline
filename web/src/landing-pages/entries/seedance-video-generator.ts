@@ -236,7 +236,7 @@ export const SEEDANCE: MakePage = {
         {
           icon: "keyframe",
           title: "Keyframe first",
-          body: "Draw every shot's first frame before a clip is rendered, and redraw it in the Director until it is right.",
+          body: "Draw every shot's first frame in the Queue before a clip is rendered, with the credits on the button before you press it.",
         },
         {
           icon: "price",
@@ -260,19 +260,23 @@ export const SEEDANCE: MakePage = {
       items: modelCards([sd25, sd, sdFast], (m) => `A 15-second scene in three timed shots: a wide establishing shot, a close detail, the action. Render on ${m.name}.`),
     },
     howTo: {
-      title: "How to render on Seedance",
+      // The studio's flow as main has it (2026-10-07): Create writes the
+      // scene, Send to Queue is the pick, the Queue draws the keyframes
+      // (priced on the button) and approves the render, and Ready to cut
+      // opens the scene in the editor for the one MP4.
+      title: "How to render on Seedance 2.5",
       items: [
         {
           title: "Write the scene",
-          body: "Sign in, drop your reference photos into the composer, and write one line about the scene. It comes back as timed shots, each with its own prompt.",
+          body: "Sign in, attach your reference photos in Create, and describe the scene in a line. It comes back as timed shots, each with its own prompt and its sound.",
         },
         {
-          title: "Check each keyframe",
-          body: "Pick the scene on the board and draw its keyframes. Open any shot in the Director to edit the prompt, swap a reference and redraw.",
+          title: "Send it to the Queue",
+          body: "Press Send to Queue on the scene. In the Queue, draw every shot's first frame, with the credits shown on the button before you press it.",
         },
         {
-          title: "Approve on Seedance",
-          body: "In the Queue, choose Seedance 2.5 (or 2.0, or 2.0 Fast), the length and the frame for each shot, with the price on the card, and approve. Export joins the clips into one MP4.",
+          title: "Approve on Seedance 2.5",
+          body: "Choose Seedance 2.5 for each shot, or 2.0 or 2.0 Fast, with its length and frame, check the price on the card and approve. Then open the scene in the editor and export one MP4.",
         },
       ],
     },

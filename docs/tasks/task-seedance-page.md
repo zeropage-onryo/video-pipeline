@@ -66,9 +66,10 @@ keyframe on all three.
 - [x] The fourth card links to /models ("See every model") instead of sign-up, on every model page
 - [x] Prices name the frame they are for ("568 credits for a 5-second 720p clip"), on every model page
 
-## 6. How to ("How to render on Seedance")
+## 6. How to ("How to render on Seedance 2.5"), done 2026-10-07
 
-- [ ] 1. Write the scene / 2. Check each keyframe / 3. Approve on Seedance (step 3 names 2.5 first since 2026-10-07)
+- [x] Rewritten to main's flow (the branch is behind main; the page must match what ships): 1. Write the scene (Create, references, timed shots with sound) / 2. Send it to the Queue (Send to Queue is the pick; keyframes drawn in the Queue, priced on the button) / 3. Approve on Seedance 2.5 (model, length, frame per shot; then the editor exports one MP4)
+- [x] "The board" and "the Director" are gone from the copy: the studio's menu is Projects, Create, Assets, Edit, Elements, Queue. The Keyframe first feature card was corrected the same way.
 
 ## 7. FAQ ("FAQs about Seedance", eight rows; the answers are the FAQPage JSON-LD)
 
