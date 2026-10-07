@@ -1,13 +1,16 @@
 // The frames the landing page shows. Every entry is REAL studio output --
 // a keyframe Nano drew for a concept on the board, served from R2 -- never
 // stock or a fabricated still. Newest first, one per concept, read off the
-// bucket on 2026-09-14 (`renders/nano/c<id>-<stamp>.png`).
+// bucket on 2026-09-14. They live under account 1's tenant prefix
+// (`m/1/renders/nano/c<id>-<stamp>.png`, src/media.py's key scheme): the flat
+// `renders/nano/...` keys they were first listed under are gone from the
+// bucket (every one 404'd on 2026-10-07), so never point this back at them.
 //
 // A `video` URL, when a concept has a rendered clip, turns the tile into a
 // muted loop with the still as its poster; nothing else changes. The bucket
 // held zero clips on 2026-09-14, so every entry is a still for now.
 
-const R2 = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/renders/nano";
+const R2 = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/m/1/renders/nano";
 
 export type LandingMedia = {
   concept: number;
