@@ -27,8 +27,10 @@ from __future__ import annotations
 import hmac
 import os
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Callable, Optional
 
 from src import mcp_server
 
@@ -36,6 +38,79 @@ ENABLED_ENV = "ZEROPAGE_MCP"
 TOKEN_ENV = "ZEROPAGE_MCP_TOKEN"
 HOSTS_ENV = "ZEROPAGE_MCP_HOSTS"
 MOUNT_PATH = "/mcp"
+
+# --- the rate limit (2026-10-07, for the directory listing) -----------------
+#
+# Requests per RATE_WINDOW_S, keyed on WHO is calling once the guard has
+# decided that: one bucket per signed-in account, one for the operator's
+# static key. A fixed window rather than a token bucket because the
+# question it answers is coarse -- "is one caller hammering a server that
+# serves everybody" -- and a fixed window is the shape a person can read
+# off a 429 (`Retry-After` says when the window turns over).
+#
+# IN-PROCESS, AND THAT IS A STATED LIMIT: the API is one Fly machine
+# (fly.toml: min_machines_running = 1, one shared CPU), so one dict in
+# this process IS the whole count. A second machine would mean two
+# counters that each allow the full limit; the day that happens this
+# moves to a shared store (Postgres is already there), and this comment
+# is the reminder. The counts die with a deploy, which is fine: the limit
+# protects the process that holds them.
+#
+# The operator's key is subject to it too, at a higher default, because
+# the research agent and ops/ scripts poll `job` in a loop and must not be
+# throttled like a stranger -- but an operator key leaked to a stranger
+# must not be unlimited either.
+RATE_ENV = "ZEROPAGE_MCP_RATE"                  # per account, per window
+RATE_OPERATOR_ENV = "ZEROPAGE_MCP_RATE_OPERATOR"  # the static key
+RATE_WINDOW_S = 60
+DEFAULT_RATE = 120
+DEFAULT_RATE_OPERATOR = 1200
+
+
+def _rate(env: str, default: int) -> int:
+    """Read once per request so an operator can tune it without a
+    restart being the only way to find out it was set wrongly. 0 or
+    garbage means the default, never "unlimited": a typo must not open
+    the door."""
+    raw = (os.environ.get(env) or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+class RateLimiter:
+    """Fixed-window counter, one window per key, safe across the threads
+    uvicorn and the job registry share. `clock` is injected so a test can
+    turn the window over without sleeping."""
+
+    def __init__(self, window_s: float = RATE_WINDOW_S,
+                 clock: Callable[[], float] = time.monotonic):
+        self.window_s = float(window_s)
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._windows: dict = {}        # key -> [window_start, count]
+
+    def allow(self, key, limit: int) -> tuple[bool, int]:
+        """(allowed, retry_after_seconds). retry_after is 0 when allowed."""
+        now = self.clock()
+        with self._lock:
+            start, count = self._windows.get(key, (now, 0))
+            if now - start >= self.window_s:
+                start, count = now, 0
+            if count >= limit:
+                self._windows[key] = [start, count]
+                return False, max(1, int(self.window_s - (now - start)) + 1)
+            self._windows[key] = [start, count + 1]
+            return True, 0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._windows.clear()
+
+
+LIMITER = RateLimiter()
 
 # The SDK refuses any request whose Host header it does not recognise --
 # DNS-rebinding protection, which defends a localhost server against a
@@ -86,7 +161,20 @@ def _forbidden(detail: str):
     return JSONResponse({"error": "no_account", "detail": detail}, status_code=403)
 
 
-def guarded(app, secret: str, resolve=None):
+def _too_many(retry_after: int, limit: int):
+    from starlette.responses import JSONResponse
+
+    # The detail says the window, so an agent that reads it stops rather
+    # than retrying the identical call inside the same window.
+    return JSONResponse(
+        {"error": "rate_limited",
+         "detail": f"over {limit} requests in {RATE_WINDOW_S}s -- wait "
+                   f"{retry_after}s before calling again"},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)})
+
+
+def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = None):
     """Wrap an ASGI app so every request names a caller.
 
     A plain ASGI wrapper rather than middleware on the parent app: the
@@ -112,9 +200,16 @@ def guarded(app, secret: str, resolve=None):
     for the reason the whole mount is injected: this module is the seam
     where app-layer capability meets `src/`, and a test that has to mint
     a real Supabase JWT to exercise the guard is a test nobody writes.
+
+    THE RATE LIMIT SITS AFTER THE IDENTITY CHECK, on purpose: the key is
+    who the caller turned out to be, and an unauthenticated request is
+    already refused by the cheaper check above it. `limiter` is injected
+    the same way `resolve` is (default: the module's one `LIMITER`).
     """
     if resolve is None:
         from .mcp_auth import account_for_token as resolve
+    if limiter is None:
+        limiter = LIMITER
 
     from src import mcp_server
 
@@ -134,6 +229,11 @@ def guarded(app, secret: str, resolve=None):
         if hmac.compare_digest(supplied, secret):
             # The operator's own key: no caller is named, so
             # mcp_server._account falls through to the bootstrap account.
+            limit = _rate(RATE_OPERATOR_ENV, DEFAULT_RATE_OPERATOR)
+            ok, retry_after = limiter.allow(("operator",), limit)
+            if not ok:
+                response = _too_many(retry_after, limit)
+                return await response(scope, receive, send)
             return await app(scope, receive, send)
         account_id, reason = resolve(supplied)
         if reason == "no_account":
@@ -142,6 +242,11 @@ def guarded(app, secret: str, resolve=None):
             return await response(scope, receive, send)
         if account_id is None:
             response = _unauthorized("token not accepted", error="invalid_token")
+            return await response(scope, receive, send)
+        limit = _rate(RATE_ENV, DEFAULT_RATE)
+        ok, retry_after = limiter.allow(("account", int(account_id)), limit)
+        if not ok:
+            response = _too_many(retry_after, limit)
             return await response(scope, receive, send)
         token = mcp_server.CALLER_ACCOUNT.set(account_id)
         try:

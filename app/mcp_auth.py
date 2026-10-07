@@ -149,9 +149,28 @@ def verify(token: str) -> Optional[dict[str, Any]]:
     """
     for audience in (resource_url(), auth.JWT_AUDIENCE):
         claims = auth.verify_token(token, audience=audience)
-        if claims:
+        if claims and _issued_here(claims):
             return claims
     return None
+
+
+def _issued_here(claims: dict[str, Any]) -> bool:
+    """The issuer must be THIS project's authorization server.
+
+    `verify_token` proves the signature and the audience; the issuer is
+    the third leg (2026-10-07, the directory audit). With the shared HS256
+    secret the signer is implicitly Supabase, but the JWKS path trusts
+    whatever that document holds and a project's `iss` is the one claim
+    that names it -- a token signed by a key that document would also
+    vouch for, minted for our resource by another issuer, must not pass.
+    With no authorization server configured there is nothing to compare
+    against and the check is skipped, which is the static-token posture
+    where this function is never reached anyway.
+    """
+    expected = authorization_server()
+    if not expected:
+        return True
+    return (claims.get("iss") or "").rstrip("/") == expected.rstrip("/")
 
 
 def account_for_token(token: str, dsn: Optional[str] = None) -> tuple[Optional[int], str]:
