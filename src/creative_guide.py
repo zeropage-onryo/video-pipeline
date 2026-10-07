@@ -132,10 +132,29 @@ OUTPUT_NOTES = {
 }
 
 
+def project_note(project) -> str:
+    """One line for the model when the turn runs inside a project
+    (2026-10-07): which one, so "continue the story" continues it and
+    create_project / save_as_project are never proposed for a
+    conversation that already has one. "" outside a project."""
+    if not project or not isinstance(project, dict):
+        return ""
+    title = " ".join(str(project.get("title") or "").split())[:120] or "untitled"
+    return (f"This conversation is INSIDE the project “{title}”: its brief and what it "
+            "has learned are in your instructions. Continue that project's story and "
+            "work; do not propose creating or saving a project.")
+
+
 def respond(conversation, *, client, brand, grounding, image_refs=(),
             account_id=None, on_retry=None, tools=None, run_tool=None, brain=None,
-            assistant=None, judge=None, links=None, output=None):
+            assistant=None, judge=None, links=None, output=None, project=None):
     """One Guide turn.
+
+    `project` (2026-10-07) is the studio project the turn runs inside
+    (src/projects.py's row), when it does: the last message carries one
+    line naming it, so the model knows it is already in one and never
+    proposes creating another; its brief and memory reach the
+    instructions through shootgen.load_brand as they always did.
 
     With `tools` (the specs `guide_tools.session` returns) and
     `run_tool`, the model may call the board's READ tools before it
@@ -183,7 +202,8 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
 
     contents = _contents(conversation, grounding, image_refs,
                          notes=(assistant_brain.link_note(links),
-                                OUTPUT_NOTES.get(output or "", "")))
+                                OUTPUT_NOTES.get(output or "", ""),
+                                project_note(project)))
     if not tools:
         config.response_mime_type = "application/json"
         config.response_json_schema = Answer.model_json_schema()

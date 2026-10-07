@@ -24,6 +24,8 @@ import {
   deleteGenerated,
   getMedia,
   organizeGenerated,
+  sceneHref,
+  workspaceHref,
   type MediaFilter,
   type MediaItem,
   type MediaWall,
@@ -331,12 +333,24 @@ export default function AssetsPage() {
                 <dt>concept</dt>
                 <dd>
                   {open.concept_id ? (
-                    <Link href={`/studio/flows?concept=${open.concept_id}&shot=${open.shot_n ?? 1}`} className="underline underline-offset-2" title="Open in Director">
+                    <Link href={sceneHref(open.concept_id, open.shot_n ?? 1)} className="underline underline-offset-2" title="Open its canvas">
                       #{open.concept_id}
                       {open.shot_n ? ` · shot ${open.shot_n}` : ""}
                     </Link>
                   ) : (
                     "not from a concept"
+                  )}
+                </dd>
+                {/* which project its scene is filed under -- or none: a video
+                    made outside any project lives here and on no board */}
+                <dt>project</dt>
+                <dd>
+                  {open.project_id ? (
+                    <Link href={workspaceHref(open.project_id)} className="underline underline-offset-2">
+                      {open.project_title || `#${open.project_id}`}
+                    </Link>
+                  ) : (
+                    "no project"
                   )}
                 </dd>
                 <dt>folder</dt>

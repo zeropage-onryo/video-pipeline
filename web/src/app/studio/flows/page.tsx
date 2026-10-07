@@ -1,26 +1,17 @@
-import FlowWorkspace from "@/components/flows/flow-workspace";
-import DirectorArrival from "@/components/flows/director-arrival";
+import { redirect } from "next/navigation";
+import { flowsTarget } from "@/lib/legacy-routes";
 
-export default async function FlowsPage({
+/* The standalone Director tab is gone (2026-10-07, Mike's call): the
+   canvas lives inside a project's workspace (/studio/projects/<id>), or,
+   for a scene made outside any project, on /studio/scene/<id>. This route
+   stays only so every Director link written before keeps working:
+   `?concept=` (and `&shot=`) open that scene, `?draft` the browser-local
+   draft canvas, and anything else the Projects board. The vanilla /ui
+   hands its scenes here too (DIRECTOR_FRONTEND_URL). */
+export default async function FlowsRedirect({
   searchParams,
 }: {
   searchParams: Promise<{ concept?: string; shot?: string; draft?: string }>;
 }) {
-  const params = await searchParams;
-  const conceptId =
-    params.concept && /^\d+$/.test(params.concept)
-      ? Number(params.concept)
-      : undefined;
-  const shotN =
-    params.shot && /^\d+$/.test(params.shot) ? Number(params.shot) : undefined;
-  // no scene named: open the newest one (the standing rule: arrival is the
-  // nodes). The browser-local draft is asked for by name.
-  if (!conceptId && params.draft === undefined) return <DirectorArrival />;
-  return (
-    <FlowWorkspace
-      key={`${conceptId || "draft"}:${shotN || "first"}`}
-      conceptId={conceptId}
-      shotN={shotN}
-    />
-  );
+  redirect(flowsTarget(await searchParams));
 }
