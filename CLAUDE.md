@@ -96,8 +96,8 @@ venv/bin/python -m ops.ig_tokens research --app-id <research app id>
 # then DELETED 2026-10-07 (Mike's call): src/nightly.py, run_morning_prompts.sh,
 # ops/fly/run-nightly.sh + nightly.md, the db.nightly_runs receipt and its
 # "Last night" line on the Dev Studio, costs.spent_since. The live Postgres
-# still holds the old nightly_runs table and rows -- deliberately left, and
-# nothing reads or writes it; drop it by hand if ever wanted. classify_error
+# nightly_runs table (18 rows, 2026-09-08..09-27) was dropped the same day,
+# after the deploy that stopped creating it. classify_error
 # (SYSTEMIC / CONTENT) moved to src/trigger.py, its one remaining caller.
 # The research agent, the scout crawl and the metrics sweep run only by hand:
 # `src.research_agent`, `src.scout run`, `src.refresh_metrics`. Everything
