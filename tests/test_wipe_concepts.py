@@ -42,10 +42,13 @@ def _setup(s):
                       timeline={"parts": [{"n": 1, "media_url": "https://r2/p1.mp4"}]}),
         "picked": scene(dsn, acct, "picked"),
         "parked": scene(dsn, acct, "parked", parked_at="2026-10-01T00:00:00"),
+        "parked_gone": scene(dsn, acct, "parked, then archived", parked_at="2026-10-01T00:00:00"),
         "asset": scene(dsn, acct, "has a generated asset"),
         "kept": scene(dsn, acct, "kept by id"),
     }
     preprod.set_picked(ids["picked"], True, dsn=dsn, account_id=acct)
+    # archived after it was parked: no longer in the Queue, so not kept
+    preprod.set_archived(ids["parked_gone"], True, dsn=dsn, account_id=acct)
     render_assets.record(generation_id=1, tool="fal", model="ltx", media_kind="image", prompt="p",
                          media_url="https://r2/still.png", concept_id=ids["asset"], dsn=dsn,
                          account_id=acct)
@@ -62,18 +65,19 @@ def _setup(s):
 def test_the_report_keeps_what_must_survive_and_changes_nothing(store):
     ids = _setup(store)
     plan = wipe.scan(store["dsn"], account_id=store["account"], keep_ids=(ids["kept"],))
-    assert sorted(plan["delete"]) == sorted([ids["plain"], ids["plain2"]])
+    assert sorted(plan["delete"]) == sorted([ids["plain"], ids["plain2"], ids["parked_gone"]])
     assert plan["keep"][ids["rendered"]] == ["rendered"]
     assert plan["keep"][ids["part"]] == ["rendered"]
     assert plan["keep"][ids["picked"]] == ["picked"]
-    assert plan["keep"][ids["parked"]] == ["parked for the Queue"]
+    assert plan["keep"][ids["parked"]] == ["waiting in the Queue"]
+    assert ids["parked_gone"] not in plan["keep"]
     assert plan["keep"][ids["asset"]] == ["points from a generated asset"]
     assert plan["keep"][ids["kept"]] == ["kept by id"]
     assert plan["dependents"]["hold_queue"] == 1
     assert plan["dependents"]["workflows"] == 1
     assert plan["pending_pairs"] == [f"concept-{ids['plain']}-shot-1"]
     assert plan["unknown_columns"] == []
-    assert len(preprod.list_concepts(limit=100, dsn=store["dsn"], account_id=store["account"])) == 8
+    assert len(preprod.list_concepts(limit=100, dsn=store["dsn"], account_id=store["account"])) == 9
 
 
 # guards: wipe -- lessons first, backup and rates, one transaction, re-runnable
@@ -86,12 +90,12 @@ def test_the_write_ingests_backs_up_deletes_and_is_rerunnable(store):
                        ingest=lambda ref: taught.append(ref) or {"ok": True},
                        backup_dir=store["tmp"] / "backups", stats_dir=store["tmp"] / "stats")
     assert taught == [f"concept-{ids['plain']}-shot-1"]
-    assert result["deleted"] == {"shoot_concepts": 2, "hold_queue": 1, "workflows": 1}
+    assert result["deleted"] == {"shoot_concepts": 3, "hold_queue": 1, "workflows": 1}
     left = {c["id"] for c in preprod.list_concepts(limit=100, dsn=dsn, account_id=acct)}
-    assert left == set(ids.values()) - {ids["plain"], ids["plain2"]}
+    assert left == set(ids.values()) - {ids["plain"], ids["plain2"], ids["parked_gone"]}
     backup = json.loads(open(result["backup"]).read())
-    assert sorted(backup["deleting"]) == sorted([ids["plain"], ids["plain2"]])
-    assert len(backup["shoot_concepts"]) == 8 and len(backup["hold_queue"]) == 1
+    assert sorted(backup["deleting"]) == sorted([ids["plain"], ids["plain2"], ids["parked_gone"]])
+    assert len(backup["shoot_concepts"]) == 9 and len(backup["hold_queue"]) == 1
     assert "pick_rate" in json.loads(open(result["stats"]).read())
     # the asset row and its file name are untouched
     assert len(render_assets.list_all(dsn=dsn, account_id=acct)) == 1
@@ -109,7 +113,7 @@ def test_a_lesson_that_will_not_ingest_deletes_nothing(store):
         wipe.wipe(store["dsn"], account_id=store["account"], plan=plan,
                   ingest=lambda ref: {"ok": False},
                   backup_dir=store["tmp"] / "b", stats_dir=store["tmp"] / "s")
-    assert len(preprod.list_concepts(limit=100, dsn=store["dsn"], account_id=store["account"])) == 8
+    assert len(preprod.list_concepts(limit=100, dsn=store["dsn"], account_id=store["account"])) == 9
 
 
 # guards: an unknown column naming a concept refuses the write
@@ -133,7 +137,7 @@ def test_a_count_that_differs_from_the_report_rolls_back(store):
         wipe.wipe(store["dsn"], account_id=store["account"], plan=plan,
                   ingest=lambda ref: {"ok": True},
                   backup_dir=store["tmp"] / "b", stats_dir=store["tmp"] / "s")
-    assert len(preprod.list_concepts(limit=100, dsn=store["dsn"], account_id=store["account"])) == 8
+    assert len(preprod.list_concepts(limit=100, dsn=store["dsn"], account_id=store["account"])) == 9
 
 
 # guards: only the named account, and never a guessed database

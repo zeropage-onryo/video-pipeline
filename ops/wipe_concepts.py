@@ -11,7 +11,12 @@ WHAT IT KEEPS -- a concept survives when any of these is true:
     with metrics);
   - any shot, or any timed part of a shot, carries a `media_url` (it was
     rendered);
-  - it is picked, or any shot is parked for the Queue, or it is marked shot;
+  - it is picked, or it is marked shot, or it is WAITING in the Queue: a shot
+    is parked AND the concept is not archived. A parked marker stays on the
+    shot after the scene is archived (2026-10-07: 198 of 200 live "parked"
+    concepts were archived), so on its own it is not a reason to keep --
+    the Queue's own rule (`app/api._waiting`) is parked or picked, not
+    archived;
   - another record still points at it: a `generated_assets` row (a paid
     render), a `videos` row (a post), a live `cut_projects` row or a
     `timelines` key `concept:<id>` (an edit), or a `fal_requests` receipt
@@ -132,7 +137,7 @@ def scan(dsn: str, *, account_id: int, keep_ids=DEFAULT_KEEP) -> dict[str, Any]:
     dependents: {table: n}, pending_pairs: [video_ref], unknown_columns}."""
     with db.connect(dsn) as conn:
         rows = conn.execute(
-            "SELECT id, title, picked_at, shot_done, shots_json FROM shoot_concepts "
+            "SELECT id, title, picked_at, archived_at, shot_done, shots_json FROM shoot_concepts "
             "WHERE account_id IS NOT DISTINCT FROM %s ORDER BY id", (account_id,)).fetchall()
         tables = {r["table_name"] for r in conn.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -187,8 +192,8 @@ def scan(dsn: str, *, account_id: int, keep_ids=DEFAULT_KEEP) -> dict[str, Any]:
                 why.append("rendered")
             if row["picked_at"]:
                 why.append("picked")
-            if any(s.get("parked_at") for s in shots):
-                why.append("parked for the Queue")
+            if not row["archived_at"] and any(s.get("parked_at") for s in shots):
+                why.append("waiting in the Queue")
             if row["shot_done"]:
                 why.append("marked shot")
             why += [f"points from {label}" for label, ids in linked.items() if cid in ids]
