@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{% if problem %}Connection problem{% else %}Allow {{ client_name }}?{% endif %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* The consent step of the OAuth flow (app/oauth_consent.py). Same skin as
+   the sign-in page: dark card, red accent, one column. */
+:root{
+  --bg:#0b0b0c; --card:#161618; --panel:#1d1d20; --line:rgb(255 255 255 / .09);
+  --line-hi:rgb(255 255 255 / .22); --text:#f4f3f2; --dim:#9a9894;
+  --accent:#E4002B; --warn:#f5b041; --warn-soft:rgb(245 176 65 / .12);
+}
+@media (prefers-color-scheme: light){
+  :root{--bg:#f4f3f1; --card:#ffffff; --panel:#f6f5f3; --line:rgb(0 0 0 / .09);
+    --line-hi:rgb(0 0 0 / .22); --text:#141414; --dim:#5f5d59; --warn:#9a6200;
+    --warn-soft:rgb(245 176 65 / .16)}
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.55 Inter,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;display:grid;place-items:center;min-height:100vh;padding:24px 16px}
+.card{width:min(440px,100%);background:var(--card);border:1px solid var(--line);
+  border-radius:20px;padding:32px 28px}
+.mark{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:12px;
+  background:var(--accent);color:#fff;font-weight:700;font-size:14px;margin-bottom:20px}
+h1{font-size:22px;line-height:1.25;font-weight:700;margin-bottom:8px}
+.sub{color:var(--dim);margin-bottom:20px}
+.rows{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:20px}
+.row{display:flex;justify-content:space-between;gap:16px;padding:12px 14px;background:var(--panel)}
+.row+.row{border-top:1px solid var(--line)}
+.row span:first-child{color:var(--dim)}
+.row span:last-child{text-align:right;overflow-wrap:anywhere}
+.host{font-weight:700}
+.warn{background:var(--warn-soft);color:var(--warn);border-radius:12px;padding:12px 14px;
+  margin-bottom:20px;font-size:14px}
+ul.can{list-style:none;margin-bottom:22px}
+ul.can li{padding-left:22px;position:relative;margin-bottom:6px}
+ul.can li::before{content:"";position:absolute;left:4px;top:9px;width:7px;height:7px;
+  border-radius:50%;background:var(--accent)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{font:inherit;font-weight:600;border-radius:12px;padding:12px 14px;cursor:pointer;
+  border:1px solid var(--line-hi);background:transparent;color:var(--text)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.foot{color:var(--dim);font-size:13px;margin-top:18px}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="mark">ZP</div>
+  {% if problem %}
+  <h1>We couldn't finish connecting</h1>
+  <p class="sub">{{ problem }}</p>
+  {% else %}
+  <h1>Allow {{ client_name }} to use your Zero Page Studio?</h1>
+  <p class="sub">{% if email %}Signed in as <b>{{ email }}</b>. {% endif %}You will be sent back to
+    <span class="host">{{ redirect_host }}</span>.</p>
+
+  {% if loopback %}
+  <div class="warn">This request will return to a program on <b>this computer</b> ({{ redirect_host }}).
+    Only allow it if you just started the connection yourself, for example from Claude Code.</div>
+  {% endif %}
+
+  <div class="rows">
+    <div class="row"><span>App</span><span>{{ client_name }}{% if client_host %} &middot; {{ client_host }}{% endif %}</span></div>
+    <div class="row"><span>Returns to</span><span class="host">{{ redirect_host }}</span></div>
+    {% if scopes %}<div class="row"><span>Scopes</span><span>{{ scopes | join(", ") }}</span></div>{% endif %}
+  </div>
+
+  <ul class="can">
+    <li>Read the ideas on your board and decide on them</li>
+    <li>Write scenes and quote what rendering them costs</li>
+    <li>Render, only after the price is shown and you approve it in the chat</li>
+  </ul>
+
+  <form method="post" action="/oauth/consent">
+    <input type="hidden" name="authorization_id" value="{{ authorization_id }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="actions">
+      <button type="submit" name="decision" value="deny">Deny</button>
+      <button class="primary" type="submit" name="decision" value="approve">Allow</button>
+    </div>
+  </form>
+  <p class="foot">You can disconnect at any time from the app's connector settings.</p>
+  {% endif %}
+</main>
+</body>
+</html>

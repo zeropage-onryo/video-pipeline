@@ -71,7 +71,7 @@ from src import (
 from src.cut import moments as cut_moments
 from src.cut import store as cut_store
 
-from . import api, auth, jobs, mcp_auth, mcp_mount, seo
+from . import api, auth, jobs, mcp_auth, mcp_mount, oauth_consent, seo
 from . import billing as billing_routes
 from .sparkline import render_sparkline
 
@@ -337,6 +337,8 @@ if MCP_APP is not None:
         return JSONResponse(mcp_auth.protected_resource_metadata())
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
+# the OAuth consent step Supabase's OAuth server sends a connector's user to
+app.include_router(oauth_consent.router)
 # Stripe's webhook: outside /api, because Stripe cannot sign in -- its
 # authentication is the signature over the raw body (app/billing.py)
 app.include_router(billing_routes.webhook)
@@ -407,8 +409,12 @@ def signin(request: Request, error: Optional[str] = None,
     it is never an open redirect."""
     if next:
         request.session["post_login_redirect"] = next
+    # A sign-in FOR an OAuth consent needs a fresh Supabase session even
+    # when our own cookie is good (app/oauth_consent.py), so it skips the
+    # already-signed-in shortcut and the page says why it is asking.
+    consenting = oauth_consent.pending(request) is not None
     user = auth.current_user(request)
-    if user:
+    if user and not consenting:
         # somebody who signed in while the door was invite-only has a
         # session and no workspace; walking through it now makes one
         auth._provision(user["id"], user.get("email"), user.get("display_name"))
@@ -432,7 +438,7 @@ def signin(request: Request, error: Optional[str] = None,
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
-         "email": email, "step": screen,
+         "email": email, "step": screen, "consenting": consenting,
          # the code step's own line, when the door that sent the code has
          # something to say about it (a sign-up: the code confirms the address)
          "notice": notice if screen == "code" else None,

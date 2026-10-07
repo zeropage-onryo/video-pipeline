@@ -201,8 +201,13 @@ input:focus{outline:0;border-color:var(--line-hi)}
       <div class="foot"><a class="link" href="/signin?open=forgot">Ask for a new link</a></div>
 
       {% else %}
+      {% if consenting %}
+      <h1>Connect an app to Zero Page</h1>
+      <p class="sub">Sign in to choose what it can do with your studio. New here? Signing in creates your workspace.</p>
+      {% else %}
       <h1>Welcome to Zero Page</h1>
       <p class="sub">{% if mode == 'signup' %}Sign up and start creating{% else %}Log in or sign up &mdash; it's the same door{% endif %}</p>
+      {% endif %}
       {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
       {% if signup_credits %}

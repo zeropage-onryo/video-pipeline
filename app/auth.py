@@ -466,7 +466,7 @@ def _redirect(url: str) -> Exception:
 # --------------------------------------------------------------------------
 
 _hits: dict[tuple, deque] = defaultdict(deque)
-RATE_LIMITS = {"login": (10, 60.0), "signup": (5, 60.0),     # (max, window s)
+RATE_LIMITS = {"consent": (30, 60.0), "login": (10, 60.0), "signup": (5, 60.0),     # (max, window s)
                "otp": (5, 60.0), "verify": (10, 60.0),
                # a password set/change/reset: each one re-proves the
                # person (a password check or a code), so it is a login
@@ -603,6 +603,14 @@ def _finish(request: Request, session: dict) -> RedirectResponse:
     if error:
         return _signin_error(error)
     _provision(user_id, claims.get("email"), display_name)
+    # A sign-in that was FOR an OAuth consent (app/oauth_consent.py) goes
+    # back to the consent page holding this sign-in's token for the one
+    # decision, instead of into the studio.
+    from . import oauth_consent
+    back = oauth_consent.resume(request, session)
+    if back is not None:
+        issue_session(back, user_id, request)
+        return back
     # An external frontend (FRONTEND_ORIGINS) that sent the person here
     # gets them back on its own origin THROUGH THE HANDOFF, so the cookie
     # is set there too (see handoff_redirect); otherwise the built-in /ui
