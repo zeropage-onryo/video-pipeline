@@ -2586,8 +2586,18 @@ class ProjectForgetBody(BaseModel):
 @router.get("/projects")
 def projects_list(archived: bool = False,
                   account_id: int = Depends(auth.current_account_id)):
-    return {"items": projects.list_projects(account_id=account_id,
-                                            include_archived=archived),
+    """The Projects board (2026-10-07): one card per project, newest
+    touched first, each with its counts and a cover -- the stored ref of
+    its newest scene, minted here for the browser (media.url_for, and the
+    480px tile beside it), never handed out as the stored string."""
+    from src import media
+
+    items = projects.list_projects(account_id=account_id, include_archived=archived)
+    for p in items:
+        raw = p.get("cover")
+        p["cover"] = media.url_for(raw, account_id) if raw else None
+        p["cover_thumb"] = _ref_thumbs([raw], account_id)[0] if raw else None
+    return {"items": items,
             "questions": [{"key": k, "label": label} for k, label in projects.QUESTIONS]}
 
 

@@ -1079,7 +1079,8 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         instructions=(
             "The Zero Page Films pre-production board. Read the board, "
             "pick or archive concepts, capture ideas, and bank sparks "
-            "for the nightly run. Nothing here renders video: picking a "
+            "for a later run (nothing is scheduled: a run is started by "
+            "hand). Nothing here renders video: picking a "
             "concept puts it in front of a spend gate that a human "
             "approves on the machine."
         ),
@@ -1169,14 +1170,15 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
     @server.tool(annotations=writes)
     def add_spark(brand: str, spark: str, rationale: str = "",
                   evidence: str = "") -> dict:
-        """Bank a one-line direction for the nightly run to generate
-        from."""
+        """Bank a one-line direction for the next run to generate from.
+        Nothing runs on a schedule (2026-09-28): a run is started by hand."""
         return _t(bank_spark, brand=brand, spark=spark, rationale=rationale,
                           evidence=evidence, dsn=dsn)
 
     @server.tool(annotations=read_only)
     def tonight(brand: str) -> dict:
-        """What direction tonight's scheduled run would take."""
+        """What direction the next run would take. Nothing is scheduled
+        (2026-09-28): this is what a run started by hand would use."""
         return _t(next_spark, brand, dsn=dsn)
 
     @server.tool(annotations=read_only)

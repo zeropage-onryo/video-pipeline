@@ -173,6 +173,10 @@ export type MediaItem = {
   starred?: boolean;
   /* a clip's still (2026-09-28): its t/ derivative, when R2 has one */
   poster?: string | null;
+  /* the project its scene is filed under, or null: a render made outside
+     any project lives here and on no board (2026-10-07) */
+  project_id?: number | null;
+  project_title?: string | null;
 };
 export type MediaCounts = Record<string, number> & { all: number };
 export type MediaWall = {
@@ -230,6 +234,8 @@ export type Concept = {
   picked: boolean;
   parked: boolean;
   archived: boolean;
+  /** the studio project this scene is filed under, or null (a solo scene) */
+  project_id?: number | null;
   park_reason: string;
   refs: string[];
   prompt: string;
@@ -597,12 +603,20 @@ export type GuideReply = {
 /* POST /api/creative-guide/act -- the confirm card's click, and the
    ONLY thing that runs a write tool. Guarded like the turn. The server
    re-checks the tool set and refuses any URL in the arguments. */
-export const runGuideAction = (proposal: GuideProposal) =>
-  apiFetch<{ ok: boolean; tool: string; result: string }>("/creative-guide/act", {
+export const runGuideAction = (
+  proposal: GuideProposal,
+  /** save_as_project only: the thread as {role, content, tool_calls?} and
+   *  the concept ids its sends made -- filed into the new project */
+  extra?: { conversation?: unknown[]; scenes?: number[] },
+) =>
+  apiFetch<{ ok: boolean; tool: string; result: string; project?: Project }>("/creative-guide/act", {
     method: "POST",
     headers: GUARDED_HEADERS,
-    body: JSON.stringify({ tool: proposal.tool, args: proposal.args }),
+    body: JSON.stringify({ tool: proposal.tool, args: proposal.args, ...(extra || {}) }),
   });
+/** create_project / save_as_project: the Guide's two ways a project is made */
+export const PROJECT_TOOLS = ["create_project", "save_as_project"];
+export const isProjectTool = (tool?: string) => !!tool && PROJECT_TOOLS.includes(tool);
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
 export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
   for (;;) {
@@ -689,6 +703,8 @@ export type Project = {
   id: number;
   title: string;
   brief: string;
+  /** the project's look (2026-10-02); "" imposes none */
+  look?: string;
   memory: ProjectMemory[];
   archived: boolean;
   created_at: string;
@@ -696,16 +712,19 @@ export type Project = {
   concepts?: number;
   picked?: number;
   rendered?: number;
+  /** the board card's picture: the newest scene's still, else its first
+   *  reference, minted for the browser (null when it has no scene yet) */
+  cover?: string | null;
+  /** the cover's 480px tile, when one exists (app/api.py _ref_thumbs) */
+  cover_thumb?: string | null;
 };
-export type ProjectQuestion = { key: string; label: string };
+/* PROJECTS ARE MADE THROUGH THE GUIDE (2026-10-07, Mike's call): there is
+   no create form. The pill or the composer's brain proposes create_project
+   / save_as_project and the confirm card posts runGuideAction. */
 export const listProjects = (archived = false) =>
-  apiFetch<{ items: Project[]; questions: ProjectQuestion[] }>(
-    `/projects${archived ? "?archived=true" : ""}`,
-  );
+  apiFetch<{ items: Project[] }>(`/projects${archived ? "?archived=true" : ""}`);
 export const getProject = (id: number) => apiFetch<Project>(`/projects/${id}`);
-export const createProject = (title: string, brief: string) =>
-  apiFetch<Project>("/projects", { method: "POST", body: JSON.stringify({ title, brief }) });
-export const updateProject = (id: number, patch: { title?: string; brief?: string }) =>
+export const updateProject = (id: number, patch: { title?: string; brief?: string; look?: string }) =>
   apiFetch<Project>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 export const archiveProject = (id: number, archived = true) =>
   apiFetch<{ ok: boolean }>(`/projects/${id}/archive`, {
@@ -717,11 +736,43 @@ export const forgetProjectMemory = (id: number, at: string) =>
     method: "POST",
     body: JSON.stringify({ at }),
   });
-export const draftProjectBrief = (title: string, answers: Record<string, string>) =>
-  apiFetch<{ brief: string }>("/projects/draft-brief", {
-    method: "POST",
-    body: JSON.stringify({ title, answers }),
+/** what deleting the project would leave detached (the confirm lists the
+ *  unrendered ones: they have no board to appear on afterwards) */
+export const projectScenes = (id: number) =>
+  apiFetch<{ items: { id: number; title: string; rendered: boolean }[] }>(`/projects/${id}/scenes`);
+/** Delete for good: brief, look, memory and chat history. Its scenes are
+ *  detached, never deleted, so a rendered clip stays on Assets. */
+export const deleteProject = (id: number) =>
+  apiFetch<{ ok: boolean; detached: number; messages: number }>(`/projects/${id}`, {
+    method: "DELETE",
+    headers: GUARDED_HEADERS,
   });
+/** One turn of a project's chat history, as src/projects.py stores it. */
+export type ProjectMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  /** what the reply carried beside its words (proposal, chips, directions…) */
+  tool_calls: Partial<GuideReply> | null;
+  created_at: string;
+};
+export const projectMessages = (id: number, before?: number) =>
+  apiFetch<{ items: ProjectMessage[]; has_more: boolean }>(
+    `/projects/${id}/messages${before ? `?before=${before}` : ""}`,
+  );
+
+/* Where a scene's canvas opens (2026-10-07): /studio/scene/<id> resolves
+   it -- into its project's workspace when it is filed under one, else the
+   canvas alone (a single video made outside any project). The ONE place a
+   page builds a scene link, so no page names the retired Director route. */
+export const sceneHref = (id: number, shot?: number) => `/studio/scene/${id}${shot ? `?shot=${shot}` : ""}`;
+export const workspaceHref = (project: number, scene?: number, shot?: number) => {
+  const params = new URLSearchParams();
+  if (scene) params.set("scene", String(scene));
+  if (scene && shot) params.set("shot", String(shot));
+  const qs = params.toString();
+  return `/studio/projects/${project}${qs ? `?${qs}` : ""}`;
+};
 
 /* The project the Studio composer is writing inside. Carried as ?project=
    from the Projects page and remembered per browser so a reload keeps it;

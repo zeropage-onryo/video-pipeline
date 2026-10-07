@@ -53,6 +53,7 @@ import {
   queuePending,
   queueReject,
   queueShot,
+  sceneHref,
   waitForJob,
   type Concept,
   type CutReady,
@@ -729,11 +730,11 @@ export default function QueuePage() {
                   // Director icon opens. "Add references" with nowhere to add
                   // them is a dead end.
                   <Link
-                    href={`/studio/flows?concept=${c.id}&shot=1`}
-                    aria-label={`Open ${c.title} in Director to attach references`}
+                    href={sceneHref(c.id, 1)}
+                    aria-label={`Open ${c.title} on its canvas to attach references`}
                     className="-mt-1 inline-flex min-h-11 items-center self-start rounded-[8px] border border-noir-line px-3 font-plex! text-[11px]! tracking-[0.08em] text-noir-red2! hover:border-noir-red2"
                   >
-                    ATTACH REFERENCES IN DIRECTOR →
+                    ATTACH REFERENCES ON ITS CANVAS →
                   </Link>
                 ) : null}
                 {!locked && !did && c.keyframes ? (

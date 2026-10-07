@@ -80,7 +80,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
-import { sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
+import { sceneHref, sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
 import { creditsText } from "@/lib/render-choice";
 import {
   announceQueueChange,
@@ -541,7 +541,7 @@ type Concept = {
 
 /* The scene switcher: the header chip is a menu of the brand's open scenes,
    so moving from one scene's graph to another does not mean a trip back to
-   Pipeline. The list is read when the menu opens, not on mount -- the
+   the Projects board. The list is read when the menu opens, not on mount -- the
    canvas has enough to load. Leaving goes through `go` (flushAndGo), so
    the canvas is saved against the scene it belongs to first. */
 function SceneSwitcher({
@@ -549,11 +549,13 @@ function SceneSwitcher({
   currentId,
   brand,
   go,
+  hrefFor,
 }: {
   label: ReactNode;
   currentId?: number;
   brand: string;
   go: (destination: string) => void;
+  hrefFor: (id: number, shot?: number) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<SceneMenuRow[] | null>(null);
@@ -604,7 +606,7 @@ function SceneSwitcher({
                 aria-current={c.id === currentId ? "true" : undefined}
                 onClick={() => {
                   setOpen(false);
-                  if (c.id !== currentId) go(`/studio/flows?concept=${c.id}&shot=1`);
+                  if (c.id !== currentId) go(hrefFor(c.id, 1));
                 }}
               >
                 <span className="scene-menu-n">{c.n}</span>
@@ -614,11 +616,11 @@ function SceneSwitcher({
             ))}
           </span>
           <span className="scene-menu-foot">
-            <button type="button" role="menuitem" onClick={() => go("/studio/pipeline")}>
-              All concepts on Pipeline
+            <button type="button" role="menuitem" onClick={() => go("/studio/projects")}>
+              All projects
             </button>
             {currentId ? (
-              <button type="button" role="menuitem" onClick={() => go("/studio/flows?draft=1")}>
+              <button type="button" role="menuitem" onClick={() => go("/studio/scene/draft")}>
                 Local draft canvas
               </button>
             ) : null}
@@ -629,8 +631,28 @@ function SceneSwitcher({
   );
 }
 
-function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number }) {
+/* Where the canvas sits decides where its links go (2026-10-07). On its own
+   page (/studio/scene/<id>) it is the whole stage, with a way back and a
+   scene switcher; inside a project's workspace the scene list is beside it,
+   so the switcher steps aside, `hrefFor` keeps a shot change inside the
+   workspace, and `go` lets the page navigate client-side once the canvas
+   has saved, so picking another
+   scene in the list never drops an edit still waiting on its autosave
+   (`registerLeave` hands the page that save-then-go). */
+export type CanvasNav = {
+  backHref?: string;
+  backLabel?: string;
+  hrefFor?: (id: number, shot?: number) => string;
+  embedded?: boolean;
+  go?: (destination: string) => void;
+  registerLeave?: (leave: ((destination: string) => Promise<void>) | null) => void;
+};
+
+function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?: number; nav?: CanvasNav }) {
   const shell = useShell();
+  const backHref = nav.backHref ?? "/studio/projects";
+  const backLabel = nav.backLabel ?? "Back to Projects";
+  const hrefFor = nav.hrefFor ?? sceneHref;
   const [initial] = useState(() => makeTemplate("variety"));
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
@@ -744,7 +766,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
           getAssets().catch(() => ({ items: [] })),
         ]);
         const shot = detail.shots.find((s) => s.n === (shotN ?? detail.shots[0]?.n));
-        if (!shot) throw new Error("This scene has no written shot yet. Write its prompt from Pipeline first.");
+        if (!shot) throw new Error("This scene has no written shot yet. Write its prompt from Studio first.");
         const saved = await apiFetch<{
           graph: LegacyGraph | null;
           states?: Record<string, NodeState>;
@@ -883,8 +905,16 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         return;
       }
     }
-    window.location.assign(destination);
+    if (nav.go && destination.startsWith("/")) nav.go(destination);
+    else window.location.assign(destination);
   };
+  // the page beside the canvas leaves through the same save
+  const registerLeave = nav.registerLeave;
+  useEffect(() => {
+    if (!registerLeave) return;
+    registerLeave(flushAndGo);
+    return () => registerLeave(null);
+  });
 
   const update = useCallback(
     (id: string, data: Partial<CardData>) =>
@@ -1259,11 +1289,11 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const inQueue = !!(scene && (scene.picked || scene.parked || scene.media_url));
   const sendToQueue = async () => {
     if (!scene) {
-      notify("Open a concept first — the brief on Pipeline builds one");
+      notify("Open a scene first — Create on Studio writes one");
       return;
     }
     if (inQueue) {
-      void flushAndGo(`${API_URL}/ui?view=queue`);
+      void flushAndGo("/studio/queue");
       return;
     }
     try {
@@ -1334,14 +1364,21 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
           <div className="flow-breadcrumb">
             {/* the React board, not the API's legacy /ui (which only bounced
                 back here through a handoff) */}
-            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo("/studio/pipeline")}>
-              <ArrowLeft size={16} />
-            </button>
-            {scene ? (
+            {nav.embedded ? null : (
+              <button aria-label={backLabel} title={backLabel} onClick={() => flushAndGo(backHref)}>
+                <ArrowLeft size={16} />
+              </button>
+            )}
+            {scene && nav.embedded ? (
+              <span className="chip" title={scene.title}>
+                <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
+              </span>
+            ) : scene ? (
               <SceneSwitcher
                 currentId={conceptId}
                 brand={shell.brand}
                 go={flushAndGo}
+                hrefFor={hrefFor}
                 label={
                   <>
                     <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
@@ -1355,6 +1392,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
                   <SceneSwitcher
                     brand={shell.brand}
                     go={flushAndGo}
+                    hrefFor={hrefFor}
                     label={
                       <>
                         <Clapperboard size={11} /> open a scene
@@ -1365,7 +1403,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               </>
             )}
             {scene && scene.shots.length > 1 && (
-              <select aria-label="Shot" value={activeShot} onChange={(e) => flushAndGo(`/studio/flows?concept=${conceptId}&shot=${e.target.value}`)}>
+              <select aria-label="Shot" value={activeShot} onChange={(e) => conceptId && flushAndGo(hrefFor(conceptId, Number(e.target.value)))}>
                 {scene.shots.map((s) => (
                   <option key={s.n} value={s.n}>
                     Shot {s.n}
@@ -1662,7 +1700,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
                   {/* the same sign-in every other page uses: it comes back here */}
                   <button onClick={() => goToSignIn()}>Sign in</button>
                   <button onClick={() => window.location.reload()}>Retry</button>
-                  <a href="/studio/pipeline">Back to Pipeline</a>
+                  <a href={backHref}>{backLabel}</a>
                 </div>
               )}
             </section>
@@ -1753,7 +1791,7 @@ function validDraft(value: unknown): value is Draft {
   }
   return d.edges.every((e) => e && typeof e.id === "string" && ids.has(e.source) && ids.has(e.target));
 }
-export default function FlowWorkspace(props: { conceptId?: number; shotN?: number }) {
+export default function FlowWorkspace(props: { conceptId?: number; shotN?: number; nav?: CanvasNav }) {
   return (
     <ReactFlowProvider>
       <Workspace {...props} />

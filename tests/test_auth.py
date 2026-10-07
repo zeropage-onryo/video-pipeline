@@ -721,9 +721,11 @@ def test_ui_legacy_keeps_the_reference_shell(clean_slate, gotrue, studio):
 
 
 def test_ui_signed_out_goes_to_signin_with_the_studio_as_next(clean_slate, gotrue, studio):
+    # the Pipeline view lands on the Projects board since 2026-10-07 (Mike's
+    # call: one board of projects replaced the Pipeline and Director tabs)
     response = client.get("/ui?view=pipeline", follow_redirects=False)
     assert response.status_code == 303
-    assert response.headers["location"] == "/signin?next=https%3A%2F%2Fstudio.example%2Fstudio%2Fpipeline"
+    assert response.headers["location"] == "/signin?next=https%3A%2F%2Fstudio.example%2Fstudio%2Fprojects"
 
 
 def test_signin_when_already_signed_in_here_goes_to_the_studio(clean_slate, gotrue, studio):

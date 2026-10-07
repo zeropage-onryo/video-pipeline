@@ -53,7 +53,7 @@ TOOLS = READ_TOOLS + WRITE_TOOLS
 
 # What a person sees on the confirm card, per write tool.
 WRITE_LABELS = {
-    "add_spark": "Bank this spark for the nightly run",
+    "add_spark": "Bank this spark for a later run",
     "reference": "Bank this reference image behind the spark",
 }
 
@@ -117,7 +117,8 @@ MAKE_SPECS = (
         "name": "make_video",
         "description": (
             "Write ONE video scene from an idea: the studio's scene writer turns it "
-            "into timed shots with its references, and it lands on the Pipeline board "
+            "into timed shots with its references, filed under the open project when there is "
+            "one "
             "(nothing is rendered; the Queue spends). Call it ONLY when the person "
             "asked for the scene in this turn in so many words or confirmed an offer "
             "you made -- never while they are still deciding. The prompt is the idea "

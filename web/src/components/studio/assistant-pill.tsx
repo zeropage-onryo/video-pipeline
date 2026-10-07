@@ -19,24 +19,36 @@
    AssistantThreadProvider holds for the whole studio, which the Studio
    composer's Guide writes into too -- so a talk started in the box is
    here when the pill opens on Pipeline, and the box is still full when
-   the person comes back. */
+   the person comes back.
+
+   Inside a project's workspace (2026-10-07) the thread IS that project's
+   chat history: every turn carries project_id and remember=1, the server
+   writes it as it happens, and reopening the project carries on where it
+   left off. There, nothing clears it -- deleting the project does. The
+   Guide makes projects too (create_project / save_as_project): those come
+   back as a proposal, drawn as a confirm card, and the click makes it. */
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronUp, Settings2, SquarePen } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
 import { useAssistantThread } from "@/components/studio/assistant-thread";
 import {
   getBalance,
+  isProjectTool,
   queuePending,
   runCreativeGuide,
+  runGuideAction,
   waitForJob,
+  workspaceHref,
   type Balance,
   type Concept,
   type GuideReply,
 } from "@/lib/studio-api";
+import { isMake } from "@/lib/composer";
 import {
   AVATARS,
+  asProjectConversation,
   STAGES,
   STAGE_LABEL,
   TONES,
@@ -85,7 +97,11 @@ export function AssistantPill() {
     setStage: setConvStage,
     draft: composer,
     clearProject: resetProject,
+    projectId,
+    hasOlder,
+    loadOlder,
   } = useAssistantThread();
+  const router = useRouter();
   const [persona, setPersona] = useState<Persona | null>(null);
   const [setup, setSetup] = useState(false);
   const [open, setOpen] = useState(false);
@@ -186,8 +202,16 @@ export function AssistantPill() {
       // would read as an unanswered question
       form.append(
         "conversation",
-        JSON.stringify({ messages: next.filter((t) => !t.made).map(({ role, content }) => ({ role, content })) }),
+        // the newest 40: the server takes no more in one turn, and a
+        // project's history can be longer than that
+        JSON.stringify({ messages: next.filter((t) => !t.made).slice(-40).map(({ role, content }) => ({ role, content })) }),
       );
+      // inside a project's workspace: the turn is the project's, and the
+      // server keeps it in the project's history
+      if (projectId) {
+        form.append("project_id", String(projectId));
+        form.append("remember", "1");
+      }
       if (account) form.append("brand", account);
       form.append("guide_provider", "gemini");
       form.append("idea", composer.idea.trim() || said);
@@ -265,6 +289,43 @@ export function AssistantPill() {
     }
   }
 
+  /* The confirm card: a WRITE the Guide proposed, run only on this click.
+     A project tool comes back with the project it made, and the person is
+     taken to its workspace; save_as_project carries the thread so far (its
+     turns and the scenes its sends made) and then clears the studio-wide
+     thread, whose conversation is the project's now. */
+  async function decide(i: number, yes: boolean) {
+    const t = turns[i];
+    const proposal = t?.reply?.proposal;
+    if (!proposal || t.decided || busy) return;
+    if (!yes) {
+      setTurn(i, { decided: "skipped" });
+      return;
+    }
+    setBusy(true);
+    setDetail(`${proposal.label}…`);
+    try {
+      const extra = proposal.tool === "save_as_project" ? asProjectConversation(turns.slice(0, i)) : undefined;
+      const done = await runGuideAction(proposal, extra);
+      if (done.project && isProjectTool(proposal.tool)) {
+        setTurn(i, { decided: "done" });
+        toast(`“${done.project.title}” is on the Projects board`);
+        if (proposal.tool === "save_as_project") await resetProject().catch(() => {});
+        router.push(workspaceHref(done.project.id));
+        return;
+      }
+      setTurns((all) => [
+        ...all.map((x, j) => (j === i ? { ...x, decided: "done" as const } : x)),
+        { role: "assistant", content: `Done — ${done.result}` },
+      ]);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "That did not go through.", "err");
+    } finally {
+      setBusy(false);
+      setDetail("");
+    }
+  }
+
   /* Clear: the conversation is deleted on the server (never archived --
      it was working memory) and the card AND the composer's box start empty. */
   async function clearConversation() {
@@ -336,7 +397,7 @@ export function AssistantPill() {
                 <div className="zpa-title">
                   <b>{persona.name}</b>
                   <span>on {where}</span>
-                  {project ? (
+                  {project && !projectId ? (
                     <button
                       type="button"
                       className="zpa-icon"
@@ -366,11 +427,18 @@ export function AssistantPill() {
               </header>
 
               <div className="zpa-body" ref={body}>
+                {projectId && hasOlder ? (
+                  <button type="button" className="zpa-chip zpa-older" disabled={busy} onClick={() => void loadOlder().catch(() => {})}>
+                    Earlier messages
+                  </button>
+                ) : null}
                 {!turns.length ? (
                   <p className="zpa-msg">
                     {pathname.startsWith("/studio/queue")
                       ? "The Queue is where money is spent. Ask me which render to start with — approving stays your click."
-                      : "Tell me what you want to make. I'll ask a couple of things, pitch directions, find references and put it all in your composer. Create and Approve stay your clicks."}
+                      : projectId
+                        ? "This conversation stays with the project until it is deleted. Ask me to continue the story, or what to make next."
+                        : "Tell me what you want to make. I'll ask a couple of things, pitch directions, find references and put it all in your composer. Create and Approve stay your clicks."}
                   </p>
                 ) : null}
                 {turns.map((t, i) => t.made ? null : (
@@ -394,6 +462,8 @@ export function AssistantPill() {
                           setTurn(i, { chosen: { ...c, [id]: !c[id] } });
                         }}
                         onKeep={(sheet) => void keep(i, sheet)}
+                        decided={t.decided}
+                        onDecide={(yes) => void decide(i, yes)}
                       />
                     ) : null}
                   </div>
@@ -488,6 +558,8 @@ function Extras({
   onDirection,
   onToggle,
   onKeep,
+  decided,
+  onDecide,
 }: {
   reply: GuideReply;
   busy: boolean;
@@ -499,8 +571,14 @@ function Extras({
   onDirection: (j: number, d: { title: string; logline: string; turn?: string }) => void;
   onToggle: (id: string) => void;
   onKeep: (sheet: ContactSheet) => void;
+  decided?: "done" | "skipped";
+  onDecide: (yes: boolean) => void;
 }) {
   const sheet = reply.sheet;
+  // a write the Guide proposed: its card, here. A make proposal is the
+  // composer's (it runs on the send) and keep_references is the sheet's Keep.
+  const proposal =
+    reply.proposal && !isMake(reply.proposal.tool) && reply.proposal.tool !== "keep_references" ? reply.proposal : null;
   // a question whose options are just the directions' titles says the
   // same thing twice; the direction cards are the better tap
   const titles = new Set((reply.directions ?? []).map((d) => d.title.trim().toLowerCase()));
@@ -564,6 +642,31 @@ function Extras({
 
       {sheet ? (
         <ContactSheetView sheet={sheet} chosen={chosen} kept={kept} busy={busy} name={name} onToggle={onToggle} onKeep={onKeep} />
+      ) : null}
+
+      {proposal ? (
+        <div className="zpa-confirm">
+          <span className="zpa-mono">{proposal.label}</span>
+          {Object.entries(proposal.args)
+            .filter(([, v]) => v !== "" && v != null)
+            .map(([k, v]) => (
+              <p key={k} className="zpa-msg">
+                <span className="zpa-mono dim">{k}</span> {String(v)}
+              </p>
+            ))}
+          {decided ? (
+            <span className="zpa-mono dim">{decided === "done" ? "Done" : "Not now"}</span>
+          ) : (
+            <div className="zpa-chips">
+              <button type="button" className="zpa-keep" disabled={busy} onClick={() => onDecide(true)}>
+                Confirm
+              </button>
+              <button type="button" className="zpa-chip" disabled={busy} onClick={() => onDecide(false)}>
+                Not now
+              </button>
+            </div>
+          )}
+        </div>
       ) : null}
     </>
   );
