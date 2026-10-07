@@ -367,3 +367,15 @@ def test_the_showcase_keeps_only_real_sources(clean_slate, monkeypatch):
     assert "javascript:" not in page
     monkeypatch.setenv("SIGNIN_SHOWCASE", "not json")
     assert client.get("/signin").status_code == 200
+
+
+def test_the_default_showcase_reads_the_tenant_keys(clean_slate, monkeypatch):
+    # The flat renders/nano/... keys are gone from R2 (they 404'd on the
+    # live page, 2026-10-07); the stills live under account 1's m/1/ prefix.
+    monkeypatch.delenv("SIGNIN_SHOWCASE", raising=False)
+    from app import main
+    images = [s["image"] for s in main.signin_showcase()]
+    assert len(images) == 4
+    assert all("/m/1/renders/nano/" in u for u in images)
+    page = client.get("/signin").text
+    assert all(u in page for u in images)
