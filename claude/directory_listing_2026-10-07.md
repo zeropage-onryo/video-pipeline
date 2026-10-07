@@ -67,3 +67,12 @@ shape became the plugin's `write-scene` skill, written fresh; the other
 four skills were reworked to the listed set. Route tests (201) and the MCP
 files pass; the full suite is re-run at the end. Still open and unchanged:
 the consent page, and the directory's AI-media rule as the review risk.
+
+**And the consent page (end of the day).** `/oauth/consent` on the API
+origin, the page Supabase's OAuth server was redirecting people to and
+nobody served: sign in through any door, `auth._finish` hands back with
+that sign-in's token, the page names the client and the redirect host,
+Allow / Deny goes to Supabase as the person. 18 tests; walked in the
+Browser pane against a stubbed Supabase. What is left for the listing is
+one dashboard setting (Authorization Path = `/oauth/consent`), the deploy,
+the second-account walk, the plugin repo, and the portal.

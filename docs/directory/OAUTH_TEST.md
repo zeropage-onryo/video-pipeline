@@ -91,7 +91,27 @@ banked images are listed to user B by `sparks` and `images`, and A's
   stranger reaches (Phase 3's option A does this for the spending ones; the
   read ones would go with them).
 
-## Finding 3 — there is no consent page
+## Finding 3 — there is no consent page (BUILT 2026-10-07)
+
+**Built:** `app/oauth_consent.py` + `app/templates/oauth_consent.html`,
+`GET`/`POST /oauth/consent` on the API origin (the Supabase Site URL,
+`https://zeropage-studio.fly.dev`). A consent with no fresh sign-in goes to
+`/signin` (which says "Connect an app to Zero Page" and skips its
+already-signed-in shortcut); every sign-in door ends in `auth._finish`,
+which hands back to the page holding that sign-in's access token for the
+one decision (`oauth_consent.resume`, the starlette session, beside a CSRF
+value; a pending consent expires after 15 minutes). The page shows the
+client, the redirect HOST in bold with a loopback warning, the scopes and
+the signed-in email; Allow / Deny posts `{"action": ...}` to
+`/auth/v1/oauth/authorizations/{id}/consent` as the person (endpoints read
+off supabase-js) and 303s only to an http(s) `redirect_url`. Signing in
+there also creates the workspace (`_provision`). `tests/test_oauth_consent.py`
+(18 tests) pins it; walked in the Browser pane against a stubbed Supabase
+(sign-in → page → Deny landed on the client's loopback callback with
+`error=access_denied`). **One dashboard step remains:** Authentication →
+OAuth Server → Authorization Path = `/oauth/consent`.
+
+What follows is the finding as it stood.
 
 Supabase's OAuth 2.1 server does not draw the consent screen. Its
 `/auth/v1/oauth/authorize` validates the client, PKCE and redirect, then
@@ -164,11 +184,12 @@ Each step says what PASS looks like. Take the screenshot where it says
    as any account, Customize → Connectors → Add custom connector → URL
    `https://zeropage-studio.fly.dev/mcp` → Connect. The browser lands on
    Supabase's authorize endpoint and then on OUR consent page.
-   PASS: a page on `zeropage-studio.fly.dev` (or the Site URL) that names the
-   client ("Claude"), the redirect host `claude.ai`, and Approve / Deny.
-   **Expected today: FAIL** (Finding 3) — a 404 or the landing page. That
-   result is itself the screenshot for the report. 📸 `consent-page.png`
-   once it exists.
+   PASS: Supabase sends the browser to `zeropage-studio.fly.dev/oauth/consent`,
+   which first asks you to sign in ("Connect an app to Zero Page"), then
+   names the client ("Claude"), the redirect host `claude.ai` in bold, the
+   scopes and your email, with Deny / Allow. (Needs the Authorization Path
+   set to `/oauth/consent` in the dashboard and the branch deployed.)
+   📸 `consent-page.png`.
 3. **Sign in as `zp-billing-test` on the consent page, approve.** PASS: the
    connector shows **Connected** under Your connectors, and its page lists
    the tools under Tool permissions, each with a title. 📸 `tool-list.png`

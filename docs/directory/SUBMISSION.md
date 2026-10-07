@@ -24,7 +24,7 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | C12 | no AI image/video/audio generation | **FAIL — open review risk** | Built as Mike chose: `approve` renders stills and clips after a quote and a yes in chat. The checklist says such connectors "aren't accepted"; the Compliance step asks for the acknowledgment. Answer it truthfully; if refused, drop `approve` from LISTED_TOOLS (one line) and the Queue is the approve |
 | C13–C19 | OAuth, 401, metadata, AS metadata, DCR, PKCE, scopes | PASS | verified live from here 2026-10-07 |
 | C20 | callback URLs (incl. Claude Code loopback) | UNKNOWN | live check, OAUTH_TEST.md step 11 |
-| C21 | consent screen | **FAIL — build needed** | no consent page exists; OAUTH_TEST.md Finding 3 says what it needs. The connector cannot be connected from claude.ai until it does |
+| C21 | consent screen | **PASS after deploy + one dashboard setting** | `/oauth/consent` built (redirect host in bold, loopback warning); set Authorization Path = `/oauth/consent` in Supabase |
 | C22–C24 | token endpoint, latency, no tokens in URLs | PASS | |
 | C25 | remote HTTPS | PASS | |
 | C26 | tested in Claude + Inspector | UNKNOWN | live check |
@@ -204,12 +204,13 @@ Not on the listed server (operator's door only): sparks, tonight, add_spark, ima
 
 ## Everything Mike must do by hand, in order
 
-1. **Build the consent page** (OAUTH_TEST.md Finding 3). It blocks
-   everything else: without it nobody can connect from claude.ai.
+1. **Merge the PR** once CI is green (built 2026-10-07: the consent page is
+   in it). A push to `main` deploys Fly.
 2. **Push this branch and open the PR** (nothing is pushed). Merging to
    `main` deploys Fly with Phase 4 and the rate limit.
 3. **Supabase dashboard** (Authentication → OAuth Server): set the
-   Authorization Path to the consent route once built; confirm Site URL.
+   Authorization Path to `/oauth/consent`; the Site URL must stay
+   `https://zeropage-studio.fly.dev` (the page lives on the API origin).
 4. **Fly**: `fly releases` to confirm the live commit. `QUOTE_SIGNING_SECRET`
    is already set there, so `quote` will carry tokens. Optionally set
    `ZEROPAGE_MCP_RATE` / `ZEROPAGE_MCP_RATE_OPERATOR` (defaults 120 / 1200

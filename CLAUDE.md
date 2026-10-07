@@ -1543,13 +1543,20 @@ is yours, in Resolve, by hand.
   limit (`ZEROPAGE_MCP_RATE` 120/min, `ZEROPAGE_MCP_RATE_OPERATOR` 1200/min,
   in-process: one Fly machine), `mcp_auth.verify` checks `iss`, and a sign-in
   with no workspace is told to sign in once at `ZEROPAGE_SIGNUP_URL` (the
-  connector never creates one). **Two things the listing still waits on:**
-  Supabase's OAuth server redirects to a CONSENT PAGE we do not serve yet
-  (`docs/directory/OAUTH_TEST.md` Finding 3 -- nobody can connect from
-  claude.ai until it exists), and the directory's checklist refuses
-  connectors that "generate images, video, or audio through AI models",
-  which `approve` does on purpose (Mike's call; `docs/directory/
-  RENDER_DESIGN.md`). The public plugin bundle lives in its own repo beside
+  connector never creates one). **The consent page is ours** (same day,
+  `app/oauth_consent.py`): Supabase's OAuth server redirects the person to
+  `<Site URL>/oauth/consent?authorization_id=` (the dashboard's
+  Authorization Path) and waits for the app to answer AS THE PERSON; this
+  app keeps no Supabase token, so the page sends them through `/signin`
+  and `auth._finish` hands back to it holding that sign-in's token for the
+  one decision (`oauth_consent.resume`, a CSRF value beside it, a pending
+  consent forgotten after 15 minutes). The page names the client and the
+  redirect HOST, warns on a loopback one, and 303s only to an http(s)
+  `redirect_url`. Signing in there creates the workspace, which is how
+  "sign in once on the web" is met on the way. **The one thing the listing
+  still risks:** the directory's checklist refuses connectors that
+  "generate images, video, or audio through AI models", which `approve`
+  does on purpose (Mike's call; `docs/directory/RENDER_DESIGN.md`). The public plugin bundle lives in its own repo beside
   the main checkout (`../zeropage-studio-plugin`, five skills, MIT).
   **The audience is checked, twice over**: a token minted for another resource
   server must not work here, so `verify` accepts only `aud` = this server's
