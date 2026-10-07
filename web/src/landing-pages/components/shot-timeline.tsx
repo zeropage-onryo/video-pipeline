@@ -21,14 +21,14 @@ import type { MakePage, MakeTile } from "../pages";
 // Under reduced motion nothing pins and nothing is scroll-linked: the three
 // shots sit still, the first is active, and a tap moves the ring.
 //
-// TODO(media): the three frames are the wall's first three tiles, so a
-// real Seedance still dropped on a tile (`src`) shows here too.
+// TODO(media): the three frames are the entry's `signatureFrames` (else
+// the wall's first three tiles); a still dropped there (`src`) shows here.
 
 const SCENE_SECONDS = 15;
 const SHOTS = [
-  { label: "Wide establishing", start: 0, end: 5, prompt: "Wide, static. A workshop at dawn; dust hangs in one shaft of light." },
-  { label: "Macro detail", start: 5, end: 10, prompt: "Macro, slow push-in. A hand sets the piece down; the grain catches the light." },
-  { label: "The action", start: 10, end: 15, prompt: "Handheld, following. She lifts it to the window and turns it over once." },
+  { label: "Wide establishing", start: 0, end: 5, prompt: "Wide, static. A ceramics studio at dawn; dust hangs in one shaft of light over the wheel." },
+  { label: "Macro detail", start: 5, end: 10, prompt: "Macro, slow push-in. Wet thumbs open the clay on the spinning wheel; slip runs over the knuckles." },
+  { label: "The action", start: 10, end: 15, prompt: "Medium, handheld. She lifts the glazed cup to the window and turns it once; the indigo catches the light." },
 ] as const;
 
 export function ShotTimeline({ page }: { page: MakePage }) {
@@ -55,7 +55,7 @@ export function ShotTimeline({ page }: { page: MakePage }) {
     window.scrollTo({ top: el.offsetTop + span * frac, behavior: "smooth" });
   };
 
-  const tiles = page.wall.tiles;
+  const tiles = page.signatureFrames ?? page.wall.tiles;
 
   return (
     <section id="shots" className="border-t border-border">

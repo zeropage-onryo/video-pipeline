@@ -40,6 +40,13 @@ export type MakeTile = {
   plate?: string;
   /** mp4/webm; when present the tile loops it muted, `src` as poster. */
   video?: string;
+  /** The showcase wall only (2026-10-07): the prompt the clip was made
+   *  from, shown under the tile when it is clicked. */
+  prompt?: string;
+  /** The showcase wall only: the generation mode chip ("I2V", "T2V"). */
+  mode?: string;
+  /** The showcase wall only: the tile's frame, "w:h" (default "3:4"). */
+  aspect?: string;
 };
 
 export type MakeCard = { title: string; body: string };
@@ -127,7 +134,19 @@ export type MakePage = {
   overview?: { items: MakeOverviewBlock[] };
   /** The wall right under the hero (ad-wall.tsx): its own big line, up
    *  to eight tiles, and the button under them. */
-  wall: { title: string; tiles: MakeTile[]; explore: { label: string; href: string } };
+  wall: {
+    title: string;
+    tiles: MakeTile[];
+    explore: { label: string; href: string };
+    /** "bento" (default) is the four-column wall; "showcase" is three
+     *  masonry columns of mixed-frame tiles, each opening its prompt
+     *  underneath on click (showcase-wall.tsx, after ByteDance's own
+     *  "Creativity Unleashed" grid; 2026-10-07, Mike's call). */
+    layout?: "bento" | "showcase";
+  };
+  /** The signature's own frames, when they are not the wall's first tiles
+   *  (shot-timeline.tsx reads these first). */
+  signatureFrames?: MakeTile[];
   /** Nine feature cards under one big line (features-grid.tsx). */
   features: { title: string; items: MakeFeature[] };
   /** Four model cards under one big line, each with a Start now. */

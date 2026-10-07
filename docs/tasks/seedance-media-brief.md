@@ -149,19 +149,23 @@ media was made.
 
 ## 6. The wall (eight tiles, 480p, 5 s each)
 
-The bold label on the tile is the FEATURE; the chip under it is the shot
-type. Frames follow the bento: tiles 2 and 5 are tall, 6 is wide.
+Built as the SHOWCASE wall (2026-10-07, after ByteDance's "Creativity
+Unleashed" grid): three masonry columns, an "I2V" chip on each tile, the
+feature along the bottom, and the prompt opening right under the tile on
+click, with "Use this prompt" into the composer. Frames are Seedance's own
+(it takes no 4:5); the entry's order deals them into even columns. The
+prompts live on the tiles in `entries/seedance-video-generator.ts`.
 
 | # | Label (feature) | Chip | Frame | First frame | Motion + sound |
 |---|---|---|---|---|---|
-| 1 | Scale and atmosphere | Wide establishing | 4:5 | A lone figure in a long dark coat crossing a white salt flat at blue hour, tiny in the lower third, a low ridge of mountains behind | She keeps walking left to right as wind lifts the coat and drives a thin haze of salt across the ground; wind, crunching footsteps |
+| 1 | Scale and atmosphere | Wide establishing | 16:9 | A lone figure in a long dark coat crossing a white salt flat at blue hour, tiny in the lower third, a low ridge of mountains behind | She keeps walking left to right as wind lifts the coat and drives a thin haze of salt across the ground; wind, crunching footsteps |
 | 2 | Micro detail | Macro detail | 9:16 | Extreme macro: a ribbon of honey already falling from a wooden dipper onto a honeycomb, light glowing through it | The honey folds over itself and pools into the cells, a drip stretching and snapping; the faint tick of the drip |
-| 3 | Push-in | Slow push-in | 4:5 | An empty theatre, a dancer in a pale slip dress mid-turn on a bare stage under one spotlight, seen from the stalls, face in shadow | The camera pushes slowly in as she completes the turn and sweeps into an arabesque, dress trailing; her feet on boards, the hush of the hall |
-| 4 | Spray and momentum | Handheld follow | 4:5 | A skateboarder in a dark rain jacket mid-carve through a rain-slick concrete underpass at blue hour, low camera just behind, sodium lights doubled in the puddles, face turned away | The camera follows low and close as the board carves left then right, throwing a fine spray; wheels on wet concrete, the hiss of spray, the underpass echo |
+| 3 | Push-in | Slow push-in | 4:3 | An empty theatre, a dancer in a pale slip dress mid-turn on a bare stage under one spotlight, seen from the stalls, face in shadow | The camera pushes slowly in as she completes the turn and sweeps into an arabesque, dress trailing; her feet on boards, the hush of the hall |
+| 4 | Spray and momentum | Handheld follow | 3:4 | A skateboarder in a dark rain jacket mid-carve through a rain-slick concrete underpass at blue hour, low camera just behind, sodium lights doubled in the puddles, face turned away | The camera follows low and close as the board carves left then right, throwing a fine spray; wheels on wet concrete, the hiss of spray, the underpass echo |
 | 5 | Multi-beat action | Top-down reveal | 9:16 | Directly overhead, a long oak table at dusk half set for dinner: stoneware plates, linen, figs, bread, candle stubs, one hand placing a plate | In order: a plate set down, a glass, a napkin folded, a match struck and a candle lit; the camera rises slowly; each sound on its action |
 | 6 | Rack focus | Camera control | 16:9 | A clear unlabelled glass perfume bottle on wet black slate, droplets sharp on the glass; behind it a figure in a cream coat, soft and out of focus, passing a rain-streaked window | Focus pulls from the droplets to the figure as she passes, then back to the bottle; rain on glass, one distant car |
-| 7 | Backlight and water | Golden hour | 4:5 | A surfer walking out of the sea at golden hour, board under one arm, backlit, water sheeting off the wetsuit, seen from behind at three-quarters | She walks up the wet sand toward frame right, the sun flaring through the spray, hair dripping; surf, wind, footsteps in wet sand |
-| 8 | Rain and steam | Night exterior | 4:5 | A street noodle stall at night in rain, steam rising under one bare bulb, a cook's arm lifting noodles high with long chopsticks, rain streaking through the light, no signage | The noodles lift and drop back into the pot, steam rolls up through the rain; the boil, rain drumming on a tarp, the clack of chopsticks |
+| 7 | Backlight and water | Golden hour | 3:4 | A surfer walking out of the sea at golden hour, board under one arm, backlit, water sheeting off the wetsuit, seen from behind at three-quarters | She walks up the wet sand toward frame right, the sun flaring through the spray, hair dripping; surf, wind, footsteps in wet sand |
+| 8 | Rain and steam | Night exterior | 3:4 | A street noodle stall at night in rain, steam rising under one bare bulb, a cook's arm lifting noodles high with long chopsticks, rain streaking through the light, no signage | The noodles lift and drop back into the pot, steam rolls up through the rain; the boil, rain drumming on a tarp, the clack of chopsticks |
 
 ---
 

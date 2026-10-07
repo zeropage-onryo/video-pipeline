@@ -10,28 +10,111 @@ const sd25 = model("seedance2.5");
 const sd = model("seedance2");
 const sdFast = model("seedance2-fast");
 
-// TODO(media): eight Seedance stills from the studio go here as `src`
-// (public/make/seedance-video-generator/<name>.jpg, 928x1152, the Ad
-// Generator wall's shape). Until then each slot is its own plate: a shot
-// type the scene writer actually produces, drawn as a cool gradient.
+// The wall (2026-10-07, Mike's call): the showcase layout -- three masonry
+// columns, each tile its own Seedance 2.5 snippet in its own frame, the
+// feature it shows along the bottom, its prompt underneath on click. The
+// prompts are the drafts in docs/tasks/seedance-media-brief.md (v3); every
+// tile is a plate until its clip lands (`video` + a poster `src` under
+// public/models/seedance-video-generator/). Frames are Seedance's own
+// (3:4, 4:3, 16:9, 9:16; it takes no 4:5), and the ORDER is what deals
+// them into three even columns (showcase-wall.tsx's `deal`).
+const SNIPPET = "Seedance 2.5 · image-to-video · 5 s · 480p";
 const SEEDANCE_TILES: MakeTile[] = [
-  { title: "Wide establishing", tag: "Shot 1", plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5") },
-  { title: "Macro detail", tag: "Shot 2", plate: plate("#ecfeff", "#67e8f9", "#3730a3") },
-  { title: "Slow push-in", tag: "Shot 3", plate: plate("#f5f3ff", "#c4b5fd", "#4338ca") },
-  { title: "Handheld follow", tag: "Shot 4", plate: plate("#e0f2fe", "#7dd3fc", "#312e81") },
-  { title: "Top-down reveal", tag: "Shot 5", plate: plate("#eef2ff", "#818cf8", "#1e1b4b") },
-  { title: "Rack focus", tag: "Shot 6", plate: plate("#fdf4ff", "#d8b4fe", "#4c1d95") },
-  { title: "Golden hour", tag: "Shot 7", plate: plate("#fff7ed", "#fdba74", "#4338ca") },
-  { title: "Night exterior", tag: "Shot 8", plate: plate("#1e1b4b", "#312e81", "#6366f1") },
+  {
+    title: "Spray and momentum",
+    tag: "Handheld follow",
+    mode: "I2V",
+    aspect: "3:4",
+    meta: SNIPPET,
+    plate: plate("#e0f2fe", "#7dd3fc", "#312e81"),
+    prompt:
+      "One continuous 5-second take. A skateboarder in a dark rain jacket carves through a rain-slick concrete underpass at blue hour, face turned away; the camera follows low and close behind as the board cuts left then right, throwing a fine spray, sodium lights doubled in the puddles. Sound: wheels on wet concrete, the hiss of spray, the underpass echo. No music.",
+  },
+  {
+    title: "Push-in",
+    tag: "Slow push-in",
+    mode: "I2V",
+    aspect: "4:3",
+    meta: SNIPPET,
+    plate: plate("#f5f3ff", "#c4b5fd", "#4338ca"),
+    prompt:
+      "One continuous 5-second take. An empty theatre: a dancer in a pale slip dress mid-turn on a bare stage under one spotlight, seen from the stalls, face in shadow. The camera pushes slowly in as she completes the turn and sweeps into an arabesque, the dress trailing. Sound: her feet on the boards, the hush of the hall. No music.",
+  },
+  {
+    title: "Micro detail",
+    tag: "Macro detail",
+    mode: "I2V",
+    aspect: "9:16",
+    meta: SNIPPET,
+    plate: plate("#fff7ed", "#fdba74", "#4338ca"),
+    prompt:
+      "One continuous 5-second take, extreme macro. A ribbon of honey falls from a wooden dipper onto a honeycomb, light glowing through it; it folds over itself and pools into the cells, a last drip stretching and snapping. Sound: the faint tick of the drip. No music.",
+  },
+  {
+    title: "Multi-beat action",
+    tag: "Top-down reveal",
+    mode: "I2V",
+    aspect: "9:16",
+    meta: SNIPPET,
+    plate: plate("#eef2ff", "#818cf8", "#1e1b4b"),
+    prompt:
+      "One continuous 5-second take, directly overhead. A long oak table at dusk, half set for dinner. In order: a stoneware plate set down, a glass, a linen napkin folded, a match struck and a candle lit, as the camera rises slowly. Each sound lands on its action: the plate on wood, the glass, the match. No music.",
+  },
+  {
+    title: "Scale and atmosphere",
+    tag: "Wide establishing",
+    mode: "I2V",
+    aspect: "16:9",
+    meta: SNIPPET,
+    plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5"),
+    prompt:
+      "One continuous 5-second take, static wide shot. A lone figure in a long dark coat crosses a white salt flat at blue hour, tiny in the lower third, a low ridge of mountains behind; wind lifts the coat and drives a thin haze of salt across the ground. Sound: wind, crunching footsteps. No music.",
+  },
+  {
+    title: "Rain and steam",
+    tag: "Night exterior",
+    mode: "I2V",
+    aspect: "3:4",
+    meta: SNIPPET,
+    plate: plate("#1e1b4b", "#312e81", "#6366f1"),
+    prompt:
+      "One continuous 5-second take. A street noodle stall at night in the rain, one bare bulb, no signage; a cook's arm lifts noodles high with long chopsticks and drops them back into the pot as steam rolls up through the falling rain. Sound: the boil, rain drumming on a tarp, the clack of chopsticks. No music.",
+  },
+  {
+    title: "Backlight and water",
+    tag: "Golden hour",
+    mode: "I2V",
+    aspect: "3:4",
+    meta: SNIPPET,
+    plate: plate("#fff7ed", "#fdba74", "#312e81"),
+    prompt:
+      "One continuous 5-second take. A surfer walks out of the sea at golden hour, board under one arm, seen from behind at three-quarters; backlit, water sheeting off the wetsuit, the low sun flaring through the spray as she walks up the wet sand toward frame right. Sound: surf, wind, footsteps in wet sand. No music.",
+  },
+  {
+    title: "Rack focus",
+    tag: "Camera control",
+    mode: "I2V",
+    aspect: "16:9",
+    meta: SNIPPET,
+    plate: plate("#fdf4ff", "#d8b4fe", "#4c1d95"),
+    prompt:
+      "One continuous 5-second take. A clear, unlabelled glass perfume bottle on wet black slate, droplets sharp on the glass; behind it a figure in a cream coat passes a rain-streaked window, soft and out of focus. Focus pulls from the droplets to the figure as she passes, then back to the bottle. Sound: rain on glass, one distant car. No music.",
+  },
+];
+
+// The signature's own three frames (one scene, three shots), since the
+// wall's tiles are now eight different subjects. Plates until the stills land.
+const SIGNATURE_FRAMES: MakeTile[] = [
+  { title: "A ceramics studio at dawn", tag: "", plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5") },
+  { title: "Wet thumbs opening the clay", tag: "", plate: plate("#ecfeff", "#67e8f9", "#3730a3") },
+  { title: "The glazed cup lifted to the window", tag: "", plate: plate("#f5f3ff", "#c4b5fd", "#4338ca") },
 ];
 
 // Seedance (2026-10-05, Mike's call; 2.5 since 2026-10-06). What renders
 // is Seedance 2.5 (src/fal.py VIDEO_MODELS: 4-30 s a clip with sound,
 // 480p/720p/1080p, 1080p the premium band) beside Seedance 2.0 and 2.0
 // Fast (4-15 s). The copy names the models the Queue offers, and `sd25`/
-// `sd`/`sdFast` read the catalog so a re-export changes the page. TODO(media): the wall's eight tiles are
-// gradient plates until Seedance renders from the studio replace them
-// (`src: "/make/seedance-video-generator/<name>.jpg"`, 928x1152).
+// `sd`/`sdFast` read the catalog so a re-export changes the page.
 export const SEEDANCE: MakePage = {
     slug: "seedance-video-generator",
     section: "models",
@@ -54,6 +137,7 @@ export const SEEDANCE: MakePage = {
     tone: "light",
     accent: INDIGO,
     signature: "shot-timeline",
+    signatureFrames: SIGNATURE_FRAMES,
     // ByteDance's four headline claims for 2.5 (seed.bytedance.com/en/seedance2_5,
     // read 2026-10-07), each restated as what THIS studio does with them.
     // Media: TODO -- a Seedance clip per block (`media: { video, src }`).
@@ -100,6 +184,7 @@ export const SEEDANCE: MakePage = {
       title: "Shots Seedance Renders",
       tiles: SEEDANCE_TILES,
       explore: { label: "See the features", href: "#features" },
+      layout: "showcase",
     },
     features: {
       title: "Seedance 2.5 in the Studio",

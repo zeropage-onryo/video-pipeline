@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { ArrowRight } from "lucide-react";
 import { motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { SectionTitle } from "./section-title";
+import { ShowcaseWall } from "./showcase-wall";
 import { Button } from "@/components/ui/button";
 import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
@@ -31,6 +32,11 @@ const PLATES = ["var(--plate-1)", "var(--plate-2)"];
 const COL = "contents lg:flex lg:flex-col lg:gap-4";
 
 export function AdWall({ page }: { page: MakePage }) {
+  if (page.wall.layout === "showcase") return <ShowcaseWall page={page} />;
+  return <BentoWall page={page} />;
+}
+
+function BentoWall({ page }: { page: MakePage }) {
   const still = useStill();
   // ONE observer on the wall drives every tile's entrance (lib/motion's
   // rule, learned here 2026-10-01): once a fifth of the wall is on screen
