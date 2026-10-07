@@ -1514,6 +1514,43 @@ is yours, in Resolve, by hand.
   (the operator's key), and the end-to-end test drives the REAL streamable-HTTP
   app with two callers and asserts each resolved its own id. Deleting the
   ContextVar branch makes exactly that test fail, which is the point of it.
+  **THE LISTED SERVER (2026-10-07, Mike's calls; docs/directory/).** For the
+  Claude directory listing the mount builds TWO servers and `guarded` routes
+  by door: the operator's static key reaches the full server exactly as
+  before, a signed-in person reaches `build_server(listed=True)`, which
+  registers `mcp_server.LISTED_TOOLS` only -- `board`, `idea`, `search`,
+  `capture`, `pick`, `shoot`, `archive`, `stats`, `elements`, `write_scene`,
+  `quote`, `approve`, `job`. Never the engine tools (whatever the flag says),
+  never the spark bank (`scout_findings` / `scout_bin` are SHARED tables and
+  one person's directions must not be listed to another), never
+  `images_for` / `reference` / `imagine_reference`. **Claude does the ideation
+  in the chat and the MCP renders**: `elements` lists the account's
+  characters/props/places with photo refs; `write_scene` saves a chat-written
+  prompt onto an idea as the one AI shot every reader already understands,
+  accepts only refs `elements` issued (a URL, a guess, another account's photo
+  are all refused), asks `preprod.reference_gate` BEFORE writing, and turns
+  timed windows into the timeline through `timeline.fallback` -- the split
+  with no model call, stamped `source` so `ensure` never re-plans it; `quote`
+  is `pricing.display` for the clip plus `scene_chain.keyframe_quote` for the
+  stills beside the balance; `approve` (`what` = keyframes | clip, the quote's
+  tokens, the renderer choice; `destructiveHint: true`) runs the Queue's OWN
+  approve bodies, lifted into `app.api.approve_keyframes` / `approve_render`
+  (the routes wrap them; `src/approvals.ApproveRefused` is what both doors
+  raise) and injected into the mount like `start_job` -- so the chat and the
+  Queue card are one body and cannot drift. Every tool is published from
+  constants (`TITLES` / `DESCRIPTIONS` / `HINTS`, screened for operator
+  vocabulary by a test), the mount carries a per-account fixed-window rate
+  limit (`ZEROPAGE_MCP_RATE` 120/min, `ZEROPAGE_MCP_RATE_OPERATOR` 1200/min,
+  in-process: one Fly machine), `mcp_auth.verify` checks `iss`, and a sign-in
+  with no workspace is told to sign in once at `ZEROPAGE_SIGNUP_URL` (the
+  connector never creates one). **Two things the listing still waits on:**
+  Supabase's OAuth server redirects to a CONSENT PAGE we do not serve yet
+  (`docs/directory/OAUTH_TEST.md` Finding 3 -- nobody can connect from
+  claude.ai until it exists), and the directory's checklist refuses
+  connectors that "generate images, video, or audio through AI models",
+  which `approve` does on purpose (Mike's call; `docs/directory/
+  RENDER_DESIGN.md`). The public plugin bundle lives in its own repo beside
+  the main checkout (`../zeropage-studio-plugin`, five skills, MIT).
   **The audience is checked, twice over**: a token minted for another resource
   server must not work here, so `verify` accepts only `aud` = this server's
   canonical URI (`ZEROPAGE_MCP_RESOURCE`, set in fly.toml because `SITE_URL` is
