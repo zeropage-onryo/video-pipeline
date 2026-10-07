@@ -155,7 +155,12 @@ and 18 with it on. `imagine_reference` (a spend) is in every set.
   `reference`, `imagine_reference` and `research` therefore read and write
   one pool for every tenant. Correct for one operator, a cross-tenant
   exposure for strangers: user A's typed directions and banked images are
-  listed to user B. Phase 2's isolation tests pin this as `xfail(strict)`.
+  listed to user B. **Resolved 2026-10-07 (Mike's call): the bank stays off
+  the listed server.** `mcp_server.LISTED_TOOLS` is what a signed-in caller
+  is offered through the mount (two servers, routed by door in
+  `app/mcp_mount.guarded`); the operator's static key and stdio keep the
+  full set. The transport test proves `sparks` is an unknown tool to a
+  signed-in caller.
 - **F-5 No rate limit** (Phase 2.4 builds one).
 - **F-6 `reference` accepts a model-supplied URL** (`image_url`,
   `source_url`); ground rule 5 says the MCP surface must refuse URL-shaped

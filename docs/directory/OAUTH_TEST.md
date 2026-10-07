@@ -29,11 +29,10 @@ account can finish.
   same answer a nonexistent id gets) and change nothing; `job` on the other
   person's job answers "no job N"; the operator's static key still reads the
   bootstrap account.
-- **What is NOT isolated, pinned as `xfail(strict=True)`**: `sparks`,
-  `tonight` and `images` list the whole bank to every caller, because
-  `scout_findings` and `scout_bin` are shared tables by design
-  (`db.SHARED_TABLES`). The test flips to a failure the day the bank is
-  fenced, so the xfail cannot go stale. See Finding 2 below.
+- **The listed server** (2026-10-07): a signed-in caller's `tools/list` is
+  exactly `LISTED_TOOLS`; `sparks` and `images` are unknown tools to them
+  (the bank is shared by design, see Finding 2); the operator's key lists
+  the full set; the engine flag changes nothing on the listed server.
 - **No tool reports a credit balance.** `pick` quotes a draw; nothing
   answers "what can I spend". Noted for Phase 3.
 
@@ -73,7 +72,9 @@ and the directory reviewer tests with the account Mike hands them, not a
 fresh sign-up. The 403 text should change under either option — that edit
 is in Phase 4's scope only if Mike picks B (it is a message, not a flow).
 
-## Finding 2 — the sparks bank and the reference bin are shared
+## Finding 2 — the sparks bank and the reference bin are shared (DECIDED: off the listed server)
+
+**Mike, 2026-10-07: the bank stays off the listed server.** `build_server(listed=True)` registers `LISTED_TOOLS` only and the mount routes a signed-in caller to it; the xfail below became a passing test that `sparks` / `images` are unknown tools through that door. The paragraph that follows is the finding as it stood.
 
 `sparks`, `tonight`, `add_spark`, `images`, `reference`, `imagine_reference`
 and `research` read and write `scout_findings` / `scout_bin`, which are
@@ -186,8 +187,9 @@ Each step says what PASS looks like. Take the screenshot where it says
 7. **`pick` on that idea.** PASS: `status: picked`, no `keyframes` block (a
    captured idea has no scene, so there is nothing to draw) — and the
    account's credit balance on `/studio/settings` is unchanged.
-8. **`sparks`.** PASS today = the finding: the second person sees Mike's
-   banked sparks. 📸 `shared-sparks.png` for the decision in Finding 2.
+8. **`sparks`.** PASS: the tool is not in the second person's list at all,
+   and asking for it answers "Unknown tool". (Before 2026-10-07 this step
+   showed Mike's banked sparks -- the Finding 2 evidence.)
 9. **The rate limit.** From a terminal with the second person's access token
    (copy it from the browser's network tab on any `/mcp` call, or mint one
    from the console): a loop of 130 `tools/list` posts inside a minute.
