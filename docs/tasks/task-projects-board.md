@@ -84,17 +84,22 @@ the rest" paragraph.
   solo Create, the redirects, a second account seeing nothing, the empty board and phone widths.
   No approve was clicked and no render was run.
 
-## Open for Mike
+## Decided (Mike, 2026-10-07)
 
-- **Delete's default**: chat, brief, look and memory are deleted; scenes are detached, never
-  deleted. Confirm or change.
-- **The wipe** (`ops/wipe_concepts.py`, its own PR) is report-first and has not been run.
-- **Visiting a workspace sets the active project** (`rememberActiveProject`, as the old "Open in
-  Studio" did), so the next Create on the composer is filed into that project until its chip's ×
-  is pressed. That is the existing behaviour, kept; say if a solo Create should be the default.
-- ~~The vanilla `/ui?legacy=1` Director~~ -- deleted 2026-10-07 on Mike's word (its own PR); the
-  `/ui` shell's other views stay, and its "Open in Director" hands the scene to the studio.
-- Delete's default stays as built (Mike, 2026-10-07): chat, brief, look and memory are deleted,
-  scenes are detached.
+- **Delete stays as built.** Deleting a project removes its chat, brief, look and memory, and
+  detaches its scenes rather than deleting them.
+- **The wipe ran on live** (`ops/wipe_concepts.py`, PR #154) after the keep rule was fixed to
+  keep a parked scene only while it is not archived. It deleted 242 concepts, 224 hold_queue rows
+  and 6 canvases for the zeropage account, ingested 88 pending lessons first, and kept 30. The
+  backup and the before-wipe rates are in the main checkout's `data/backups/` and `docs/stats/`,
+  untracked on purpose (public repo).
+- **The active project stays as is.** Visiting a workspace sets it (`rememberActiveProject`, as
+  the old "Open in Studio" did), so the next Create is filed into that project until the
+  composer chip's × is pressed.
+- **The vanilla `/ui` Director is deleted** (PR #156). The `/ui` shell's other views stay, and
+  its "Open in Director" hands the scene to the studio.
+
+## Known limit
+
 - A Guide proposal restored from a project's history is drawn as text only, not as a card: the
   history does not record whether it was confirmed, and a second card could bank it twice.
