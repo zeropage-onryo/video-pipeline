@@ -40,7 +40,7 @@ import contextvars
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from . import accounts, autonomy, db, imagesearch, preprod, refbin, scout
 
@@ -70,6 +70,192 @@ HUMAN_SPARK_SCORE = 1.0
 # one call away.
 LIST_LIMIT = 25
 SEARCH_SCAN = 500
+
+# --- what the directory publishes (2026-10-07) ------------------------------
+#
+# One constant per registered tool, in `build_server`'s order. These are
+# what a STRANGER reads -- a creator who installed the connector from the
+# directory and has none of this repo's vocabulary -- so they say what the
+# tool does and when to call it, in the product's words (board, idea,
+# scene, reference image, spark, the studio), and nothing about how it is
+# run here. A test pins every registered tool to its row and screens the
+# words. ARCHIVE_DESCRIPTION above is the first of these and keeps its name.
+
+DEFAULT_BRAND = "zeropage"
+Brand = Literal[preprod.BRANDS]
+Status = Literal[STATUSES]
+Lane = Literal[scout.KNOWN_LANES]
+
+INSTRUCTIONS = (
+    "Your studio's idea board. Read the concepts on it, pick the ones worth "
+    "making, archive the rest with a reason, capture new ideas, and see "
+    "which reference images sit behind a direction. Nothing here renders: a "
+    "pick quotes what the stills would cost and the render is approved in the "
+    "studio, where the price is shown."
+)
+
+TITLES = {
+    "board": "List the idea board",
+    "idea": "Read one idea in full",
+    "search": "Search ideas",
+    "capture": "Capture a new idea",
+    "pick": "Pick an idea (or unpick)",
+    "shoot": "Mark an idea as made",
+    "archive": "Archive an idea (reversible)",
+    "add_spark": "Bank a direction",
+    "tonight": "Next banked direction",
+    "sparks": "List banked directions",
+    "images": "Reference images behind a direction",
+    "reference": "Bank a reference image",
+    "imagine_reference": "Render a reference still (spends credits)",
+    "images_for": "Find reference images",
+    "stats": "Board statistics",
+    "research": "Run a research pass (spends)",
+    "generate": "Write a scene from a direction (spends)",
+    "job": "Check a background job",
+}
+
+_CAP = f"Returns at most `limit` rows (default {LIST_LIMIT}, maximum 100)"
+
+DESCRIPTIONS = {
+    "board": (
+        "List the ideas on your board as short cards (id, title, one-line "
+        "summary, status, how many reference images it carries), newest "
+        "first. `status` filters: open (the default: nothing decided yet, "
+        "which includes parked), picked, archived, parked, shot, or all. "
+        f"{_CAP}; `truncated` is true when more matched, so narrow with "
+        "`status` or use `search`. Read-only."
+    ),
+    "idea": (
+        "One idea in full by its id: title, hook, logline, the written scene "
+        "prompt(s) with their reference images, and any warnings or scores "
+        "recorded on it. Use after `board` or `search` to read a card you want "
+        "to decide on. Read-only."
+    ),
+    "search": (
+        "Find ideas on your board whose title, hook, logline, direction or "
+        f"scene prompt contains the text (case-insensitive substring). {_CAP}; "
+        "`truncated` is true when more matched, so use a longer phrase. "
+        "Read-only."
+    ),
+    "capture": (
+        "Add a new idea to your board with a title and optional hook, logline "
+        "and the direction it came from. Saves the idea only -- no scene is "
+        "written and nothing is spent; the scene is written later in the "
+        "studio. Returns the new card."
+    ),
+    "pick": (
+        "Mark an idea as worth making (`picked: false` undoes it). Spends "
+        "nothing. The reply quotes the stills a rendered version would need "
+        "(`keyframes`: count and credits); drawing them and rendering the clip "
+        "are approved in the studio, where the price is shown."
+    ),
+    "shoot": (
+        "Record that an idea was actually made, by any means (`shot: false` "
+        "undoes it). A label for your statistics; spends nothing."
+    ),
+    "archive": ARCHIVE_DESCRIPTION,
+    "add_spark": (
+        "Bank a one-line direction (a spark) for a future scene, with an "
+        "optional rationale and evidence. Returns the bank row; a direction "
+        "already banked is reported as `duplicate_of`, not refused."
+    ),
+    "tonight": (
+        "The highest-scoring unused direction in the bank -- the one the next "
+        "scene would be written from -- or a note when nothing qualifies. "
+        "Read-only."
+    ),
+    "sparks": (
+        "List banked directions, highest-scoring first; `unused_only` (default "
+        "true) hides ones a scene was already written from. Returns at most "
+        "`limit` rows (default 20, maximum 100). Read-only."
+    ),
+    "images": (
+        "The reference images banked behind one direction (by its `finding_id` "
+        "from `sparks` or `tonight`), each with the page it came from. Errors "
+        "with `no finding N` for an unknown id. Read-only."
+    ),
+    "reference": (
+        "Bank one reference image behind a direction. Pass a `candidate_id` "
+        "from `images_for`; the image and its source page come from that "
+        "search result, so an id that no search issued is refused. "
+        "(`image_url` + `source_url` is the alternative for a photo a person "
+        "supplied; `source_url` must resolve.) The image is fetched by the "
+        "server and stored; nothing is billed."
+    ),
+    "imagine_reference": (
+        "Render ONE reference still for a direction from a hook frame (what is "
+        "on screen in frame one, and its light) and bank it behind the "
+        "direction. SPENDS CREDITS from your balance on the call, the price "
+        "of one still; the reply says what was charged, or a note when the "
+        "balance or the daily cap refuses it (do not retry a refusal)."
+    ),
+    "images_for": (
+        "Search the web's open image sources for reference frames matching a "
+        "description of the light and surfaces wanted (e.g. \"cold fluorescent "
+        "on wet tile, overhead\"). Returns up to `limit` (default 6, maximum 12) "
+        "candidates as ids with what each shows and its credit -- never URLs. "
+        "Pass an id to `reference` to bank it. Read-only."
+    ),
+    "stats": (
+        "Your board in numbers: pick rate and shoot rate (ideas picked and "
+        "ideas made, against ideas written), the count in each status, how "
+        "many are waiting on you, and how many banked directions are unused. "
+        "Read-only."
+    ),
+    "research": (
+        "Run one research pass: crawl the configured lanes, distil what is "
+        "landing into scored one-line directions, bank them with the reference "
+        "images behind them. Spends model credit. Starts a background job; poll "
+        "it with `job`."
+    ),
+    "generate": (
+        "Write a scene from a direction: ground it on the reference images "
+        "banked behind that direction, write the scene prompt, score it, and "
+        "park it on your board for a decision. Spends model credit; never "
+        "renders. Pass `finding_id` from `sparks` or `tonight`, or the spark "
+        "text. Starts a background job; poll it with `job`."
+    ),
+    "job": (
+        "The status of a background job by id -- one this connector started "
+        "(`research`, `generate`) or one you started in the studio: status, "
+        "label, progress detail and the result or error when it finished. "
+        "Jobs live in memory, so a server restart forgets them. Read-only."
+    ),
+}
+
+# What each tool DOES, for Claude's permission model: `read` (no change),
+# `destructive` (cannot be undone -- here, spends money or crawls and
+# writes), `idempotent` (the same call again changes nothing more),
+# `open_world` (reaches beyond this server: the web, a provider).
+HINTS = {
+    "board":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "idea":              {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "search":            {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "capture":           {"read": False, "destructive": False, "idempotent": False, "open_world": False},
+    "pick":              {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
+    "shoot":             {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
+    "archive":           {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
+    "add_spark":         {"read": False, "destructive": False, "idempotent": False, "open_world": False},
+    "tonight":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "sparks":            {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "images":            {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "reference":         {"read": False, "destructive": False, "idempotent": True,  "open_world": True},
+    "imagine_reference": {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "images_for":        {"read": True,  "destructive": False, "idempotent": True,  "open_world": True},
+    "stats":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "research":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "generate":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "job":               {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+}
+
+# Words a directory user does not have. The test screens every published
+# description and title for them (case-insensitive).
+INTERNAL_WORDS = (
+    "nightly", "the night", "Mike", "Michael", "Higgsfield", "Runway", "venv",
+    "/ui", "Dev Studio", "LangGraph", "Nano", "Midjourney", "Gemini",
+    "antihero", "zeropage", "on the machine", "src.", "hold_queue",
+)
 
 
 class Refused(Exception):
@@ -222,6 +408,17 @@ def _check(value: str, allowed, label: str) -> str:
     return value
 
 
+def _truncation(rows: list, limit: int, advice: str) -> dict[str, Any]:
+    """The cap, said out loud (2026-10-07). A list that stops at `limit`
+    with no word looks complete, and an agent that reads 25 cards as the
+    whole board decides on a third of it. The scan reads ONE row past the
+    cap so `truncated` is a fact, not a guess."""
+    if len(rows) <= limit:
+        return {"truncated": False}
+    return {"truncated": True,
+            "note": f"more than {limit} matched; {advice}"}
+
+
 # --- the board -------------------------------------------------------------
 
 CALLER_ACCOUNT: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
@@ -288,10 +485,11 @@ def list_ideas(
         if not _matches(concept, status):
             continue
         cards.append(_card(concept))
-        if len(cards) >= limit:
+        if len(cards) > limit:
             break
     return {"brand": brand or "all", "status": status,
-            "count": len(cards), "ideas": cards}
+            "count": min(len(cards), limit), "ideas": cards[:limit],
+            **_truncation(cards, limit, "narrow with `status` or use `search`")}
 
 
 def get_idea(idea_id: int, dsn: Optional[str] = None, account_id: Optional[int] = None) -> dict[str, Any]:
@@ -342,9 +540,10 @@ def search_ideas(
         ).lower()
         if needle in hay:
             hits.append(_card(concept))
-        if len(hits) >= limit:
+        if len(hits) > limit:
             break
-    return {"query": query, "count": len(hits), "ideas": hits}
+    return {"query": query, "count": min(len(hits), limit), "ideas": hits[:limit],
+            **_truncation(hits, limit, "use a longer phrase, or raise `limit` up to 100")}
 
 
 def capture_idea(
@@ -378,8 +577,9 @@ def capture_idea(
     )
     card = _card(preprod.get_concept(idea_id, dsn=dsn, account_id=account_id))
     card["next"] = (
-        "Idea only -- no scene prompt yet. Write one on the machine with "
-        f"`venv/bin/python -m src.shootgen --scene {idea_id}`."
+        "Idea only -- no scene prompt yet. Write its scene in the studio "
+        "(Create, with the idea as the brief) or with `generate` where that "
+        "tool is offered."
     )
     return card
 
@@ -766,6 +966,8 @@ def spark_images(finding_id: int, dsn: Optional[str] = None) -> dict[str, Any]:
     and an unattributed one in front of somebody about to spend a render
     is the wrong affordance.
     """
+    if scout.get_finding(int(finding_id), dsn=dsn) is None:
+        raise ValueError(f"no finding {finding_id}")
     rows = scout.bin_for_finding(int(finding_id), dsn=dsn)
     return {
         "finding_id": int(finding_id),
@@ -1071,202 +1273,124 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         except (ValueError, Refused) as exc:
             raise ToolError(str(exc)) from exc
 
-    read_only = ToolAnnotations(read_only_hint=True)
-    writes = ToolAnnotations(read_only_hint=False, destructive_hint=False)
+    # --- what a stranger reads (2026-10-07, the directory listing) ------
+    #
+    # Every title, description and annotation comes from the constants
+    # above (TITLES / DESCRIPTIONS / HINTS), never from a docstring: the
+    # SDK reads a docstring at registration, so a docstring written for
+    # the operator's agent ("the nightly", "the Dev Studio", a venv
+    # command) is what a directory user would have been handed. The test
+    # pins each registered tool to its constant and screens the
+    # vocabulary. The functions' own docstrings stay as the operator's
+    # notes, which is what they always were.
+    def _ann(name: str) -> ToolAnnotations:
+        hints = HINTS[name]
+        return ToolAnnotations(title=TITLES[name], read_only_hint=hints["read"],
+                               destructive_hint=hints["destructive"],
+                               idempotent_hint=hints["idempotent"],
+                               open_world_hint=hints["open_world"])
 
-    server = MCPServer(
-        name,
-        instructions=(
-            "The Zero Page Films pre-production board. Read the board, "
-            "pick or archive concepts, capture ideas, and bank sparks "
-            "for the nightly run. Nothing here renders video: picking a "
-            "concept puts it in front of a spend gate that a human "
-            "approves on the machine."
-        ),
-    )
+    def _reg(name: str):
+        return server.tool(name=name, title=TITLES[name],
+                           description=DESCRIPTIONS[name], annotations=_ann(name))
+
+    server = MCPServer(name, instructions=INSTRUCTIONS)
 
     def _run(fn, *args, **kwargs):
         """Engine tools go through the job registry when one was
         injected, and return a job id instead of a result. The job is
-        the operator's (this surface has a bearer token, not a session
-        -- see _account), so it shows on their rail and nobody else's."""
+        the caller's (resolved here, in the request)."""
         label = kwargs.pop("_label", fn.__name__)
         if start_job is None:
             return _t(fn, *args, **kwargs)
         job = start_job("mcp", label, lambda job: {"result": fn(*args, **kwargs)},
-                        account_id=_account(None, dsn))
+                        account_id=_account(account_id, dsn))
         return {"job_id": job["id"], "status": job["status"], "label": label,
                 "note": "started; poll with the `job` tool"}
 
-    @server.tool(annotations=read_only)
-    def board(brand: Optional[str] = None, status: str = "open",
+    @_reg("board")
+    def board(brand: Optional[Brand] = None, status: Status = "open",
               limit: int = LIST_LIMIT) -> dict:
-        """List concepts on the pre-production board. status is one of
-        open, picked, archived, parked, shot, all. brand is antihero or
-        zeropage."""
         return _t(list_ideas, brand=brand, status=status, limit=limit, dsn=dsn,
                   account_id=account_id)
 
-    @server.tool(annotations=read_only)
+    @_reg("idea")
     def idea(idea_id: int) -> dict:
-        """One concept in full, scene prompt included. `origin` says
-        which door wrote it; `gate` is the graph's verdict (prompt-gate
-        score, pass/fail, reason, and how the run ended) and is null
-        for a Studio Create row, which is never scored -- `judge_*` is
-        the Dev Studio's manual taste judge, not the graph."""
         return _t(get_idea, idea_id, dsn=dsn, account_id=account_id)
 
-    @server.tool(annotations=read_only)
-    def search(query: str, brand: Optional[str] = None,
+    @_reg("search")
+    def search(query: str, brand: Optional[Brand] = None,
                limit: int = LIST_LIMIT) -> dict:
-        """Find concepts whose title, hook, logline, spark or scene
-        prompt contains this text."""
         return _t(search_ideas, query, brand=brand, limit=limit, dsn=dsn,
                   account_id=account_id)
 
-    @server.tool(annotations=writes)
-    def capture(brand: str, title: str, hook: str = "", logline: str = "",
-                spark: str = "") -> dict:
-        """Put a new idea on the board. Saves an idea with no scene
-        prompt; writing the scene is a separate step."""
+    @_reg("capture")
+    def capture(title: str, hook: str = "", logline: str = "", spark: str = "",
+                brand: Brand = DEFAULT_BRAND) -> dict:
         return _t(capture_idea, brand=brand, title=title, hook=hook,
-                            logline=logline, spark=spark, dsn=dsn)
+                  logline=logline, spark=spark, dsn=dsn, account_id=account_id)
 
-    @server.tool(annotations=writes)
+    @_reg("pick")
     def pick(idea_id: int, picked: bool = True) -> dict:
-        """Mark a concept worth rendering. Spends nothing.
+        return _t(pick_idea, idea_id, picked=picked, dsn=dsn, account_id=account_id)
 
-        Picking puts the scene in the Queue. Its keyframes cost credits
-        and are drawn only when a person presses the priced "Draw
-        keyframes" approve on the Queue card; `keyframes` in the result
-        says how many stills that would be and what they cost. Do not
-        retry a pick to get a still -- a pick never draws one.
-
-        The CLIP is spent the same way: approving it in the Queue is the
-        only thing that renders it."""
-        return _t(pick_idea, idea_id, picked=picked, dsn=dsn)
-
-    @server.tool(annotations=writes)
+    @_reg("shoot")
     def shoot(idea_id: int, shot: bool = True) -> dict:
-        """Record that a concept actually got MADE -- by any means: the
-        render lane, Higgsfield, the studio, a camera. Not tied to the
-        Queue's approve (that authorises a spend; this records an
-        output). `shoot_rate` is the label it moves. Never spends."""
-        return _t(shoot_idea, idea_id, shot=shot, dsn=dsn)
+        return _t(shoot_idea, idea_id, shot=shot, dsn=dsn, account_id=account_id)
 
-    # The description is built from the constant, not typed: the
-    # docstring used to name "boring ... other", a vocabulary the Grade
-    # tab had already retired, and an agent that reads the description
-    # writes what it names. Three concepts archived from a phone on
-    # 2026-09-02/03 for "no turn" recorded nothing -- and that word IS in
-    # the vocabulary. (Passed to the decorator: the SDK reads the
-    # docstring at registration, so setting __doc__ afterwards is silent.)
-    @server.tool(annotations=writes, description=ARCHIVE_DESCRIPTION)
+    @_reg("archive")
     def archive(idea_id: int, archived: bool = True, reason: str = "") -> dict:
         return _t(archive_idea, idea_id, archived=archived, reason=reason,
-                  dsn=dsn)
+                  dsn=dsn, account_id=account_id)
 
-    @server.tool(annotations=writes)
-    def add_spark(brand: str, spark: str, rationale: str = "",
-                  evidence: str = "") -> dict:
-        """Bank a one-line direction for the nightly run to generate
-        from."""
+    @_reg("add_spark")
+    def add_spark(spark: str, rationale: str = "", evidence: str = "",
+                  brand: Brand = DEFAULT_BRAND) -> dict:
         return _t(bank_spark, brand=brand, spark=spark, rationale=rationale,
-                          evidence=evidence, dsn=dsn)
+                  evidence=evidence, dsn=dsn)
 
-    @server.tool(annotations=read_only)
-    def tonight(brand: str) -> dict:
-        """What direction tonight's scheduled run would take."""
+    @_reg("tonight")
+    def tonight(brand: Brand = DEFAULT_BRAND) -> dict:
         return _t(next_spark, brand, dsn=dsn)
 
-    @server.tool(annotations=read_only)
-    def sparks(brand: Optional[str] = None, unused_only: bool = True,
+    @_reg("sparks")
+    def sparks(brand: Optional[Brand] = None, unused_only: bool = True,
                limit: int = 20) -> dict:
-        """List banked sparks, highest-scoring first."""
         return _t(list_sparks, brand=brand, unused_only=unused_only,
-                           limit=limit, dsn=dsn)
+                  limit=limit, dsn=dsn)
 
-    @server.tool(annotations=read_only)
+    @_reg("images")
     def images(finding_id: int) -> dict:
-        """The reference images the scout banked alongside a spark, each
-        with the source URL it came from."""
         return _t(spark_images, finding_id, dsn=dsn)
 
-    @server.tool(annotations=writes)
+    @_reg("reference")
     def reference(finding_id: int, candidate_id: str = "",
                   image_url: str = "", source_url: str = "",
                   title: str = "") -> dict:
-        """Bank one reference image behind a spark, so the run it feeds
-        has something to render against and not just words.
-
-        Pass a `candidate_id` from `find_images`. That is the whole
-        interface for you: the image and its attribution come from the
-        row the search wrote, so nothing here can be mistyped or
-        remembered wrong. An id that did not come from a search is
-        refused rather than fetched.
-
-        (`image_url` + `source_url` exist for a person dragging a photo
-        onto the composer, where someone has actually looked at it.)
-
-        Your own cast and prop photos do NOT go through here: they are
-        already on file and get attached automatically to any scene that
-        names them, ahead of anything banked."""
         return _t(bank_reference, finding_id, candidate_id=candidate_id,
                   image_url=image_url, source_url=source_url, title=title,
                   dsn=dsn)
 
-    @server.tool(annotations=writes)
+    @_reg("imagine_reference")
     def imagine_reference(finding_id: int, hook_frame: str) -> dict:
-        """Render ONE reference still for a spark from its hook frame --
-        and bank it behind the spark.
-
-        This is how an invented world gets a reference: no photograph
-        of a pie the size of a tractor tyre exists, so one is rendered.
-        Pass the `hook_frame` you wrote for the spark (what is on screen
-        in frame one, and its light), nothing else -- there is no house
-        look to add, so the light you name is the light it gets. Midjourney
-        first, then Gemini's image model; the result says which one
-        rendered and the `credits` it cost the caller (a still, charged
-        like any other; not charged on the operator's exempt account).
-        Out of credits comes back as a note, never an error -- do not
-        retry it. One call per spark; there is a daily cap and the note
-        tells you when it is reached. Do this BEFORE
-        `images_for`, and then add one or two real photographs for the
-        light and the surfaces."""
         from . import refgen
         # the caller pays (2026-09-29): a signed-in account is charged the
         # still, the operator's key resolves to an exempt account
         return _t(refgen.render_for_finding, finding_id, hook_frame, dsn=dsn,
-                  account_id=_account(None, dsn))
+                  account_id=_account(account_id, dsn))
 
-    @server.tool(annotations=read_only)
+    @_reg("images_for")
     def images_for(query: str, brand: str = "", limit: int = 6) -> dict:
-        """Search for reference images and get back ids to bank.
-
-        Describe the LIGHT and the SURFACES you want, not the story --
-        "cold fluorescent on wet tile, overhead" finds more than "a man
-        regretting something". Then pass an id straight to `reference`.
-
-        You never see or supply a URL: results carry an id, what the
-        image shows, and who it belongs to. Results are images pulled
-        off the internet for THIS spark -- Reddit posts, web image
-        search, the open index -- so name the WORLD and the LOOK
-        together: "flooded mall generator light teal" finds more than
-        either half alone. Two or three searches beat one."""
         return _t(find_images, query, brand=brand, limit=limit, dsn=dsn)
 
-    @server.tool(annotations=read_only)
+    @_reg("stats")
     def stats() -> dict:
-        """Pick rate, shoot rate, and what is sitting on the board."""
         return _t(pipeline_stats, dsn=dsn, account_id=account_id)
 
     if engine_enabled() if engine is None else engine:
-        @server.tool(annotations=writes)
-        def research(brand: str, count: int = 4,
-                     lanes: Optional[list] = None) -> dict:
-            """Run a research pass: crawl the lanes, bank scored sparks,
-            and download the reference images behind them. Spends a
-            grounded search and one digest call."""
+        @_reg("research")
+        def research(brand: Brand = DEFAULT_BRAND, count: int = 4,
+                     lanes: Optional[list[Lane]] = None) -> dict:
             return _run(run_research, brand=brand, count=count, lanes=lanes,
                         dsn=dsn,
                         # resolved HERE, in the request: the job runs on
@@ -1275,40 +1399,28 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                         account_id=_account(account_id, dsn),
                         _label=f"research {brand}")
 
-        @server.tool(annotations=writes)
-        def generate(spark: str = "", brand: str = "", goal: str = "",
+        @_reg("generate")
+        def generate(spark: str = "", brand: Optional[Brand] = None, goal: str = "",
                      finding_id: Optional[int] = None) -> dict:
-            """Run the LangGraph content graph on a spark: ground,
-            generate, evaluate, score, keyframe, and park the scene in
-            the Queue. Ends AT the spend gate, never through it.
-
-            References: the run grounds on the images banked behind the
-            spark (`reference`, or Studio uploads against it). Pass
-            `finding_id` from `sparks`/`tonight` to run that finding,
-            or just its spark text -- the server matches it. A spark
-            that was never banked runs on the asset bank alone."""
             # Resolved HERE, before the job starts: a bad id or a
             # reworded spark is a caller error, and one raised inside a
             # background job is a failed job the agent has to poll for.
-            spark, brand, finding = _t(resolve_finding, spark, brand,
+            spark, brand, finding = _t(resolve_finding, spark, brand or "",
                                        finding_id, dsn=dsn)
+            brand = brand or DEFAULT_BRAND
             return _run(run_graph, spark=spark, brand=brand, goal=goal,
                         finding_id=finding["id"] if finding else None,
+                        account_id=_account(account_id, dsn),
                         _label=f"graph {brand}")
 
     if job_status is not None:
-        @server.tool(annotations=read_only)
+        @_reg("job")
         def job(job_id: int) -> dict:
-            """Check a background job: one this server started, or one
-            /ui started on the machine. Registered whenever a registry
-            was injected, engine tools or not -- reading the progress of
-            a render somebody kicked off in Studio is exactly the thing
-            worth having on a phone."""
-            snap = job_status(int(job_id), account_id=_account(None, dsn))
+            snap = job_status(int(job_id), account_id=_account(account_id, dsn))
             if snap is None:
                 raise ToolError(
-                    f"no job {job_id} -- the registry is in-process and a "
-                    "restart clears it"
+                    f"no job {job_id} -- jobs live in memory and a restart "
+                    "clears them; start the work again if it was yours"
                 )
             return snap
 

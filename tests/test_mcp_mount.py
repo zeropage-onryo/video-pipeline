@@ -691,3 +691,37 @@ def test_another_persons_sparks_and_images_are_not_listed(two_people):
     assert not any(s["spark"] == "Bob's private direction" for s in sparks["sparks"])
     assert e2 or images["count"] == 0
     assert tonight.get("spark") != "Bob's private direction"
+
+
+# ---------- what an external caller sees ----------
+
+def test_what_an_external_caller_sees_with_the_engine_off(env, monkeypatch):
+    """The exact tool set a signed-in, non-operator caller is offered by
+    the mount as deployed (engine off, job registry injected), and that
+    every one of them carries the annotations the directory checks."""
+    pytest.importorskip("mcp")
+    monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
+    token = mcp_server.CALLER_ACCOUNT.set(7)
+    try:
+        app, _ = mcp_mount.build(dsn=":memory:", job_status=lambda i, account_id=None: None)
+        assert app is not None
+        server = mcp_server.build_server(dsn=":memory:",
+                                         job_status=lambda i, account_id=None: None)
+        tools = asyncio.run(server.list_tools())
+    finally:
+        mcp_server.CALLER_ACCOUNT.reset(token)
+    names = [t.name for t in tools]
+    assert names == ["board", "idea", "search", "capture", "pick", "shoot", "archive",
+                     "add_spark", "tonight", "sparks", "images", "reference",
+                     "imagine_reference", "images_for", "stats", "job"]
+    assert "research" not in names and "generate" not in names
+    for t in tools:
+        assert t.title, t.name
+        assert t.annotations is not None
+        assert t.annotations.read_only_hint in (True, False)
+        assert t.annotations.destructive_hint in (True, False)
+        assert t.annotations.idempotent_hint in (True, False)
+        assert t.annotations.open_world_hint in (True, False)
+        if not t.annotations.read_only_hint:
+            # a write says whether it can be undone
+            assert t.annotations.destructive_hint is not None

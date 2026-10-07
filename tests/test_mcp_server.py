@@ -651,3 +651,143 @@ def test_the_clip_is_still_not_reachable_from_here(tmp_db, stills):
         elif isinstance(node, ast.Import):
             imported.update(alias.name.split(".")[0] for alias in node.names)
     assert not (FORBIDDEN & imported)
+
+
+# ---------- what the directory publishes (2026-10-07) ----------
+#
+# A listed connector is read by strangers. Every tool's title, description
+# and hints come from constants (TITLES / DESCRIPTIONS / HINTS) and the
+# test pins them there, screens the vocabulary, and checks the caps and
+# error shapes the connector checklist grades.
+
+def _published(server):
+    return {t.name: t for t in _tools(server)}
+
+
+def _result(call_result):
+    """The dict a tool returned, read off the SDK's text content (a
+    `-> dict` return is serialised as JSON text, not structured content)."""
+    import json
+
+    return json.loads(call_result.content[0].text)
+
+
+def test_every_tool_is_published_from_its_constant(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(dsn=tmp_db, job_status=lambda i, account_id=None: None)
+    tools = _published(server)
+    assert set(tools) == set(mcp_server.TITLES) == set(mcp_server.DESCRIPTIONS) \
+        == set(mcp_server.HINTS)
+    for name, tool in tools.items():
+        assert tool.title == mcp_server.TITLES[name]
+        assert tool.description == mcp_server.DESCRIPTIONS[name]
+        hints = mcp_server.HINTS[name]
+        ann = tool.annotations
+        assert ann.title == tool.title
+        assert ann.read_only_hint is hints["read"]
+        assert ann.destructive_hint is hints["destructive"]
+        assert ann.idempotent_hint is hints["idempotent"]
+        assert ann.open_world_hint is hints["open_world"]
+        assert len(name) <= 64
+
+
+def test_descriptions_carry_no_operator_vocabulary(tmp_db, monkeypatch):
+    """"The nightly", "the Dev Studio", a venv command: words a directory
+    user does not have, screened out of every title and description."""
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(dsn=tmp_db, job_status=lambda i, account_id=None: None)
+    for name, tool in _published(server).items():
+        text = f"{tool.title} {tool.description}".lower()
+        for word in mcp_server.INTERNAL_WORDS:
+            assert word.lower() not in text, f"{name}: {word!r}"
+    assert "nightly" not in mcp_server.INSTRUCTIONS.lower()
+
+
+def test_hints_are_true_to_what_the_tool_does(tmp_db):
+    """archive is reversible (not destructive); imagine_reference spends
+    (destructive); a read is read-only and idempotent; the tools that reach
+    the web say so."""
+    h = mcp_server.HINTS
+    assert h["archive"]["destructive"] is False and h["archive"]["idempotent"] is True
+    assert h["imagine_reference"]["destructive"] is True
+    assert h["imagine_reference"]["read"] is False
+    assert all(h[n]["read"] and h[n]["idempotent"]
+               for n in ("board", "idea", "search", "stats", "sparks", "tonight", "images", "job"))
+    assert all(h[n]["open_world"] for n in ("images_for", "reference", "research"))
+    assert not any(h[n]["read"] for n in ("capture", "pick", "shoot", "archive", "add_spark"))
+
+
+def test_vocabularies_are_published_as_enums(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(dsn=tmp_db)
+    tools = _published(server)
+    status = tools["board"].input_schema["properties"]["status"]
+    assert status["enum"] == list(mcp_server.STATUSES)
+    brand = tools["capture"].input_schema["properties"]["brand"]
+    assert brand["enum"] == list(preprod.BRANDS)
+    assert brand["default"] == mcp_server.DEFAULT_BRAND
+    lanes = tools["research"].input_schema["properties"]["lanes"]
+    assert any(opt.get("items", {}).get("enum") == list(scout.KNOWN_LANES)
+               for opt in lanes.get("anyOf", [lanes]))
+
+
+def test_a_stranger_can_capture_without_naming_a_brand(tmp_db):
+    server = mcp_server.build_server(dsn=tmp_db)
+    import asyncio
+
+    out = _result(asyncio.run(server.call_tool("capture", {"title": "A door that breathes"})))
+    assert out["brand"] == mcp_server.DEFAULT_BRAND
+    assert out["status"] == "open"
+
+
+def test_the_listing_cap_is_said_out_loud(tmp_db):
+    """A list that stops at the cap with no word looks complete."""
+    preprod.save_concept_ideas([_idea(f"Idea {i}") for i in range(30)],
+                               brand="zeropage", dsn=tmp_db, account_id=None)
+    out = mcp_server.list_ideas(dsn=tmp_db)
+    assert out["count"] == mcp_server.LIST_LIMIT == len(out["ideas"])
+    assert out["truncated"] is True and "narrow" in out["note"]
+    assert mcp_server.list_ideas(limit=100, dsn=tmp_db)["truncated"] is False
+    hits = mcp_server.search_ideas("Idea", limit=10, dsn=tmp_db)
+    assert hits["count"] == 10 and hits["truncated"] is True
+    assert mcp_server.search_ideas("Idea 7", dsn=tmp_db)["truncated"] is False
+    # the cap is named in the description a stranger reads
+    assert "maximum 100" in mcp_server.DESCRIPTIONS["board"]
+
+
+def test_images_for_an_unknown_direction_is_an_error_not_an_empty_list(tmp_db):
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    server = mcp_server.build_server(dsn=tmp_db)
+    with pytest.raises(ToolError, match="no finding 424242"):
+        asyncio.run(server.call_tool("images", {"finding_id": 424242}))
+    fid = _banked(tmp_db)
+    assert mcp_server.spark_images(fid, dsn=tmp_db)["count"] == 2
+
+
+def test_writes_act_as_the_explicit_account_the_server_was_built_for(pg):
+    """build_server(account_id=X) is how the Guide opens a server for a
+    signed-in request. capture/pick/shoot/archive used to ignore it and
+    fall through to the bootstrap account (AUDIT.md F-9)."""
+    import asyncio
+
+    from conftest import seed_two
+
+    from src import accounts
+
+    preprod.init(pg)
+    scout.init(pg)
+    seed_two("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        other = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+    bootstrap = accounts.resolve_account(dsn=pg)
+    assert bootstrap != other
+
+    server = mcp_server.build_server(dsn=pg, account_id=other)
+    card = _result(asyncio.run(server.call_tool("capture", {"title": "Theirs"})))
+    picked = _result(asyncio.run(server.call_tool("pick", {"idea_id": card["id"]})))
+    assert picked["status"] == "picked"
+    assert [c["title"] for c in preprod.list_concepts(dsn=pg, account_id=other)] == ["Theirs"]
+    assert preprod.list_concepts(dsn=pg, account_id=bootstrap) == []
