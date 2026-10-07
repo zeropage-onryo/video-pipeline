@@ -61,6 +61,18 @@ export type FeatureIcon =
   | "open"
   | "type"
   | "edit";
+/** One statement block in the overview (2026-10-07, Mike: the shape of
+ *  ByteDance's own Seedance 2.5 page -- a heading, one or two sentences,
+ *  a demo beside it): the eyebrow, the serif line, the body, optional
+ *  points, and a media slot drawn like a wall tile (plate until a still or
+ *  a clip lands). */
+export type MakeOverviewBlock = {
+  eyebrow?: string;
+  title: string;
+  body: string;
+  points?: string[];
+  media?: MakeTile;
+};
 export type MakeFaq = {
   q: string;
   /** Plain text: it is also the FAQPage JSON-LD answer. */
@@ -109,6 +121,10 @@ export type MakePage = {
   /** The page's one signature interaction, drawn between the hero and the
    *  wall (components/signatures.tsx). Absent = none. */
   signature?: SignatureKey;
+  /** The overview between the hero and the signature (overview-section.tsx):
+   *  the model's own headline claims, each a block with a demo slot, in
+   *  the shape of the model maker's page. Absent = none. */
+  overview?: { items: MakeOverviewBlock[] };
   /** The wall right under the hero (ad-wall.tsx): its own big line, up
    *  to eight tiles, and the button under them. */
   wall: { title: string; tiles: MakeTile[]; explore: { label: string; href: string } };

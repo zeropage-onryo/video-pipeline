@@ -21,7 +21,9 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
   `var(--card-line)`, `var(--plate-1)`… and nothing is forked per colour.
   `RED` is the light tone's original palette, byte for byte.
 - `components/` — the sections, in page order: `make-hero` (bold serif H1,
-  subhead, the two buttons, the spotlight), `signatures` (the page's ONE
+  subhead, the two buttons, the spotlight), `overview-section` (optional, 2026-10-07: the model maker's own headline
+  claims as alternating statement blocks, each with a media slot -- the
+  Seedance page's is ByteDance's four), `signatures` (the page's ONE
   signature interaction, keyed by `signature` on the entry; nothing when
   unset: `shot-timeline`, `reference-stack`, `frame-picker`, `edit-loop`,
   `type-frame`, `poster-type`; `use-fit` sizes a frame of a given ratio
@@ -59,7 +61,8 @@ is a 404, so every page has exactly one URL.
    optional `secondary` button and `startLabel`), `tone`, `accent` (`RED`, or
    a new `MakeAccent` in `theme.ts`), the wall's tiles (a tile with no `src`
    draws a plate), nine features, the model cards, three how-to cards, the
-   FAQ, `related` slugs, the final CTA. Optionally `signature`.
+   FAQ, `related` slugs, the final CTA. Optionally `signature` and
+   `overview` (statement blocks between the hero and the signature).
 2. Want a signature section? Write a client component taking `{ page }`,
    register it in `components/signatures.tsx`, name its key on the entry.
 3. Nothing else: the sitemap, header, footer and JSON-LD follow the list.

@@ -54,23 +54,75 @@ export const SEEDANCE: MakePage = {
     tone: "light",
     accent: INDIGO,
     signature: "shot-timeline",
+    // ByteDance's four headline claims for 2.5 (seed.bytedance.com/en/seedance2_5,
+    // read 2026-10-07), each restated as what THIS studio does with them.
+    // Media: TODO -- a Seedance clip per block (`media: { video, src }`).
+    overview: {
+      items: [
+        {
+          eyebrow: "Longer narratives. Better control.",
+          title: "Up to 30 seconds a shot, written as timed beats.",
+          body: "Seedance 2.5 renders 4 to 30 seconds in one generation, and reads a prompt the way this studio writes one: 0 to 3 seconds does one thing, 3 to 7 the next, and the beats come back in order. Cut the scene into shots, or ask for one take.",
+          points: [
+            "Each shot's window is fitted to a clip length Seedance renders, 4 to 30 seconds.",
+            "Six frames from 21:9 to 9:16; image-to-video keeps the keyframe's framing.",
+          ],
+          media: { title: "", tag: "0–30s", plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5") },
+        },
+        {
+          eyebrow: "Smarter reference",
+          title: "Held to your photos from the first second to the last.",
+          body: "Every shot's first frame is drawn from the references you attach, and a scene with none never reaches the Queue. Seedance 2.5 keeps a product or a face the same at second one and second twenty-eight, and each shot's keyframe carries the previous shot's still for continuity.",
+          points: [
+            "Upload photos for one scene, or save a person, product or place as an element and reuse it.",
+            "The keyframe you approved is what the clip starts on, image-to-video.",
+          ],
+          media: { title: "", tag: "Reference", plate: plate("#ecfeff", "#67e8f9", "#3730a3") },
+        },
+        {
+          eyebrow: "Audio and picture together",
+          title: "Sound is generated with the frame, not laid over it.",
+          body: "Every scene this studio writes ends in its diegetic sound: the footstep, the room tone, no music bed. Seedance 2.5 decides picture and sound in the same pass, so the footstep lands on the frame the foot does, and the audio is included in the clip's price.",
+          media: { title: "", tag: "Sound on", plate: plate("#f5f3ff", "#c4b5fd", "#4338ca") },
+        },
+        {
+          eyebrow: "Aiming for production",
+          title: "Priced before you spend, assembled when you approve.",
+          body: "Draft a scene at 480p for under half the 720p rate, look at every keyframe, then approve the tier, length and frame per shot with the credits on the card. The clips assemble in shot order into one MP4, loudness-normalised, with an optional music bed under them.",
+          points: [
+            `${sdFast.name} and ${sd.name} stay on the same card for a quicker or a 1080p take.`,
+          ],
+          media: { title: "", tag: "Queue", plate: plate("#eef2ff", "#818cf8", "#1e1b4b") },
+        },
+      ],
+    },
     wall: {
       title: "Shots Seedance Renders",
       tiles: SEEDANCE_TILES,
       explore: { label: "See the features", href: "#features" },
     },
     features: {
-      title: "Seedance in the Studio",
+      title: "Seedance 2.5 in the Studio",
       items: [
         {
-          icon: "model",
-          title: "Two Seedance tiers",
-          body: `${sdFast.name} for quick 720p takes, ${sd.name} for the full-quality render up to 1080p. Pick either per shot in the Queue.`,
+          icon: "sound",
+          title: "Sound with the picture",
+          body: "Every scene is written with its diegetic sound, and Seedance 2.5 generates the audio in the same pass as the frames. It is in the clip and in the price.",
+        },
+        {
+          icon: "clock",
+          title: "Up to 30 seconds a shot",
+          body: "Each shot's window is fitted to a Seedance 2.5 clip length between 4 and 30 seconds, twice what 2.0 renders, in one generation.",
         },
         {
           icon: "shots",
-          title: "4 to 15 seconds a shot",
-          body: "A scene is written as timed shots, and each shot's window is fitted to a Seedance clip length between 4 and 15 seconds.",
+          title: "Timed beats, in order",
+          body: "A scene is written as timed windows, which is the prompt shape Seedance 2.5 reads best: 0 to 3 seconds one thing, 3 to 7 the next, returned in order.",
+        },
+        {
+          icon: "edit",
+          title: "One take, or a cut",
+          body: "The writer cuts a scene into shots by default and writes one continuous take when you ask for it. On Seedance 2.5 either renders.",
         },
         {
           icon: "references",
@@ -84,8 +136,8 @@ export const SEEDANCE: MakePage = {
         },
         {
           icon: "price",
-          title: "Price before spend",
-          body: "The Queue prices the exact Seedance tier, length and frame you picked, and that number is what is charged.",
+          title: "Draft cheap, then approve",
+          body: `A 480p draft costs under half the 720p rate. The Queue prices the exact tier, length and frame you picked, and that number is what is charged.`,
         },
         {
           icon: "elements",
@@ -93,19 +145,9 @@ export const SEEDANCE: MakePage = {
           body: "Save a character, prop or place as an element and every scene written against it is held to the same frames.",
         },
         {
-          icon: "guide",
-          title: "Guided writing",
-          body: "Type the idea, or let the Guide work through story, look and pacing with you before the scene is written.",
-        },
-        {
           icon: "export",
           title: "Export one MP4",
           body: "Assemble the Seedance clips in shot order into one MP4, loudness-normalised, with an optional music bed under them.",
-        },
-        {
-          icon: "assets",
-          title: "Everything on one wall",
-          body: "Every render lands on your Assets wall with its model and prompt, to view, star, sort and download.",
         },
       ],
     },
@@ -126,7 +168,7 @@ export const SEEDANCE: MakePage = {
         },
         {
           title: "Approve on Seedance",
-          body: "In the Queue, choose Seedance 2.0 or 2.0 Fast, the length and the frame for each shot, with the price on the card, and approve. Export joins the clips into one MP4.",
+          body: "In the Queue, choose Seedance 2.5 (or 2.0, or 2.0 Fast), the length and the frame for each shot, with the price on the card, and approve. Export joins the clips into one MP4.",
         },
       ],
     },
@@ -139,12 +181,12 @@ export const SEEDANCE: MakePage = {
         },
         {
           q: "Which Seedance models can I render on?",
-          a: `${sdFast.name} and ${sd.name}, both chosen per shot in the Queue with a length and a frame. The Fast tier renders at 480p or 720p; the full model adds 1080p.`,
+          a: `${sd25.name}, and beside it ${sd.name} and ${sdFast.name}, each chosen per shot in the Queue with a length and a frame. 2.5 renders 4 to 30 seconds with sound at 480p, 720p or 1080p; the 2.0 tiers render 4 to 15 seconds, the Fast one up to 720p.`,
           link: { href: "/models", label: "See every model" },
         },
         {
           q: "How long can a Seedance clip be?",
-          a: "Between 4 and 15 seconds a shot. A scene runs 4 to 30 seconds in all, written as timed shots, and each shot's window is fitted up to a length Seedance supports.",
+          a: "Between 4 and 30 seconds a shot on Seedance 2.5 (4 to 15 on the 2.0 tiers). A scene runs 4 to 30 seconds in all, written as timed shots, and each shot's window is fitted up to a length Seedance supports.",
         },
         {
           q: "Can I use my own photos as references?",
@@ -160,7 +202,7 @@ export const SEEDANCE: MakePage = {
         },
         {
           q: "Which plan do I need?",
-          a: `Both Seedance tiers are on ${PLAN_FOR[sd.tier]}. A 1080p render on ${sd.name} is the premium band, on ${PLAN_FOR.premium}.`,
+          a: `Every Seedance model is on ${PLAN_FOR[sd25.tier]}. A 1080p render on ${sd25.name} or ${sd.name} is the premium band, on ${PLAN_FOR.premium}.`,
           link: { href: "/pricing", label: "Compare plans" },
         },
         {

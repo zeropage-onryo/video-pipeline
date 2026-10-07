@@ -40,17 +40,24 @@ keyframe on all three.
 - [ ] Eight tiles, all gradient plates today: Wide establishing, Macro detail, Slow push-in, Handheld follow, Top-down reveal, Rack focus, Golden hour, Night exterior (tags "Shot 1".."Shot 8")
 - [ ] Media: eight Seedance stills from the studio as `src` (928x1152 JPEG under `web/public/models/seedance-video-generator/`); slot order follows the bento (0 short, 1 and 4 tall, 5 wide, 6-7 the pair)
 
-## 4. Features ("Seedance in the Studio", nine cards)
+## 1b. Overview (new section, 2026-10-07)
 
-- [ ] Two Seedance tiers (reads both names off the catalog)
-- [ ] 4 to 15 seconds a shot
-- [ ] Image to video, from your photos
-- [ ] Keyframe first
-- [ ] Price before spend
-- [ ] Reusable elements
-- [ ] Guided writing
-- [ ] Export one MP4
-- [ ] Everything on one wall
+- [x] The template gained an optional `overview` slot between the hero and the signature (`components/overview-section.tsx`): statement blocks in the shape of ByteDance's own 2.5 page, text and a media slot alternating sides
+- [x] Four blocks for Seedance, each of ByteDance's headings restated as what the studio does: longer narratives (30 s, timed beats, one take or a cut, six frames), smarter reference (keyframes off your photos, continuity), audio with the picture (diegetic sound, in the price), production (480p draft, price on the card, one MP4)
+- [ ] Media: one Seedance 2.5 clip per block (`media: { video, src }`); plates until then
+
+## 4. Features ("Seedance 2.5 in the Studio", nine cards, rewritten 2026-10-07)
+
+- [x] Sound with the picture
+- [x] Up to 30 seconds a shot
+- [x] Timed beats, in order
+- [x] One take, or a cut
+- [x] Image to video, from your photos
+- [x] Keyframe first
+- [x] Draft cheap, then approve
+- [x] Reusable elements
+- [x] Export one MP4
+- [ ] Not on the page, not wired: reference-to-video (`image_urls`, up to 30), the end frame (`end_image_url`), dialogue in quotes with lip sync, extend; white-model / green-screen / video editing need inputs the composer does not take
 
 ## 5. Models row ("6 Video Generator Models")
 
@@ -58,7 +65,7 @@ keyframe on all three.
 
 ## 6. How to ("How to render on Seedance")
 
-- [ ] 1. Write the scene / 2. Check each keyframe / 3. Approve on Seedance
+- [ ] 1. Write the scene / 2. Check each keyframe / 3. Approve on Seedance (step 3 names 2.5 first since 2026-10-07)
 
 ## 7. FAQ ("FAQs about Seedance", eight rows; the answers are the FAQPage JSON-LD)
 

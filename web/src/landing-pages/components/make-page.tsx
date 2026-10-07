@@ -3,6 +3,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { MakeHero } from "./make-hero";
 import { Signature } from "./signatures";
+import { OverviewSection } from "./overview-section";
 import { AdWall } from "./ad-wall";
 import { FeaturesSection } from "./features-section";
 import { ModelsSection } from "./models-section";
@@ -14,7 +15,8 @@ import { accentVars } from "../theme";
 import type { MakePage as MakePageEntry } from "../pages";
 
 // The whole /make page from one entry, in the order the brief fixed:
-// hero, the page's signature section when it names one, the wall (its own
+// hero, the overview when the entry carries one (2026-10-07), the page's
+// signature section when it names one, the wall (its own
 // headline + Explore), features, models, how-to, FAQ, related, final CTA.
 // Same header, footer and skin as the homepage; the entry's accent rides
 // on the skin wrapper as CSS variables (theme.ts).
@@ -24,6 +26,7 @@ export function MakePage({ page }: { page: MakePageEntry }) {
       <SiteHeader />
       <main className="flex-1">
         <MakeHero page={page} />
+        <OverviewSection page={page} />
         <Signature page={page} />
         <AdWall page={page} />
         <FeaturesSection page={page} />
