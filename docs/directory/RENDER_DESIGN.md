@@ -172,5 +172,42 @@ chat) and what it keeps is the one rule the whole project has guarded since
 August: the only place money is spent is a priced approve a person presses
 on a surface we draw.
 
-**STOP. Phase 4 does not depend on this. Phase 5's render-and-status skill
-is written against A with a marked block for B.**
+## Decision (Mike, 2026-10-07)
+
+**B.** "I want the connector to be able to generate, but you need to approve
+in the chat first." The connector keeps its generating tools, and every
+spend is quoted and approved in the chat before it happens.
+
+What that fixes as the build, in order (not built on this branch -- Phase 3
+was a proposal; this is the next task):
+
+1. **`quote`** -- for a picked concept: `pricing.display()` for the clip (the
+   signed token when `QUOTE_SIGNING_SECRET` is set) plus `scene_chain.
+   keyframe_quote` for the stills, in credits, with the caller's balance
+   beside it. Read-only.
+2. **`approve`** -- takes the token, re-verifies it (`pricing.verify`'s six
+   refusals), holds credit through `src/charge.py` BEFORE the submit,
+   refuses above the quoted price, and runs the same body `queue_approve`
+   runs, as a job; `job` polls it. `destructiveHint: true`, so Claude asks
+   the person before calling it -- that click, plus the sentence in chat,
+   is the approval. The keyframe draw goes the same way (`approve` with
+   the keyframe quote).
+3. **`imagine_reference`** gains the same shape: a quote in the reply when
+   called without a token, the draw only with one.
+4. **The Create cap** from "what must be metered" above, before
+   `ZEROPAGE_MCP_ENGINE=1` is set on Fly -- `generate` and `research` are
+   what "generate" means in the connector's own words, and they run on the
+   operator's key.
+5. The `queue_approve` body lifted out of the route into a callable the
+   tool can reach without a `Request` (injected like `start_job`).
+
+Stated once, plainly, because it does not go away with the design: the
+connector checklist lists "Generate images, video, or audio through AI
+models" under connectors that "aren't accepted", and the Compliance step
+asks for an acknowledgment on exactly that. `SUBMISSION.md` carries this
+as the open review risk; the skill in the plugin says what the tool does
+truthfully. If the listing is refused on it, option A is the fallback and
+costs one conditional in `build_server`.
+
+Phase 5's render-and-status skill is written against B, with the Queue link
+as the path that works until `quote` / `approve` ship.
