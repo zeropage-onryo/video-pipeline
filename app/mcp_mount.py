@@ -161,6 +161,41 @@ def _forbidden(detail: str):
     return JSONResponse({"error": "no_account", "detail": detail}, status_code=403)
 
 
+# Where a person with no workspace is sent (2026-10-07, Mike's call: one
+# web sign-in first, which creates the workspace; the connector never
+# creates one). Overridable because the studio's public origin is not
+# this one.
+SIGNUP_ENV = "ZEROPAGE_SIGNUP_URL"
+DEFAULT_SIGNUP_URL = "https://zeropage.studio"
+
+
+def no_account_detail() -> str:
+    url = (os.environ.get(SIGNUP_ENV) or "").strip() or DEFAULT_SIGNUP_URL
+    return (f"this sign-in has no workspace yet -- sign in once at {url} "
+            "(your workspace is created on the first sign-in), then reconnect")
+
+
+class Sessions:
+    """The session managers of both servers, entered together.
+
+    The app's lifespan (and the tests) enter ONE `run()`; two servers mean
+    two managers, so this is the one thing they enter. Each manager can
+    be run once per instance, which `run()` keeps true by entering both
+    exactly once."""
+
+    def __init__(self, *managers):
+        self.managers = [m for m in managers if m is not None]
+
+    @asynccontextmanager
+    async def run(self):
+        from contextlib import AsyncExitStack
+
+        async with AsyncExitStack() as stack:
+            for manager in self.managers:
+                await stack.enter_async_context(manager.run())
+            yield
+
+
 def _too_many(retry_after: int, limit: int):
     from starlette.responses import JSONResponse
 
@@ -174,7 +209,8 @@ def _too_many(retry_after: int, limit: int):
         headers={"Retry-After": str(retry_after)})
 
 
-def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = None):
+def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = None,
+            listed_app=None):
     """Wrap an ASGI app so every request names a caller.
 
     A plain ASGI wrapper rather than middleware on the parent app: the
@@ -205,6 +241,14 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
     who the caller turned out to be, and an unauthenticated request is
     already refused by the cheaper check above it. `limiter` is injected
     the same way `resolve` is (default: the module's one `LIMITER`).
+
+    TWO SERVERS, ROUTED BY DOOR (2026-10-07, Mike's call). The static key
+    reaches `app`, the full server; a signed-in person reaches
+    `listed_app`, the server built with `mcp_server.LISTED_TOOLS` only --
+    no spark bank (a shared table), no web image search, no model-calling
+    engine tool. Registration is per server, not per request, so hiding
+    tools from one door means a second server, not a filter. With no
+    `listed_app` (a test that builds one app) everybody reaches `app`.
     """
     if resolve is None:
         from .mcp_auth import account_for_token as resolve
@@ -237,8 +281,7 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
             return await app(scope, receive, send)
         account_id, reason = resolve(supplied)
         if reason == "no_account":
-            response = _forbidden(
-                "this sign-in has no account yet -- ask to be invited")
+            response = _forbidden(no_account_detail())
             return await response(scope, receive, send)
         if account_id is None:
             response = _unauthorized("token not accepted", error="invalid_token")
@@ -250,7 +293,7 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
             return await response(scope, receive, send)
         token = mcp_server.CALLER_ACCOUNT.set(account_id)
         try:
-            return await app(scope, receive, send)
+            return await (listed_app or app)(scope, receive, send)
         finally:
             mcp_server.CALLER_ACCOUNT.reset(token)
 
@@ -286,6 +329,12 @@ def build(dsn=None, start_job=None, job_status=None):
             start_job=start_job,
             job_status=job_status,
         )
+        listed = mcp_server.build_server(
+            dsn=dsn,
+            start_job=start_job,
+            job_status=job_status,
+            listed=True,
+        )
         # streamable_http_path="/" because the parent app owns the mount
         # prefix; leaving the SDK default would serve this at /mcp/mcp.
         # stateless_http because there is no shared state between calls
@@ -302,6 +351,9 @@ def build(dsn=None, start_job=None, job_status=None):
         asgi = server.streamable_http_app(streamable_http_path="/",
                                           stateless_http=True,
                                           transport_security=security)
+        listed_asgi = listed.streamable_http_app(streamable_http_path="/",
+                                                 stateless_http=True,
+                                                 transport_security=security)
     except ImportError as exc:
         print(f"note: {ENABLED_ENV}=1 but the mcp package is missing ({exc}) "
               f"-- {MOUNT_PATH} not mounted. `pip install -r requirements.txt`.",
@@ -316,7 +368,8 @@ def build(dsn=None, start_job=None, job_status=None):
     hosts = os.environ.get(HOSTS_ENV, "").strip() or ",".join(DEFAULT_HOSTS)
     print(f"MCP mounted at {MOUNT_PATH} (bearer auth, engine tools {engine}, "
           f"hosts {hosts})", file=sys.stderr)
-    return guarded(asgi, secret), server.session_manager
+    return (guarded(asgi, secret, listed_app=listed_asgi),
+            Sessions(server.session_manager, listed.session_manager))
 
 
 @asynccontextmanager

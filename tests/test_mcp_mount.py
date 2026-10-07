@@ -184,6 +184,17 @@ def test_a_sign_in_with_no_membership_is_403_not_somebody_elses_board():
     assert seen == []
 
 
+def test_the_403_says_to_sign_in_once_on_the_web(monkeypatch):
+    """Mike's call (2026-10-07): the connector never creates a workspace;
+    one web sign-in does. The refusal has to say that, with the address,
+    rather than 'ask to be invited' (wrong under open sign-up)."""
+    monkeypatch.delenv(mcp_mount.SIGNUP_ENV, raising=False)
+    assert "https://zeropage.studio" in mcp_mount.no_account_detail()
+    assert "invited" not in mcp_mount.no_account_detail()
+    monkeypatch.setenv(mcp_mount.SIGNUP_ENV, "https://studio.example.com")
+    assert "https://studio.example.com" in mcp_mount.no_account_detail()
+
+
 def test_an_unverifiable_token_is_401_and_never_reaches_the_server():
     inner, seen = _capturing()
     app = mcp_mount.guarded(inner, "static", resolve=lambda t: (None, "invalid_token"))
@@ -497,6 +508,17 @@ def test_an_unauthenticated_caller_is_refused_before_any_bucket_is_touched():
 
 # ---------- isolation, tool by tool, through the real transport ----------
 
+def _listed_names(body: str) -> list:
+    """Tool names off the SSE reply of one tools/list."""
+    import json
+
+    for line in body.splitlines():
+        if line.startswith("data:"):
+            result = json.loads(line[len("data:"):]).get("result") or {}
+            return [t["name"] for t in result.get("tools", [])]
+    return []
+
+
 def _reply(body: str):
     """(is_error, payload) off the SSE reply of one tools/call."""
     import json
@@ -676,21 +698,49 @@ def test_no_tool_reports_a_credit_balance(two_people):
     assert not {"balance", "credits", "wallet"} & names
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "F-4 in docs/directory/AUDIT.md: scout_findings and scout_bin are "
-    "SHARED tables by design (db.SHARED_TABLES), so sparks/tonight/images "
-    "are one pool for every account. Flip this to a pass by fencing the "
-    "bank per account -- a decision, not a Phase 4 edit."))
-def test_another_persons_sparks_and_images_are_not_listed(two_people):
+def test_the_spark_bank_is_not_offered_to_a_signed_in_caller(two_people):
+    """scout_findings / scout_bin are SHARED tables by design
+    (db.SHARED_TABLES), so one person's directions would be listed to
+    another. Mike's call (2026-10-07): the bank stays off the listed
+    server. A signed-in caller is handed the listed set and `sparks`
+    is simply not a tool there; the operator's static key still has it."""
     w = two_people
-    (e1, sparks), (e2, images), (e3, tonight) = _calls(w, [
+    (e1, p1), (e2, p2), (e3, p3) = _calls(w, [
         ("alice", "sparks", {}),
         ("alice", "images", {"finding_id": w["b_finding"]}),
-        ("alice", "tonight", {"brand": "zeropage"}),
+        ("operator-key", "sparks", {}),
     ])
-    assert not any(s["spark"] == "Bob's private direction" for s in sparks["sparks"])
-    assert e2 or images["count"] == 0
-    assert tonight.get("spark") != "Bob's private direction"
+    assert e1 and "sparks" in str(p1)
+    assert e2 and "images" in str(p2)
+    assert "Bob's private direction" not in str(p1) + str(p2)
+    assert not e3 and any(r["spark"] == "Bob's private direction" for r in p3["sparks"])
+
+
+def test_a_signed_in_caller_lists_exactly_the_listed_set(two_people):
+    import httpx
+
+    w = two_people
+
+    async def names_for(token):
+        async with w["sessions"].run():
+            transport = httpx.ASGITransport(app=w["app"])
+            async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="https://zeropage-studio.fly.dev") as client:
+                out = {}
+                for tok in token:
+                    reply = await client.post("/", headers={
+                        "authorization": f"Bearer {tok}",
+                        "content-type": "application/json",
+                        "accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+                    out[tok] = _listed_names(reply.text)
+                return out
+
+    listed = asyncio.run(names_for(["alice", "operator-key"]))
+    assert listed["alice"] == list(mcp_server.LISTED_TOOLS)
+    assert set(listed["operator-key"]) > set(mcp_server.LISTED_TOOLS)
+    assert "sparks" in listed["operator-key"] and "imagine_reference" in listed["operator-key"]
 
 
 # ---------- what an external caller sees ----------
@@ -701,20 +751,21 @@ def test_what_an_external_caller_sees_with_the_engine_off(env, monkeypatch):
     every one of them carries the annotations the directory checks."""
     pytest.importorskip("mcp")
     monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
-    token = mcp_server.CALLER_ACCOUNT.set(7)
-    try:
-        app, _ = mcp_mount.build(dsn=":memory:", job_status=lambda i, account_id=None: None)
-        assert app is not None
-        server = mcp_server.build_server(dsn=":memory:",
-                                         job_status=lambda i, account_id=None: None)
-        tools = asyncio.run(server.list_tools())
-    finally:
-        mcp_server.CALLER_ACCOUNT.reset(token)
+    app, _ = mcp_mount.build(dsn=":memory:", job_status=lambda i, account_id=None: None)
+    assert app is not None
+    server = mcp_server.build_server(dsn=":memory:", listed=True,
+                                     job_status=lambda i, account_id=None: None)
+    tools = asyncio.run(server.list_tools())
     names = [t.name for t in tools]
     assert names == ["board", "idea", "search", "capture", "pick", "shoot", "archive",
-                     "add_spark", "tonight", "sparks", "images", "reference",
-                     "imagine_reference", "images_for", "stats", "job"]
-    assert "research" not in names and "generate" not in names
+                     "stats", "job"] == list(mcp_server.LISTED_TOOLS)
+    for absent in ("research", "generate", "sparks", "tonight", "add_spark", "images",
+                   "reference", "imagine_reference", "images_for"):
+        assert absent not in names
+    # and the engine flag changes nothing on the listed server
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    again = mcp_server.build_server(dsn=":memory:", listed=True)
+    assert "generate" not in {t.name for t in asyncio.run(again.list_tools())}
     for t in tools:
         assert t.title, t.name
         assert t.annotations is not None

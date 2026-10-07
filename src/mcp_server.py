@@ -249,6 +249,16 @@ HINTS = {
     "job":               {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
 }
 
+# THE LISTED SET (2026-10-07, Mike's call). What a signed-in stranger is
+# offered through the HTTP mount: read the board and decide on it, and
+# (once built) quote and approve a render. Claude does the ideation in the
+# chat, so nothing here calls a paid model, and the spark bank -- a SHARED
+# table (db.SHARED_TABLES) -- stays on the operator's own server, where one
+# person's directions are not listed to another. `build_server(listed=True)`
+# registers exactly these; the static-token door and stdio keep everything.
+LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
+                "archive", "stats", "job")
+
 # Words a directory user does not have. The test screens every published
 # description and title for them (case-insensitive).
 INTERNAL_WORDS = (
@@ -1224,8 +1234,12 @@ ENGINE_TOOLS = (run_research, run_graph)
 
 def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                  start_job=None, job_status=None, account_id: Optional[int] = None,
-                 engine: Optional[bool] = None):
+                 engine: Optional[bool] = None, listed: bool = False):
     """Wrap the functions above as an MCP server.
+
+    `listed=True` registers LISTED_TOOLS only -- the set a stranger reaches
+    through the directory listing -- and never the engine tools, whatever
+    the flag says. The mount builds one of each and routes by door.
 
     `account_id` is whose board this server reads (2026-09-18): the
     Guide opens one in-process per signed-in request, and the board it
@@ -1291,6 +1305,8 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                                open_world_hint=hints["open_world"])
 
     def _reg(name: str):
+        if listed and name not in LISTED_TOOLS:
+            return lambda fn: fn          # not offered on the listed server
         return server.tool(name=name, title=TITLES[name],
                            description=DESCRIPTIONS[name], annotations=_ann(name))
 
@@ -1387,7 +1403,7 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
     def stats() -> dict:
         return _t(pipeline_stats, dsn=dsn, account_id=account_id)
 
-    if engine_enabled() if engine is None else engine:
+    if (engine_enabled() if engine is None else engine) and not listed:
         @_reg("research")
         def research(brand: Brand = DEFAULT_BRAND, count: int = 4,
                      lanes: Optional[list[Lane]] = None) -> dict:
