@@ -2,8 +2,12 @@
 
 v3, 2026-10-07, after Mike: "every video different, no 30-second video,
 these are all just snippets." Supersedes v1 (one story, three clips) and
-v2 (one 30 s hero cut into excerpts). NOTHING here has been rendered;
-every prompt is a draft to mark up.
+v2 (one 30 s hero cut into excerpts). RENDERED 2026-10-07 on Seedance 2.5 through Mike's Runway account
+(session "Seedance 2.5 landing page", text-to-video, 720p, sound on;
+1,930 credits for 12 clips plus a 480p motorcycle draft drawn from the
+720p clip's first frame, since Runway has no seed). The clips live under
+`web/public/models/seedance-video-generator/` as web MP4s with posters.
+The Seedream first-frame step was skipped; the wall chips read T2V.
 
 Prompt shape follows `.claude/skills/video-prompting/references/models/seedance25/`:
 constraints and timing first, a style block, every clip starting

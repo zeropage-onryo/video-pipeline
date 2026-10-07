@@ -25,6 +25,7 @@ const SNIPPET = "Seedance 2.5 · text-to-video · 5 s · 720p";
 const SEEDANCE_TILES: MakeTile[] = [
   {
     title: "Spray and momentum",
+    video: "/models/seedance-video-generator/skate.mp4", src: "/models/seedance-video-generator/skate.jpg",
     tag: "Handheld follow",
     mode: "T2V",
     aspect: "3:4",
@@ -35,6 +36,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Push-in",
+    video: "/models/seedance-video-generator/dancer.mp4", src: "/models/seedance-video-generator/dancer.jpg",
     tag: "Slow push-in",
     mode: "T2V",
     aspect: "4:3",
@@ -45,6 +47,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Micro detail",
+    video: "/models/seedance-video-generator/honey.mp4", src: "/models/seedance-video-generator/honey.jpg",
     tag: "Macro detail",
     mode: "T2V",
     aspect: "9:16",
@@ -55,6 +58,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Multi-beat action",
+    video: "/models/seedance-video-generator/table.mp4", src: "/models/seedance-video-generator/table.jpg",
     tag: "Top-down reveal",
     mode: "T2V",
     aspect: "9:16",
@@ -65,6 +69,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Scale and atmosphere",
+    video: "/models/seedance-video-generator/saltflat.mp4", src: "/models/seedance-video-generator/saltflat.jpg",
     tag: "Wide establishing",
     mode: "T2V",
     aspect: "16:9",
@@ -75,6 +80,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Rain and steam",
+    video: "/models/seedance-video-generator/noodles.mp4", src: "/models/seedance-video-generator/noodles.jpg",
     tag: "Night exterior",
     mode: "T2V",
     aspect: "3:4",
@@ -85,6 +91,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Backlight and water",
+    video: "/models/seedance-video-generator/surfer.mp4", src: "/models/seedance-video-generator/surfer.jpg",
     tag: "Golden hour",
     mode: "T2V",
     aspect: "3:4",
@@ -95,6 +102,7 @@ const SEEDANCE_TILES: MakeTile[] = [
   },
   {
     title: "Rack focus",
+    video: "/models/seedance-video-generator/perfume.mp4", src: "/models/seedance-video-generator/perfume.jpg",
     tag: "Camera control",
     mode: "T2V",
     aspect: "16:9",
@@ -143,7 +151,7 @@ export const SEEDANCE: MakePage = {
     signatureFrames: SIGNATURE_FRAMES,
     // ByteDance's four headline claims for 2.5 (seed.bytedance.com/en/seedance2_5,
     // read 2026-10-07), each restated as what THIS studio does with them.
-    // Media: TODO -- a Seedance clip per block (`media: { video, src }`).
+    // Media: Seedance 2.5 renders (Runway, 2026-10-07) under public/models/seedance-video-generator/.
     overview: {
       items: [
         {
@@ -154,7 +162,7 @@ export const SEEDANCE: MakePage = {
             "Each shot's window is fitted to a clip length Seedance renders, 4 to 30 seconds.",
             "Six frames from 21:9 to 9:16; image-to-video keeps the keyframe's framing.",
           ],
-          media: { title: "", tag: "0–30s", plate: plate("#e0e7ff", "#a5b4fc", "#4f46e5") },
+          media: { title: "A kitchen in three timed shots", tag: "Timed beats · three cuts in 6 s", video: "/models/seedance-video-generator/kitchen.mp4", src: "/models/seedance-video-generator/kitchen.jpg" },
         },
         {
           eyebrow: "Smarter reference",
@@ -164,13 +172,14 @@ export const SEEDANCE: MakePage = {
             "Upload photos for one scene, or save a person, product or place as an element and reuse it.",
             "The keyframe you approved is what the clip starts on, image-to-video.",
           ],
-          media: { title: "", tag: "Reference", plate: plate("#ecfeff", "#67e8f9", "#3730a3") },
+          media: { title: "A sneaker turned through a full rotation", tag: "Product held steady", video: "/models/seedance-video-generator/sneaker.mp4", src: "/models/seedance-video-generator/sneaker.jpg" },
         },
         {
           eyebrow: "Audio and picture together",
           title: "Sound is generated with the frame, not laid over it.",
           body: "Every scene this studio writes ends in its diegetic sound: the footstep, the room tone, no music bed. Seedance 2.5 decides picture and sound in the same pass, so the footstep lands on the frame the foot does, and the audio is included in the clip's price.",
-          media: { title: "", tag: "Sound on", plate: plate("#f5f3ff", "#c4b5fd", "#4338ca") },
+          media: { title: "Ice and soda poured into a glass", tag: "Native audio sync", video: "/models/seedance-video-generator/soda.mp4", src: "/models/seedance-video-generator/soda.jpg" },
+          sound: true,
         },
         {
           eyebrow: "Aiming for production",
@@ -179,7 +188,12 @@ export const SEEDANCE: MakePage = {
           points: [
             `${sdFast.name} and ${sd.name} stay on the same card for a quicker or a 1080p take.`,
           ],
-          media: { title: "", tag: "Queue", plate: plate("#eef2ff", "#818cf8", "#1e1b4b") },
+          media: { title: "A motorcycle at dusk, 720p", tag: "", video: "/models/seedance-video-generator/moto-720p.mp4", src: "/models/seedance-video-generator/moto-720p.jpg" },
+          compare: {
+            media: { title: "The same shot as a 480p draft", tag: "", video: "/models/seedance-video-generator/moto-480p.mp4", src: "/models/seedance-video-generator/moto-480p.jpg" },
+            label: "480p draft",
+            mediaLabel: "720p final",
+          },
         },
       ],
     },
