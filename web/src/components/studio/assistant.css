@@ -54,8 +54,7 @@
   justify-content: center;
   line-height: 1;
 }
-/* the face itself (assistant-avatar.tsx) fills whatever box the pill gives it;
-   its ring is the red border the old emoji circle had */
+/* the face itself (assistant-avatar.tsx, the mascot) fills whatever box the pill gives it */
 .zpa-avatar > .zav {
   width: 100%;
   height: 100%;
@@ -638,33 +637,6 @@
   font-size: 15px;
   outline: none;
 }
-.zpa-avs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.zpa-av {
-  width: 48px;
-  height: 48px;
-  border-radius: 999px;
-  border: 1px solid var(--edge);
-  background: var(--panel);
-  font-size: 22px;
-  line-height: 1;
-  text-align: center;
-  padding: 0;
-}
-.zpa-av[aria-pressed="true"] {
-  border: 2px solid var(--signal);
-  background: var(--signal-wash);
-}
-.zpa-av.any {
-  width: 76px;
-  font-size: 13px;
-  color: var(--text);
-  outline: none;
-}
-
 /* the page's own button, pointed at: Create on Studio, Approve on the Queue */
 .zps .zpa-ring {
   box-shadow:
@@ -890,7 +862,7 @@
     0 0 34px rgb(245 165 36 / 0.22);
 }
 
-/* ── "Meet your assistant": the look picker ── */
+/* ── "Meet your assistant": the mascot picker (lib/mascot.ts) ── */
 .zpa-preview {
   display: flex;
   align-items: center;
@@ -910,35 +882,70 @@
   font-size: 20px;
   letter-spacing: 0.02em;
 }
-.zpa-glyphs {
+.zpa-preview .zpa-mono.dim {
+  margin-top: 4px;
+}
+/* creatures (five across) and looks (three across): a picture and a word */
+.zpa-pick {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
-.zpa-glyph {
+.zpa-pick[data-n="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.zpa-opt {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 10px 4px 8px;
+  gap: 4px;
+  padding: 8px 4px 8px;
   border-radius: 16px;
   border: 1px solid var(--edge-lo);
   background: var(--well);
   color: var(--text);
   font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
   transition:
     border-color var(--t),
     background var(--t);
 }
-.zpa-glyph:hover {
+.zpa-opt:hover {
   border-color: var(--edge-hi);
 }
-.zpa-glyph[aria-pressed="true"] {
-  border-color: var(--signal);
-  background: color-mix(in srgb, var(--signal) 8%, var(--ground));
+.zpa-opt[aria-pressed="true"] {
+  border-color: var(--bone, #e8e4dc);
+  background: color-mix(in srgb, var(--bone, #e8e4dc) 7%, var(--ground));
 }
-.zpa-glyph:focus-visible,
-.zpa-av:focus-visible {
+/* colours: the look's own first, then the shared ones */
+.zpa-swatches {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.zpa-swatch {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: var(--sw);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  transition: transform var(--t);
+}
+.zpa-swatch:hover {
+  transform: scale(1.08);
+}
+.zpa-swatch[aria-pressed="true"] {
+  border-color: var(--bone, #e8e4dc);
+  box-shadow:
+    inset 0 0 0 2px var(--ground),
+    0 0 0 1px rgb(255 255 255 / 0.1);
+}
+.zpa-opt:focus-visible,
+.zpa-swatch:focus-visible {
   outline: 2px solid var(--signal);
   outline-offset: 2px;
 }

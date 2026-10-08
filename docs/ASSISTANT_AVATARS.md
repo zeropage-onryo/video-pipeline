@@ -1,5 +1,40 @@
 # The assistant's face: looks and states (2026-10-07)
 
+## The mascot (2026-10-08): it replaced the glyphs
+
+Mike rejected the flat SVG round (the glyphs below) for a soft, plush 3D creature, with Meta
+Muse's "Jolly" as the reference. What shipped:
+
+- **Five creatures, names fixed:** Nimbus (the default, a lavender felt cloud), Mote, Sprout,
+  Glim and Pip. Each has **three looks**, with the material and accessory baked into the
+  render, for 15 looks in all.
+- **Colours:** each look's own colour, plus light red, lavender, mint and sky. A look whose own
+  colour is one of those four is not offered it twice. Six looks have 4 colours and nine have 5.
+- **Seven moods:** awake, listen, think, talk, made, oops and sleep. 15 looks × colours × 7 moods
+  = **483 images**, each exported as a transparent WebP at 128px and 320px.
+- **Nothing is generated per person.** Every image was rendered once (Runway, Nano Banana 2 at 1K),
+  cut out with fal's Bria remover, and framed so all of a look's colours and moods share one
+  square. They are served from R2 at `site/mascot/v1/<size>/<look>-<colour>-<mood>.webp`. Bump
+  the version when an image is redone, so no browser keeps a stale copy.
+- **The persona:** `avatar` stores a code like `m:nf.own` (look `nf` = nimbus-felt, colour `own`),
+  which fits `assistant_store.clean_avatar`'s 16 characters. The server did not change. The name is
+  the creature's and never changes. The tone is the persona's existing three. An old emoji or glyph
+  persona reads as Nimbus in lavender felt and keeps its tone. `lib/mascot.ts` holds the data and
+  `web/tests/mascot.test.mjs` checks it.
+- **States to moods** (`moodFor`): idle → awake, listening → listen, thinking and working → think
+  (working keeps a neutral progress ring), talking → talk and awake in turn every 160ms (the
+  lip-flap; a reply is streaming, `partial` on the job), needs → awake, still, with the amber light,
+  success → made, error → oops, sleeping → sleep with the drifting z. Each state also gets its
+  own body move from the canvas's Pill board: float, lean, bounce, hop, shake or breathe. All seven
+  moods are stacked and cross-faded, so a change never waits on a download.
+- **The customiser** is "Meet your assistant": Who (five creatures) → Look (that creature's
+  three, drawn in the chosen colour) → Colour (swatches) → How it talks. The preview walks
+  through every state.
+
+The asset pipeline (renders, cut-outs, framing, export) lives outside the repo, in
+`data/_scratch_mascot/` on Mike's machine; `HANDOFF.md` there has the steps. The rest of this
+document is the glyph round it replaced, kept as history.
+
 Mike asked for "front end designs for the pill" and "different interactive emojis or icons for it".
 This is what was researched, what was built (`web/src/components/studio/assistant-avatar.tsx`
 + `assistant-avatar.css`), and what is left.
@@ -54,7 +89,7 @@ The useful references for a *floating* helper come from outside video:
 The pill's mono line also says the state in words (`Nova · Step 7 of 7 · NEEDS YOU`), so the
 state is readable without seeing the ring.
 
-## The looks
+## The looks (superseded by the mascot)
 
 Eight glyphs plus nine emoji. A glyph is stored as `glyph:<id>` in the existing
 `assistants.avatar` column. `assistant_store.clean_avatar` allows 16 characters with no
@@ -85,7 +120,6 @@ step with the preview.
   landed flash, the waiting answer, the input text and a 10-minute rest timer.
 - `app/studio/page.tsx`: the composer's "Filled by" note draws the face at 18px instead of
   printing the avatar string, so a glyph id never shows as text.
-- `avatarText(avatar)` returns the emoji or `""` for anywhere a plain string is needed.
 
 ## Built on 2026-10-08 (items 1–4 of the old "not built yet" list)
 

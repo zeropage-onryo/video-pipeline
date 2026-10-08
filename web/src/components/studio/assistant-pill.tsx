@@ -45,7 +45,7 @@
    is waiting on. */
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { ArrowRight, ChevronDown, ChevronUp, Settings2, SquarePen } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
@@ -72,13 +72,11 @@ import { StillStep, isStillStep, lineIsPrompt, stepOf } from "@/components/studi
 import { headline } from "@/lib/assistant-text";
 import { TypedText } from "@/components/studio/typed-text";
 import {
-  AVATARS,
+  asMascotPersona,
   asProjectConversation,
   STAGES,
   STAGE_LABEL,
   TONES,
-  cleanName,
-  firstEmoji,
   getAssistantMemory,
   isStage,
   keepReferences,
@@ -102,13 +100,21 @@ import {
   AVATAR_STATES,
   AssistantAvatar,
   DEFAULT_AVATAR,
-  EMOJI_SKINS,
-  GLYPHS,
+  MascotStill,
   STATE_LABEL,
-  glyphAvatar,
-  glyphOf,
   type AvatarState,
 } from "@/components/studio/assistant-avatar";
+import {
+  CREATURES,
+  coloursOf,
+  creatureOf,
+  decodeMascot,
+  encodeMascot,
+  looksOf,
+  nameOf,
+  type ColourId,
+  type Mascot,
+} from "@/lib/mascot";
 
 /* a sheet opens with the frames the check kept already chosen */
 const chosenOf = (t: Turn): Record<string, boolean> => {
@@ -203,7 +209,7 @@ export function AssistantPill() {
       .then((m) => {
         if (!live) return;
         if (m.persona) {
-          const p = { name: m.persona.name, avatar: m.persona.avatar, tone: m.persona.tone };
+          const p = asMascotPersona(m.persona);
           setPersona(p);
           savePersona(account, p);
         } else if (localPersona) {
@@ -583,7 +589,7 @@ export function AssistantPill() {
         ? `On ${STAGE_LABEL[stage]} — ask me what's next`
         : nextMove || `On ${STAGE_LABEL[stage]}`;
   const avatar = persona?.avatar ?? DEFAULT_AVATAR;
-  const name = persona?.name ?? "Assistant";
+  const name = persona?.name ?? nameOf(decodeMascot(avatar));
   // what the face shows. "needs" is the newest answer waiting on the
   // person's click: a confirm card not yet answered, or a contact sheet
   // with frames picked and not yet kept.
@@ -595,9 +601,11 @@ export function AssistantPill() {
       (isStillStep(latest) && stepOf(latest).state === "waiting") ||
       (!!latest.reply?.sheet?.sheet?.length && !latest.kept && Object.values(chosenOf(latest)).some(Boolean)));
   const face: AvatarState = busy
-    ? steps || (detail && !/^thinking/i.test(detail))
-      ? "working"
-      : "thinking"
+    ? partial.trim()
+      ? "talking"
+      : steps || (detail && !/^thinking/i.test(detail))
+        ? "working"
+        : "thinking"
     : turns.some((t) => t.failed)
       ? "error"
       : landed
@@ -680,7 +688,7 @@ export function AssistantPill() {
                       <SquarePen strokeWidth={1.6} />
                     </button>
                   ) : null}
-                  <button type="button" className="zpa-icon" title="Rename or change the look" onClick={() => setSetup(true)}>
+                  <button type="button" className="zpa-icon" title="Change the look or how it talks" onClick={() => setSetup(true)}>
                     <Settings2 strokeWidth={1.6} />
                   </button>
                   <button type="button" className="zpa-icon" aria-label="Shrink to pill" onClick={() => setOpen(false)}>
@@ -1042,7 +1050,9 @@ function showApprove() {
   setTimeout(() => btn.classList.remove("zpa-ring"), 4000);
 }
 
-/* "Meet your assistant": a name, a face, a way of talking */
+/* "Meet your assistant": a creature, one of its looks, a colour and a way
+   of talking. Every option is a picture rendered once (lib/mascot.ts), so
+   choosing costs nothing; the name is the creature's and never changes. */
 function Setup({
   initial,
   onDone,
@@ -1052,13 +1062,8 @@ function Setup({
   onDone: (p: Persona) => void;
   onClose: () => void;
 }) {
-  const [name, setName] = useState(initial?.name ?? "Nova");
-  const [avatar, setAvatar] = useState(initial?.avatar ?? DEFAULT_AVATAR);
-  const [other, setOther] = useState(
-    initial && !glyphOf(initial.avatar) && !EMOJI_SKINS.includes(initial.avatar) && !AVATARS.includes(initial.avatar)
-      ? initial.avatar
-      : "",
-  );
+  const [mascot, setMascot] = useState<Mascot>(() => decodeMascot(initial?.avatar));
+  const [tone, setTone] = useState<Tone>(initial?.tone ?? "friendly");
   // the preview walks through every state so the look is seen moving
   const [demo, setDemo] = useState(0);
   useEffect(() => {
@@ -1066,14 +1071,23 @@ function Setup({
     return () => clearInterval(t);
   }, []);
   const demoState = AVATAR_STATES[demo];
-  const [tone, setTone] = useState<Tone>(initial?.tone ?? "direct");
-  const clean = cleanName(name);
+  const avatar = encodeMascot(mascot);
+  const name = nameOf(mascot);
+  const looks = looksOf(creatureOf(mascot));
+  const look = looks.find((l) => l.id === mascot.look) ?? looks[0];
+  const colours = coloursOf(look.id);
+  const colour = colours.find((c) => c.id === mascot.colour) ?? colours[0];
+  // a look keeps the colour picked when it comes in that colour
+  const inColour = (lookId: string, c: ColourId): Mascot => ({
+    look: lookId,
+    colour: coloursOf(lookId).some((x) => x.id === c) ? c : "own",
+  });
   return (
     <form
       className="zpa-setup"
       onSubmit={(e) => {
         e.preventDefault();
-        if (clean) onDone({ name: clean, avatar: avatar || DEFAULT_AVATAR, tone });
+        onDone({ name, avatar, tone });
       }}
     >
       <div className="zpa-title">
@@ -1083,54 +1097,70 @@ function Setup({
         </button>
       </div>
       <p className="zpa-msg">It rides along on every page, remembers what you like, and walks you from idea to clips.</p>
-      <label className="zpa-field">
-        <span className="zpa-mono">Name</span>
-        <input value={name} maxLength={24} onChange={(e) => setName(e.target.value)} />
-      </label>
       <div className="zpa-preview" aria-live="off">
         <AssistantAvatar avatar={avatar} state={demoState} size="xl" />
         <div>
           <span className="zpa-mono">{STATE_LABEL[demoState]}</span>
-          <b>{clean || "Your assistant"}</b>
+          <b>{name}</b>
+          <span className="zpa-mono dim">
+            {look.label} · {colour.name}
+          </span>
         </div>
       </div>
       <div className="zpa-field">
-        <span className="zpa-mono">Look</span>
-        <div className="zpa-glyphs">
-          {GLYPHS.map((g) => {
-            const id = glyphAvatar(g.id);
+        <span className="zpa-mono">Who</span>
+        <div className="zpa-pick" data-n="5">
+          {CREATURES.map((c) => {
+            const first = looksOf(c.id)[0].id;
             return (
               <button
                 type="button"
-                key={g.id}
-                className="zpa-glyph"
-                aria-pressed={avatar === id}
-                title={g.note}
-                onClick={() => setAvatar(id)}
+                key={c.id}
+                className="zpa-opt"
+                aria-pressed={look.creature === c.id}
+                title={c.note}
+                onClick={() => setMascot(inColour(first, mascot.colour))}
               >
-                <AssistantAvatar avatar={id} state={avatar === id ? demoState : "idle"} size="sm" />
-                {g.label}
+                <MascotStill avatar={encodeMascot({ look: first, colour: "own" })} px={44} />
+                {c.name}
               </button>
             );
           })}
         </div>
-        <div className="zpa-avs">
-          {EMOJI_SKINS.map((a) => (
-            <button type="button" key={a} className="zpa-av" aria-pressed={avatar === a} onClick={() => setAvatar(a)}>
-              {a}
+      </div>
+      <div className="zpa-field">
+        <span className="zpa-mono">Look</span>
+        <div className="zpa-pick" data-n="3">
+          {looks.map((l) => (
+            <button
+              type="button"
+              key={l.id}
+              className="zpa-opt"
+              aria-pressed={l.id === look.id}
+              onClick={() => setMascot(inColour(l.id, mascot.colour))}
+            >
+              <MascotStill avatar={encodeMascot(inColour(l.id, mascot.colour))} px={52} />
+              {l.label}
             </button>
           ))}
-          <input
-            className="zpa-av any"
-            aria-label="Any emoji"
-            placeholder="Any…"
-            value={other}
-            onChange={(e) => {
-              const one = firstEmoji(e.target.value);
-              setOther(one);
-              if (one) setAvatar(one);
-            }}
-          />
+        </div>
+      </div>
+      <div className="zpa-field">
+        <span className="zpa-mono">Colour</span>
+        <div className="zpa-swatches">
+          {colours.map((c) => (
+            <button
+              type="button"
+              key={c.id}
+              className="zpa-swatch"
+              aria-pressed={c.id === colour.id}
+              aria-label={c.id === "own" ? `${c.name}, its own colour` : c.name}
+              title={c.name}
+              style={{ "--sw": c.hex } as CSSProperties}
+              onClick={() => setMascot({ look: look.id, colour: c.id })}
+            />
+          ))}
+          <span className="zpa-mono dim">{colour.name}</span>
         </div>
       </div>
       <div className="zpa-field">
@@ -1143,10 +1173,10 @@ function Setup({
           ))}
         </div>
       </div>
-      <button type="submit" className="zpa-keep" disabled={!clean}>
-        Say hi to {clean || "your assistant"}
+      <button type="submit" className="zpa-keep">
+        Say hi to {name}
       </button>
-      <span className="zpa-mono dim">Rename or change it any time from the card.</span>
+      <span className="zpa-mono dim">Change it any time from the card.</span>
     </form>
   );
 }
