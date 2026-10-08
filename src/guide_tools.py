@@ -347,7 +347,7 @@ async def call(client, name: str, args: dict) -> str:
 
 def run(name: str, args: dict, *, dsn: Optional[str] = None,
         account_id: Optional[int] = None, brand: str = "",
-        attachments: Optional[dict] = None) -> str:
+        attachments: Optional[dict] = None, on_step=None) -> str:
     """Run ONE tool, synchronously, on a fresh in-process client.
 
     The confirm card's click lands here (write tools), and it is also
@@ -369,7 +369,7 @@ def run(name: str, args: dict, *, dsn: Optional[str] = None,
     if is_local(name):
         from . import assistant_brain
         return assistant_brain.run_local(name, args, brand=brand, account_id=account_id,
-                                         dsn=dsn, attachments=attachments)
+                                         dsn=dsn, attachments=attachments, on_step=on_step)
 
     from mcp import Client
 
@@ -416,7 +416,8 @@ def run_project_tool(name: str, args: dict, *, account_id: int, conversation=Non
 
 
 def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
-            *, local: bool = False, brand: str = "", maker: bool = False):
+            *, local: bool = False, brand: str = "", maker: bool = False,
+            on_step=None):
     """Everything a Guide turn needs, gathered once: the tool specs for
     the model, and a synchronous `run_tool(name, args)` for the READ
     calls the model makes mid-turn.
@@ -434,6 +435,9 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
 
     `maker=True` (the composer's send, 2026-10-04) also publishes
     make_image / make_video -- proposals the studio runs, see MAKE_TOOLS.
+
+    `on_step(done, of, detail)` hears a local tool's progress
+    (find_references' hunt), for the job the turn runs in.
     """
     tool_specs: list = []
     if available():
@@ -469,7 +473,7 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
         if is_local(name) and not local:
             raise Refused(f"`{name}` is not reachable from the Guide")
         return run(name, args, dsn=dsn, account_id=account_id, brand=brand,
-                   attachments=attachments)
+                   attachments=attachments, on_step=on_step)
 
     run_tool.attachments = attachments
     return tool_specs, run_tool

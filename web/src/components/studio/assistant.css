@@ -90,9 +90,13 @@
   box-shadow:
     0 12px 40px rgb(0 0 0 / 0.7),
     0 0 34px rgb(228 0 43 / 0.2);
-  transition:
-    box-shadow var(--t),
-    transform var(--t);
+  /* never `transform`: the morph out of the card drives it every frame */
+  transition: box-shadow var(--t);
+}
+/* what the pill says comes in once it has finished growing back from the
+   card -- shown during the morph it would be squeezed with the shell */
+.zpa-pill > * {
+  animation: zpa-fade 200ms 140ms both;
 }
 .zpa-pill:hover {
   box-shadow:
@@ -142,7 +146,11 @@
   box-shadow:
     0 20px 60px rgb(0 0 0 / 0.75),
     0 0 40px rgb(228 0 43 / 0.16);
-  animation: zpa-rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/* the card grows out of the pill (assistant-pill.tsx, a motion layoutId);
+   its contents fade in as it settles, so nothing reads while stretched */
+.zpa-card > :not(.zpa-avatar) {
+  animation: zpa-fade 220ms 150ms both;
 }
 .zpa-avatar.big {
   position: absolute;
@@ -264,6 +272,25 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dim);
+}
+.zpa-count {
+  margin-left: auto;
+  color: #a3a3a3;
+  font-variant-numeric: tabular-nums;
+}
+/* the answer as the model writes it (Typed), ending in a caret */
+.zpa-typing {
+  color: #e6e6e6;
+}
+.zpa-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--signal);
+  animation: zpa-pulse 1s steps(2, jump-none) infinite;
 }
 .zpa-dot {
   width: 7px;
@@ -590,6 +617,11 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* the look picker is taller than the card on a laptop screen: it
+     scrolls inside the card rather than running off the bottom of it */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .zpa-field {
   display: flex;
@@ -698,6 +730,11 @@
     transform: translateY(8px);
   }
 }
+@keyframes zpa-fade {
+  from {
+    opacity: 0;
+  }
+}
 @keyframes zpa-pulse {
   50% {
     opacity: 0.35;
@@ -713,8 +750,10 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .zpa-bubble,
-  .zpa-card,
+  .zpa-card > *,
+  .zpa-pill > *,
   .zpa-dot,
+  .zpa-caret,
   .zps .zpa-ring {
     animation: none;
   }

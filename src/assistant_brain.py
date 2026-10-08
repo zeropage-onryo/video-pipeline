@@ -323,7 +323,7 @@ def _need_line(entry: dict) -> str:
 
 def find_references(scene: str, *, brand: str = "", account_id=None,
                     departments=None, avoid=None, dsn=None, client=None,
-                    plan=None, search=None, screen=None) -> dict:
+                    plan=None, search=None, screen=None, on_step=None) -> dict:
     """A contact sheet for a scene that is not a banked spark yet.
 
     `reference_hunt.propose` hunts for a spark by id; a chat is usually
@@ -332,8 +332,21 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
     entirely. Returns {"ok", "sheet", "note", "checked"}; `sheet` is one
     entry per need with `keepers` and `rejected` (each carrying `why`).
     Never raises.
+
+    `on_step(done, of, detail)` (2026-10-08) is told where the hunt is, so
+    the assistant's face can fill its arc for real: `of` is 0 while the
+    scene is still being read (how many needs it has is not known yet),
+    then 2 per need (search, look) plus reading and laying out the sheet.
+    A need that finds nothing still counts its two, so the arc never stalls.
     """
     from . import reference_needs
+
+    def step(done: int, of: int, detail: str) -> None:
+        if on_step is not None:
+            try:
+                on_step(done, of, detail)
+            except Exception:                    # telling never fails the hunt
+                pass
 
     scene = " ".join(str(scene or "").split())[:2000]
     if not scene:
@@ -347,6 +360,7 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
     if screen is None:
         from .refcheck import screen
 
+    step(0, 0, "reading the scene")
     try:
         mapped = plan(scene, brand=brand, client=client, anti=anti, account_id=account_id)
     except Exception as e:                               # pragma: no cover - plan never raises
@@ -370,7 +384,11 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
                 "note": "nothing in this scene needs a photograph off the web"}
 
     sheet, unchecked = [], 0
-    for need in needs:
+    of = 2 * len(needs) + 2
+    for k, need in enumerate(needs):
+        done = 1 + 2 * k
+        what = need.get("role") or "reference"
+        step(done, of, f"searching for {what} frames")
         entry = {"role": need.get("role", ""), "query": need.get("query", ""),
                  "keepers": [], "rejected": [], "note": ""}
         try:
@@ -388,6 +406,8 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
             entry["note"] = "no lane configured, or nothing matched"
             sheet.append(entry)
             continue
+        step(done + 1, of, f"looking at {len(candidates)} {what} frame"
+                           f"{'' if len(candidates) == 1 else 's'}")
         try:
             looked = screen(candidates, need, brand=brand, client=client,
                             anti=anti, account_id=account_id)
@@ -406,6 +426,7 @@ def find_references(scene: str, *, brand: str = "", account_id=None,
 
     kept = sum(len(e["keepers"]) for e in sheet)
     looked_at = kept + sum(len(e["rejected"]) for e in sheet)
+    step(of - 1, of, "laying out the contact sheet")
     return {"ok": kept > 0, "sheet": sheet, "checked": unchecked == 0,
             "faces": len(faces),
             "note": (f"looked at {looked_at} frame(s), kept {kept} across {len(sheet)} need(s)"
@@ -487,15 +508,16 @@ def keep_references(candidate_ids, *, account_id=None, dsn=None, get=None, fetch
 
 
 def run_local(name: str, args: dict, *, brand: str = "", account_id=None,
-              dsn=None, attachments: Optional[dict] = None) -> str:
+              dsn=None, attachments: Optional[dict] = None, on_step=None) -> str:
     """Run one of this module's tools and return the text a model (or a
     card) sees. The full contact sheet goes into `attachments["sheet"]`
-    for the reply -- the thread draws it; the model only reads ids."""
+    for the reply -- the thread draws it; the model only reads ids.
+    `on_step` is find_references' progress listener."""
     args = dict(args or {})
     if name == "find_references":
         result = find_references(args.get("scene") or "", brand=brand, account_id=account_id,
                                  departments=args.get("departments"), avoid=args.get("avoid"),
-                                 dsn=dsn)
+                                 dsn=dsn, on_step=on_step)
         if attachments is not None:
             attachments["sheet"] = result
         return sheet_for_model(result)

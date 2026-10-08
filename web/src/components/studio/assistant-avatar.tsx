@@ -14,6 +14,10 @@
      error      one shake, red notch              (a turn failed)
      sleeping   dimmed, slowed, a small z         (nobody has touched it in a while)
 
+   Beside the state, a count (`badge`): answers that landed while the card
+   was shut, until it is opened again. A count, not a state -- it sits on
+   the face's other corner and says nothing about what is happening now.
+
    "Needs you" is the loudest state and it does NOT animate: a steady
    light reads louder than another loop on a page full of motion. States
    differ in shape as well as colour, so they read without the colour.
@@ -106,6 +110,7 @@ export function AssistantAvatar({
   avatar,
   state = "idle",
   progress,
+  badge = 0,
   size = "md",
   title,
   className = "",
@@ -114,6 +119,8 @@ export function AssistantAvatar({
   state?: AvatarState;
   /* 0..1 fills the working ring; absent = an indeterminate sweep */
   progress?: number;
+  /* unread answers; 0 draws nothing, past 9 reads "9+" */
+  badge?: number;
   size?: Size;
   title?: string;
   className?: string;
@@ -145,6 +152,11 @@ export function AssistantAvatar({
             <path d="M6 12.5l4 4 8-9" />
           </svg>
           <span className="zav-z">z</span>
+          {badge > 0 ? (
+            <span className="zav-badge" key={badge} aria-hidden>
+              {badge > 9 ? "9+" : badge}
+            </span>
+          ) : null}
         </>
       ) : null}
     </span>

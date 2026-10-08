@@ -87,16 +87,54 @@ step with the preview.
   printing the avatar string, so a glyph id never shows as text.
 - `avatarText(avatar)` returns the emoji or `""` for anywhere a plain string is needed.
 
-## Not built yet (worth doing, in order)
+## Built on 2026-10-08 (items 1–4 of the old "not built yet" list)
 
-1. **Real progress.** `working` sweeps unless given `progress`. The Guide's job detail could
-   carry `step/of` (find references: plan → search → check → sheet) so the arc fills for real.
-2. **Unread badge.** When a turn lands while the card is closed, show a count on the face
-   until it's opened.
-3. **Open/close morph.** Grow the card out of the pill (motion `layoutId`) instead of
-   swapping.
-4. **Streaming text** in the card. Replies arrive whole today.
-5. **The credit card everywhere.** It only shows on the Queue. Any proposal that spends should
-   show "N cr · you have M" in the card (see `docs/tasks/task-metering-and-credits.md`).
-6. **Rive**, if the glyphs ever need layered expressions. One state machine per glyph, under
+1. **Real progress.** The reference hunt (`assistant_brain.find_references`) reports
+   `on_step(done, of, detail)`. `of` is 0 while the scene is still being read, then 2 per need
+   (search, look) plus reading and laying out the sheet. A need that finds nothing still counts
+   its two, so the arc never stalls. The route writes it onto the job as
+   `steps: {done, of}`, `progress` and `detail`. Any other note (a retry, "looked at
+   find_references", "checking the directions") sets `steps` back to null, so the arc returns to
+   its sweep while the model writes. The pill passes `steps.done / steps.of` as `progress`, the
+   card's working line shows `2/8` beside the detail, and the face's title says the percentage.
+   The arc fills smoothly toward each step (`stroke-dasharray` transitions).
+2. **Unread badge.** `badge` on `AssistantAvatar`: a red count on the bottom corner (the tally
+   keeps the top), `9+` past nine, popping in once per new count. The pill counts every answer,
+   keep or confirm that lands while the card is shut (`openRef`, since a turn's closure holds the
+   `open` it started with). Opening the card clears the count. The bubble says the answer's
+   next move, or else its first sentence (`lib/assistant-text.ts headline`), and the pill's
+   label reads "Open Nova — 1 new answer".
+3. **Open/close morph.** One motion `layoutId` for the shell (`zpa-shell`: the pill button and
+   the card section) and one for the face (`zpa-face`: the perch and the card's badge). Each has
+   `layoutDependency={open}`, so a card that grows with its conversation never re-runs the
+   morph. The corners are given inline, since motion only scale-corrects the radius it is
+   handed: the card is 26px all round, or 26/26/0/0 on a phone, where it is a sheet, and the
+   pill is 30px. Contents fade in once the shell has mostly settled (CSS, 150ms delay), so
+   nothing reads while stretched. `.zpa-pill` no longer transitions `transform`. Under reduced
+   motion there is no `layoutId` at all and the two swap as before.
+4. **Streaming text.** `gemini_utils.generate_with_retry(on_text=)` streams through
+   `generate_content_stream` and still returns one whole response: every part of every chunk,
+   in order, the last usage for the meter. So the tool loop and the meter cannot tell the
+   difference. A retry or a fallback tells the listener "" first. A client with no stream
+   method (every fake in the suite) is called the old way. `creative_guide.respond(on_text=)`
+   decodes the answer's `message` out of the JSON as it is written (`partial_message`, which
+   handles escapes and surrogate pairs cut by a chunk) and clears it at each tool round. The
+   route stores it on the job as `partial`, the pill polls every 500ms instead of 1.5s once
+   words are arriving, and `Typed` catches up a 24th of the gap each frame
+   (`lib/assistant-text.ts typeAhead`), with a red caret. Screen readers hear the landed turn
+   once, not the typing. The pill's Guide turns stream today; the Studio composer's do not yet,
+   though the job now carries `partial` for it too.
+
+Also fixed on the way: the setup card ("Meet your assistant") was 850px tall inside a card
+capped at `100vh - 110px`. On a laptop screen its "Say hi" button fell off the bottom. It
+scrolls inside the card now.
+
+## Still not built
+
+1. **The credit card everywhere.** It only shows on the Queue. Any proposal that spends should
+   show "N cr · you have M" in the card (see `docs/tasks/task-metering-and-credits.md`, which
+   waits on Mike's call between a daily allowance and per-turn credits).
+2. **Streaming in the Studio composer.** Its Guide turns post the same route, so it is a client
+   change: read `partial` in `pollJob`'s tick and draw it in the brain's bubble.
+3. **Rive**, if the glyphs ever need layered expressions. One state machine per glyph, under
    100KB. CSS is enough for now.

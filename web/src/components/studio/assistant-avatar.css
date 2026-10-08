@@ -99,6 +99,13 @@
   stroke-dasharray: calc(var(--zav-p) * 100) 100;
   opacity: 0;
 }
+/* a known progress fills toward each new step instead of jumping to it */
+.zav-ring .zav-arc {
+  transition:
+    stroke 300ms var(--zav-ease),
+    opacity 300ms var(--zav-ease),
+    stroke-dasharray 600ms var(--zav-ease);
+}
 .zav-notch {
   stroke: var(--zav-red);
   stroke-width: 6;
@@ -141,6 +148,41 @@
   stroke-dashoffset: 24;
   opacity: 0;
   filter: drop-shadow(0 0 6px rgb(61 220 132 / 0.6));
+}
+/* unread answers: a count on the corner the tally does not use. It
+   arrives once (keyed on the count, so each new one pops) and then sits. */
+.zav-badge {
+  position: absolute;
+  z-index: 4;
+  right: -4%;
+  bottom: -2%;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--zav-red);
+  color: #fff;
+  font: 600 10px / 1 var(--mono, ui-monospace, monospace);
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 0 2px #0d0d0d;
+  animation: zav-badge-in 320ms var(--zav-ease) 1;
+}
+.zav[data-size="sm"] .zav-badge {
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  font-size: 8px;
+}
+@keyframes zav-badge-in {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+  }
 }
 .zav-z {
   position: absolute;

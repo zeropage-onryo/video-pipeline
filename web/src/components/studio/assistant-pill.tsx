@@ -26,10 +26,19 @@
    writes it as it happens, and reopening the project carries on where it
    left off. There, nothing clears it -- deleting the project does. The
    Guide makes projects too (create_project / save_as_project): those come
-   back as a proposal, drawn as a confirm card, and the click makes it. */
+   back as a proposal, drawn as a confirm card, and the click makes it.
+
+   How it shows a turn (2026-10-08, docs/ASSISTANT_AVATARS.md "not built
+   yet" 1-4): the face's arc fills from the job's `steps` while the
+   reference hunt can say how far it is; the answer types itself out from
+   the job's `partial` as the model writes it; an answer that lands while
+   the card is shut is counted on the face and quoted in the bubble; and
+   the card grows out of the pill (one motion layoutId for the shell, one
+   for the face) instead of swapping with it. */
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { motion, useReducedMotion, type Transition } from "motion/react";
 import { ArrowRight, ChevronDown, ChevronUp, Settings2, SquarePen } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
 import { useAssistantThread } from "@/components/studio/assistant-thread";
@@ -46,6 +55,7 @@ import {
   type GuideReply,
 } from "@/lib/studio-api";
 import { isMake } from "@/lib/composer";
+import { headline, typeAhead } from "@/lib/assistant-text";
 import {
   AVATARS,
   asProjectConversation,
@@ -98,6 +108,60 @@ const GREETED_KEY = "zpf.assistant.greeted";
    has to happen before it rests (assistant-avatar.tsx's states) */
 const SUCCESS_MS = 1400;
 const SLEEP_MS = 10 * 60 * 1000;
+/* a turn whose words are arriving is asked again sooner than one still
+   thinking, so the typing keeps up without polling a silent job faster */
+const POLL_MS = 1500;
+const STREAM_POLL_MS = 500;
+/* the card growing out of the pill, and back: quick and settled, never a
+   bounce (motion is the assistant's, but it should not show off) */
+const MORPH: Transition = { type: "spring", stiffness: 520, damping: 44, mass: 0.9 };
+
+/* phones draw the open card as a sheet with square bottom corners; the
+   morph has to be told, since it scale-corrects the radius it is given */
+const PHONE = "(max-width: 720px)";
+function usePhone(): boolean {
+  return useSyncExternalStore(
+    (on) => {
+      const q = window.matchMedia(PHONE);
+      q.addEventListener("change", on);
+      return () => q.removeEventListener("change", on);
+    },
+    () => window.matchMedia(PHONE).matches,
+    () => false,
+  );
+}
+
+/* The answer as it is written: catches up with what the job has said so
+   far a few characters a frame (lib/assistant-text.ts typeAhead), so a
+   poll's worth of words reads as typing rather than as a jump. Shown whole
+   under reduced motion. */
+function Typed({ text }: { text: string }) {
+  const reduce = useReducedMotion();
+  const [shown, setShown] = useState("");
+  // what is on screen, read by the frame loop (a state updater runs when
+  // React renders, too late to decide whether to ask for another frame)
+  const at = useRef("");
+  useEffect(() => {
+    if (reduce) return;
+    let raf = 0;
+    const tick = () => {
+      const next = typeAhead(at.current, text);
+      if (next !== at.current) {
+        at.current = next;
+        setShown(next);
+      }
+      if (next.length < text.length) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [text, reduce]);
+  return (
+    <>
+      {reduce ? text : shown}
+      <span className="zpa-caret" />
+    </>
+  );
+}
 
 export function AssistantPill() {
   const pathname = usePathname() || "/studio";
@@ -123,6 +187,16 @@ export function AssistantPill() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState("");
+  // the running turn, as its job reports it: how far the hunt is (the
+  // arc) and the answer's words so far (typed into the card)
+  const [steps, setSteps] = useState<{ done: number; of: number } | null>(null);
+  const [partial, setPartial] = useState("");
+  // answers that landed while the card was shut, until it is opened
+  const [unread, setUnread] = useState(0);
+  const openRef = useRef(false);
+  const phone = usePhone();
+  // under reduced motion the card and the pill simply swap, as they did
+  const still = useReducedMotion();
   const [bubble, setBubble] = useState("");
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [landed, setLanded] = useState(false);
@@ -190,7 +264,29 @@ export function AssistantPill() {
   }, [open]);
   useEffect(() => {
     body.current?.scrollTo({ top: body.current.scrollHeight, behavior: "smooth" });
-  }, [turns, busy, open]);
+  }, [turns, busy, open, partial]);
+  // read by turns that land after the person has closed (or opened) the
+  // card: the closure a turn started in still holds the old `open`
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
+  /* An answer landed. With the card open the person is reading it; shut,
+     it is counted on the face and its gist goes in the bubble. */
+  const arrived = useCallback(
+    (line: string) => {
+      if (openRef.current) return;
+      setUnread((n) => n + 1);
+      if (line) say(line);
+    },
+    [say],
+  );
+  function openCard() {
+    setBubble("");
+    setUnread(0);
+    setOpen(true);
+    setTimeout(() => input.current?.focus(), 50);
+  }
 
   // a turn that comes back without failing earns one "done" on the face
   useEffect(() => {
@@ -232,6 +328,8 @@ export function AssistantPill() {
     setText("");
     setBusy(true);
     setDetail("Thinking…");
+    setSteps(null);
+    setPartial("");
     try {
       const form = new FormData();
       // the box's own sends (t.made) are left out: they were never asked of
@@ -262,12 +360,20 @@ export function AssistantPill() {
       // sees: its uploads (saved to the bin on attach) and then its picks
       [...composer.uploads.map((u) => u.url), ...composer.picked].forEach((u) => form.append("asset_photos", u));
       const started = await runCreativeGuide(form);
-      const job = await waitForJob(started.job_id, (j) => setDetail(j.detail || "Thinking…"));
+      const job = await waitForJob(
+        started.job_id,
+        (j) => {
+          setDetail(j.detail || "Thinking…");
+          setSteps(j.steps && j.steps.of > 0 ? j.steps : null);
+          setPartial(j.status === "running" ? (j.partial ?? "") : "");
+        },
+        (j) => (j.partial ? STREAM_POLL_MS : POLL_MS),
+      );
       const reply = (job as unknown as { reply?: GuideReply }).reply;
       if (job.status !== "done" || !reply) throw new Error(job.error || `${persona.name} stopped.`);
       setTurns([...next, { role: "assistant", content: reply.message, reply }]);
       if (isStage(reply.stage)) setConvStage(reply.stage);
-      if (!open && reply.nudge) say(reply.nudge);
+      arrived(headline(reply.nudge, reply.message));
     } catch (e) {
       setTurns([...next.slice(0, -1), { ...next[next.length - 1], failed: true }]);
       setText((now) => now || said);
@@ -275,6 +381,8 @@ export function AssistantPill() {
     } finally {
       setBusy(false);
       setDetail("");
+      setSteps(null);
+      setPartial("");
     }
   }
 
@@ -318,6 +426,7 @@ export function AssistantPill() {
         },
       ]);
       toast(`${urls.length} reference${urls.length === 1 ? "" : "s"} added to the composer`);
+      arrived("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Those frames were not kept.", "err");
     } finally {
@@ -355,6 +464,7 @@ export function AssistantPill() {
         ...all.map((x, j) => (j === i ? { ...x, decided: "done" as const } : x)),
         { role: "assistant", content: `Done — ${done.result}` },
       ]);
+      arrived(`Done — ${done.result}`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "That did not go through.", "err");
     } finally {
@@ -415,7 +525,7 @@ export function AssistantPill() {
     ((!!latest.reply?.proposal && isProjectTool(latest.reply.proposal.tool) && latest.decided == null) ||
       (!!latest.reply?.sheet?.sheet?.length && !latest.kept && Object.values(chosenOf(latest)).some(Boolean)));
   const face: AvatarState = busy
-    ? detail && !/^thinking/i.test(detail)
+    ? steps || (detail && !/^thinking/i.test(detail))
       ? "working"
       : "thinking"
     : turns.some((t) => t.failed)
@@ -429,14 +539,44 @@ export function AssistantPill() {
             : resting
               ? "sleeping"
               : "idle";
+  // the hunt's own count, when it has one: the arc fills for real
+  const progress = face === "working" && steps ? steps.done / steps.of : undefined;
+  const faceTitle =
+    `${name}: ${STATE_LABEL[face]}` +
+    (progress != null ? `, ${Math.round(progress * 100)}%` : "") +
+    (unread ? ` · ${unread} new` : "");
+  // the morph scale-corrects only the radius it is handed, so the card's
+  // and the pill's corners are given here rather than left to the CSS
+  const lower = phone ? 0 : 26;
+  const cardCorners = {
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    borderBottomLeftRadius: lower,
+    borderBottomRightRadius: lower,
+  };
+  const pillCorners = { borderRadius: 30 };
+  const morph = (id: string) =>
+    still ? {} : { layoutId: id, layoutDependency: open, transition: MORPH };
 
   return (
     <div className={`zpa${open ? " open" : ""}`} data-page={where.toLowerCase()} data-face={face}>
       {open ? (
-        <section className="zpa-card" aria-label={name} role="dialog">
-          <span className="zpa-avatar big">
-            <AssistantAvatar avatar={avatar} state={setup || !persona ? "listening" : face} size="lg" title={`${name}: ${STATE_LABEL[face]}`} />
-          </span>
+        <motion.section
+          {...morph("zpa-shell")}
+          style={cardCorners}
+          className="zpa-card"
+          aria-label={name}
+          role="dialog"
+        >
+          <motion.span {...morph("zpa-face")} className="zpa-avatar big">
+            <AssistantAvatar
+              avatar={avatar}
+              state={setup || !persona ? "listening" : face}
+              progress={progress}
+              size="lg"
+              title={faceTitle}
+            />
+          </motion.span>
           {setup || !persona ? (
             <Setup
               initial={persona}
@@ -529,9 +669,22 @@ export function AssistantPill() {
                     ) : null}
                   </div>
                 ))}
+                {busy && partial.trim() ? (
+                  // the answer as it is written; the turn that lands replaces
+                  // it with the same words, so it is hidden from a screen
+                  // reader, which hears the turn once
+                  <p className="zpa-msg zpa-typing" aria-hidden>
+                    <Typed text={partial.trim()} />
+                  </p>
+                ) : null}
                 {busy ? (
                   <p className="zpa-working" role="status">
                     <span className="zpa-dot" /> {detail || "Thinking…"}
+                    {steps ? (
+                      <span className="zpa-count">
+                        {steps.done}/{steps.of}
+                      </span>
+                    ) : null}
                   </p>
                 ) : null}
                 {pathname.startsWith("/studio/queue") ? <Credits
@@ -568,28 +721,26 @@ export function AssistantPill() {
               </form>
             </>
           )}
-        </section>
+        </motion.section>
       ) : (
         <>
           <span className="zpa-perch">
-            <span className="zpa-avatar">
-              <AssistantAvatar avatar={avatar} state={face} size="md" title={`${name}: ${STATE_LABEL[face]}`} />
-            </span>
+            <motion.span {...morph("zpa-face")} className="zpa-avatar">
+              <AssistantAvatar avatar={avatar} state={face} progress={progress} badge={unread} size="md" title={faceTitle} />
+            </motion.span>
             {bubble ? (
               <span className="zpa-bubble" role="status">
                 {bubble}
               </span>
             ) : null}
           </span>
-          <button
+          <motion.button
+            {...morph("zpa-shell")}
+            style={pillCorners}
             type="button"
             className="zpa-pill"
-            aria-label={`Open ${name}`}
-            onClick={() => {
-              setBubble("");
-              setOpen(true);
-              setTimeout(() => input.current?.focus(), 50);
-            }}
+            aria-label={`Open ${name}${unread ? ` — ${unread} new ${unread === 1 ? "answer" : "answers"}` : ""}`}
+            onClick={openCard}
           >
             <span className="zpa-lines">
               <span className="zpa-mono">
@@ -605,7 +756,7 @@ export function AssistantPill() {
             <span className="zpa-go" aria-hidden>
               <ChevronUp strokeWidth={1.8} />
             </span>
-          </button>
+          </motion.button>
         </>
       )}
     </div>
