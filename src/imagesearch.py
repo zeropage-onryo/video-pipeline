@@ -50,6 +50,21 @@ from typing import Optional
 from . import db
 
 TIMEOUT = 10
+
+# Serper sells prepaid credits, $1.00 per 1,000 at the smallest pack (the
+# dearest per query, so the meter does not under-count), and a search
+# asking for more than 10 results costs 2 credits (serper.dev pricing, read
+# 2026-10-08). SERPER_USD_PER_CREDIT overrides the rate.
+SERPER_USD_PER_CREDIT = 0.001
+
+
+def serper_usd(num: int) -> float:
+    """The estimated price of one Serper search for `num` results."""
+    try:
+        rate = float(os.environ.get("SERPER_USD_PER_CREDIT") or SERPER_USD_PER_CREDIT)
+    except ValueError:
+        rate = SERPER_USD_PER_CREDIT
+    return round((2 if int(num or 0) > 10 else 1) * rate, 6)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS image_candidates (
     id         TEXT PRIMARY KEY,
@@ -223,16 +238,20 @@ def serper_images(query: str, limit: int = 6) -> list[dict]:
     key = os.environ.get("SERPER_API_KEY")
     if not key:
         return []
+    num = max(1, min(limit * 2, 20))
     try:
         import requests
         resp = requests.post("https://google.serper.dev/images",
                              headers={"X-API-KEY": key, "Content-Type": "application/json"},
-                             json={"q": query, "num": max(1, min(limit * 2, 20))},
+                             json={"q": query, "num": num},
                              timeout=TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except Exception:
         return []
+    from . import spend
+    spend.record_call(stage="image_search", model_asked="serper/images", usage={},
+                      cost_usd=serper_usd(num))
     out = []
     for it in (data.get("images") or []):
         image = it.get("imageUrl") or ""

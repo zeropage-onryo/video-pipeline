@@ -1590,6 +1590,32 @@ is yours, in Resolve, by hand.
   document is built off that same resource URI rather than `SITE_URL`, or the
   deployed document would publish a localhost resource and discovery would fail
   with nothing to read.
+  **"Connect to Claude" in the account menus (2026-10-08, Mike: "access the MCP
+  from the studio page at the bottom near profile").** Both menus (the rail's
+  profile row and the header avatar) share one `MenuTail` in `shell.tsx`, so
+  they cannot drift; the item opens `components/studio/connect-claude.tsx`.
+  NOTHING ON OUR SIDE CONNECTS ANYBODY: a connector is added from claude.ai,
+  which starts the OAuth flow, and the consent page is where the person says
+  yes. The panel is the address to paste (`/api/me`'s `mcp_url` =
+  `mcp_auth.connector_url()`, i.e. `resource_url()` when the mount is on AND
+  Supabase is configured, else null and the panel says the connector is off),
+  three steps, and a button to `claude.ai/customize/connectors`. claude.ai has
+  no documented deep link that pre-fills a custom connector (checked
+  2026-10-08), so it is copy and paste; once listed, set
+  `ZEROPAGE_CLAUDE_DIRECTORY_URL` (only `https://claude.ai/...` is published)
+  and the steps collapse to one button at the listing. **Connected** comes
+  from `src/mcp_connections.py` (OWNED `mcp_connections`, one row per account
+  × person × client, Mike's call over two columns on `accounts`): the consent
+  page records `client_name` + redirect host on Allow (the GET parks them in
+  the grant; a failed write never blocks the redirect), and `mcp_mount.guarded`
+  stamps `last_used_at` on the LISTED door only -- at most once per account ×
+  person per 10 minutes (`UseStamps`, in-process; a failed write is logged,
+  never the call's error), and never for the operator's static key. A use with no
+  approval on file writes a client-less row (a working token proves a
+  connection). `GET /api/mcp/connection` answers for the caller's tenant and
+  person only. Disconnect is claude.ai's -- Supabase's grant list needs the
+  person's own token, which this app never keeps -- so the panel says where to
+  remove it and nothing here deletes a row.
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.
@@ -1858,8 +1884,9 @@ is yours, in Resolve, by hand.
   `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
   `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
   still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
-- **The studio's chrome: one palette, a toast stack with Undo, credits only (2026-10-08, the
-  front-end gap list vs LTX / invideo, items 6, 17, 18, 20, 22).** **One palette**, on `:root` at
+- **The studio's chrome: one palette and a toast stack with Undo (2026-10-08, the front-end gap
+  list vs LTX / invideo, items 6, 17, 18, 20; its item 22, credits everywhere, landed as #166).**
+  **One palette**, on `:root` at
   the top of `web/src/app/studio/studio.css` -- the signal (`--signal` #e4002b, `--signal-hi` for
   red TEXT, `--signal-deep`, `--signal-soft`, `--signal-wash`), surfaces (`--void` .. `--slate`),
   opaque edges (`--edge-lo/--edge/--edge-hi`), ink (`--text`, `--bone*`, `--dim*`), `--ok`/`--warn`.
@@ -1880,11 +1907,7 @@ is yours, in Resolve, by hand.
   opened again since). An ELEMENT delete is a hard DELETE, so it is HELD instead
   (`element-sheet.useElementDelete`): off the page now, `getAssets` leaves it out of any listing
   read meanwhile, the DELETE goes when the toast closes or the page is left (`pagehide`,
-  keepalive), and Undo means nothing was ever sent. **Credits only**: no studio surface prints
-  dollars -- `_render_state` carries `credits`, `render-choice.priceText` has no USD fallback
-  ("pricing…" / "unpriced"), the Queue tally, the Director's Generate node and inspector, the
-  Elements sheet button and the legacy `/ui` Queue all read credits, and
-  `web/tests/no-dollars.test.mjs` fails on a dollar format under the studio folders.
+  keepalive), and Undo means nothing was ever sent.
 - **`src/projects.py`** + **`src/project_context.py`** — studio PROJECTS (2026-09-28, Mike's
   call, the day ANTIHERO was merged into Zero Page): one brief and one memory per piece of
   work (a client's ad, a short). `projects` is OWNED; `shoot_concepts.project_id` files a
@@ -2297,8 +2320,12 @@ is yours, in Resolve, by hand.
   never raises.** No usage counts = UNPRICED (NULL), never $0; a render with `cost_usd` NULL
   is FREE (subscription), never backfilled. `costs.summary` is the four numbers on `/costs`
   and `GET /api/costs`: cost per kept clip per tool, cost per stage per night, wasted spend,
-  today against the caps. Every figure is an estimate and the page says so; embeddings are
-  not metered.
+  today against the caps. Every figure is an estimate and the page says so. **Since
+  2026-10-08 the meter also covers** embeddings (`rag.embed_texts`, stage `embed`, estimated at
+  four characters a token when the API reports none), the story judge's two raw calls, fal
+  Whisper (priced per AUDIO MINUTE at an unverified third-party rate, `cut/index.
+  WHISPER_USD_PER_MIN`, since fal publishes none) and Serper (per query): the last two hand
+  `record_call` an explicit `cost_usd`, which `reprice` leaves alone.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -2454,7 +2481,12 @@ buttons say so and nothing else changes.
 charged the still that drew it, since 2026-09-29); a **Create costs 0** --
 included in the subscription, priced into the plans -- but `charge.create_refusal` refuses
 it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and the MCP
-`research` / `generate` tools ask the same predicate; a new open sign-up gets a one-time
+`research` / `generate` tools ask the same predicate. **Since 2026-10-08 every route that
+spends model text asks it too** (`api._create_gate`: the Guide, the brief draft, an element's
+describe, Direct / Polish, the canvas's Ground / Enhance / Run all, the scout, the evals, the
+cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`); a trial account can
+still think without limit until its credits go (BACKLOG #24, deferred). **The studio shows
+credits, never dollars** (`tests/test_studio_shows_credits.py` guards it); a new open sign-up gets a one-time
 **100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
 everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
 

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app import api, auth
 from app.main import app
-from src import assistant_brain, creative_guide, gemini_utils, guide_tools, scene_chain
+from src import assistant_brain, charge, creative_guide, gemini_utils, guide_tools, scene_chain
 
 # ---------- persona: nothing free-text reaches the prompt ----------
 
@@ -363,6 +363,9 @@ def client(monkeypatch):
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": "guide-user"})
     monkeypatch.setattr(auth, "current_account", lambda request: {"slug": "zeropage"})
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    # the account here is a made-up id with no plan and no balance: the
+    # Create gate (tested in test_spend_gates.py) is held open
+    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
     app.dependency_overrides[auth.current_account_id] = lambda: 42
     yield TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
     app.dependency_overrides.pop(auth.current_account_id, None)

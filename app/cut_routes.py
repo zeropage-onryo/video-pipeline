@@ -97,6 +97,16 @@ def _error(status: int, code: str, message: str, **extra) -> JSONResponse:
                         content={"error": {"code": code, "message": message, **extra}})
 
 
+def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
+    """api._create_gate's twin (this router does not import app.api): the
+    index and the agent spend model calls -- cents, free per click -- so an
+    account with no plan and no credit balance is refused, 402, before any
+    job starts (2026-10-08, the spend holes)."""
+    from src import charge
+    reason = charge.create_refusal(account_id)
+    return _error(402, "subscribe_or_top_up", reason) if reason else None
+
+
 def _mint(stored: Optional[str], account_id: Optional[int]) -> Optional[str]:
     if not stored:
         return None
@@ -363,6 +373,9 @@ def cut_index_route(body: IndexBody, account_id: int = Depends(auth.current_acco
     """Index one concept's clips, or (no concept_id) every clip and upload
     not indexed yet. A job: each clip is a Gemini call and, when someone
     speaks, a fal Whisper call -- cents, metered, not charged in credits."""
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     if body.concept_id is not None:
         try:
             handles = cut_index.handles_for_concept(body.concept_id, account_id=account_id)
@@ -847,6 +860,9 @@ def cut_project_agent(project_id: str, body: AgentBody,
     message = body.message.strip()
     if not message:
         return _error(400, "empty", "say what to change")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     selection = [str(s)[:40] for s in (body.selection or [])]
 
     def work(job):
@@ -962,6 +978,9 @@ def cut_project_index(project_id: str, account_id: int = Depends(auth.current_ac
             handles.append(h)
     if not handles:
         return _error(409, "nothing_to_index", "everything on this cut is indexed already")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     if not cut_sources.ffmpeg_bin():
         return _error(503, "no_ffmpeg", "ffmpeg is not installed on this server")
     job = _index_job(handles, f"index · {project['title'][:60]}", account_id=account_id,

@@ -17,10 +17,12 @@
    - `held` keeps a pick by concept id for the life of the tab, so it
      survives repaints AND leaving the page and coming back. Dropped once
      the card is approved or rejected.
-   - `estimate` only ORDERS the models (firstUsable's cheapest) and is never
-     shown: the studio prints credits, which only the server computes
-     (2026-10-08). tests/test_providers.py pins the rate-card shape (flat,
-     or a per-second rate optionally keyed by frame) to the adapters.
+   - `estimate` ORDERS models, it is never shown: `firstUsable` sorts by
+     it to find the cheapest. tests/test_providers.py pins this shape
+     (flat, or a per-second rate optionally keyed by frame) to the adapters.
+     The studio shows CREDITS, never dollars (2026-10-08): every number a
+     person reads is the server's (pricing.display), and a pick it has not
+     priced yet says "pricing…".
    - A TIMED scene is priced by the SERVER (src/pricing.py): each shot
      renders at its window's length fitted UP to what the model can make,
      and that fitting is done once, on the server, never here -- the
@@ -119,10 +121,9 @@ export type Plan = {
   timed: boolean;
   n: number;
   lengths: number[];
-  /** the PROVIDER's estimate -- what the render costs the operator */
-  usd: number | null;
   /** what it costs THIS account in credits (the server's quote, markup
-   *  included); null only when not priced yet */
+   *  included); null only when not priced yet. There is no dollar field:
+   *  the studio never shows the provider's cost (2026-10-08). */
   credits: number | null;
   pending?: boolean;
   refused?: string;
@@ -132,7 +133,6 @@ export type QuoteLike = {
   error?: string;
   timed?: boolean;
   durations?: number[];
-  estimate_usd?: number;
   credits?: number | null;
 } | null | undefined;
 
@@ -146,22 +146,20 @@ export type QuoteLike = {
  *  this file does not keep a second copy of that rule. `quote`:
  *    - a quote: its credits are the button's number
  *    - null or undefined: not answered yet -- "pricing…", never a guess.
- *      Until 2026-10-08 undefined fell back to the rate card's DOLLAR
- *      label; the studio shows credits and never dollars, and the server
- *      prices every pick, so there is no client estimate here any more. */
+ *      (Until 2026-10-08 an undefined quote fell back to the rate card's
+ *      dollar label; the studio shows no dollars now.) */
 export function planFor(spec: ModelLike, pick: Pick, parts: PartLike[] | null | undefined, quote?: QuoteLike): Plan {
-  const fromQuote = (q: NonNullable<QuoteLike>) => ({ credits: q.credits ?? null });
   if (!parts || !parts.length) {
     const base = { timed: false, n: 1, lengths: [pick.duration ?? 0] };
-    if (!quote) return { ...base, usd: null, credits: null, pending: true };
-    if (quote.error) return { ...base, usd: null, credits: null, refused: quote.error };
-    return { ...base, usd: quote.estimate_usd ?? null, ...fromQuote(quote) };
+    if (!quote) return { ...base, credits: null, pending: true };
+    if (quote.error) return { ...base, credits: null, refused: quote.error };
+    return { ...base, credits: quote.credits ?? null };
   }
   const todo = parts.filter((p) => !p.media_url);
   if (!quote || quote.error || !quote.timed || !quote.durations) {
-    return { timed: true, n: todo.length, lengths: [], usd: null, credits: null, pending: !quote, refused: quote?.error ?? "" };
+    return { timed: true, n: todo.length, lengths: [], credits: null, pending: !quote, refused: quote?.error ?? "" };
   }
-  return { timed: true, n: quote.durations.length, lengths: quote.durations, usd: quote.estimate_usd ?? null, ...fromQuote(quote) };
+  return { timed: true, n: quote.durations.length, lengths: quote.durations, credits: quote.credits ?? null };
 }
 
 /** Beside a credit price on an exempt (operator) account. */
@@ -170,21 +168,18 @@ export const NOT_CHARGED = " · not charged";
 export const creditsText = (credits: number, exempt = false): string =>
   `${credits.toLocaleString("en-US")} credit${credits === 1 ? "" : "s"}${exempt ? NOT_CHARGED : ""}`;
 
-/** The price half of the button: credits, always -- the studio never
- *  prints dollars (2026-10-08). "cr" rather than "credits" because the
- *  button is 22px Bebas in a card a third of the page wide -- the /models
- *  page abbreviates the same way. An exempt account still sees the price
- *  (it is still what the render costs) with "not charged" beside it, so the
- *  button agrees with the shell's pill. A quote that came back with no
- *  credit price reads "unpriced", never a dollar figure. */
+/** The price half of the button: the server's credits, or "pricing…"
+ *  until it answers -- never a dollar figure (2026-10-08). "cr" rather than
+ *  "credits" because the button is 22px Bebas in a card a third of the
+ *  page wide -- the /models page abbreviates the same way. An exempt
+ *  account still sees the price (it is still what the render costs) with
+ *  "not charged" beside it, so the button agrees with the shell's pill. */
 export const priceText = (plan: Plan, exempt = false): string =>
   plan.refused
     ? "refused"
-    : plan.pending
-      ? "pricing…"
-      : plan.credits !== null
-        ? `${plan.credits.toLocaleString("en-US")} cr${exempt ? NOT_CHARGED : ""}`
-        : "unpriced";
+    : plan.credits !== null && !plan.pending
+      ? `${plan.credits.toLocaleString("en-US")} cr${exempt ? NOT_CHARGED : ""}`
+      : "pricing…";
 
 export const approveText = (plan: Plan, exempt = false): string =>
   `Approve · ${plan.n} shot${plan.n === 1 ? "" : "s"} · ${priceText(plan, exempt)}`;

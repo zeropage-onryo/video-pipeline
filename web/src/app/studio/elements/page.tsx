@@ -32,9 +32,9 @@ import {
   type Asset,
   type ElementKind,
 } from "@/lib/studio-api";
+import { creditsText } from "@/lib/render-choice";
 import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
-import { creditsText } from "@/lib/render-choice";
 import { AddElement } from "@/components/studio/add-element";
 import { ElementSheet, useElementDelete } from "@/components/studio/element-sheet";
 
@@ -48,7 +48,7 @@ const routeOf = (a: Asset): [RouteKind, number] | null => {
 
 export default function ElementsPage() {
   const { brand, toast, balance } = useShell();
-  // a sheet is one still: its price says so before the click that spends it
+  // a sheet is one still, priced like any other before the click that draws it
   const sheetPrice = balance?.prices ? creditsText(balance.prices.still, !!balance.exempt) : null;
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [grid, setGrid] = useState(false);
@@ -76,10 +76,10 @@ export default function ElementsPage() {
             delete next[assetId];
             return next;
           });
-          // a drawn sheet is a still: the header's balance moved
-          announceBalanceChange();
           if (job.status === "done") toast(`${name} · sheet drawn`);
           else toast(`${name} · sheet not drawn: ${job.error || job.status}`, "err");
+          // the still's hold settled (or was released) as the job ended
+          announceBalanceChange();
           load();
         })
         .catch(() => setTimeout(tick, 4000));
@@ -257,7 +257,7 @@ export default function ElementsPage() {
                           type="button"
                           className="zdx bg-black/70"
                           aria-label={`${a.sheet ? "Redraw" : "Draw"} the sheet for ${a.name}`}
-                          title={`${a.sheet ? "Redraw sheet" : "Draw sheet"}${sheetPrice ? ` · ${sheetPrice}` : ""}`}
+                          title={`${a.sheet ? "Redraw" : "Draw"} sheet${sheetPrice ? ` · ${sheetPrice}` : ""}`}
                           onClick={() => draw(a)}
                         >
                           <LayoutGrid size={13} strokeWidth={1.7} />

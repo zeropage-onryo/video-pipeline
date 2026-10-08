@@ -54,6 +54,7 @@ from src import (
     ledger,
     locations,
     manual_lane,
+    mcp_connections,
     preprod,
     rag,
     render_assets,
@@ -199,6 +200,7 @@ async def lifespan(app: FastAPI):
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
         fal_requests.init()  # fal's queue receipts, persisted at submit
         assistant_store.init()  # the pill's persona, project and Keep clicks
+        mcp_connections.init()  # who connected Claude, for the account menus' panel
         # A deploy restarts this process mid-render and app/jobs.py's
         # threads die with it (2026-09-26: #121 and #135 orphaned). The
         # sweep reattaches to any fal job whose worker stopped beating and

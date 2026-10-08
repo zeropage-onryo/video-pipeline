@@ -2172,6 +2172,84 @@ textarea.zin {
   cursor: default;
 }
 
+/* the Connect to Claude panel (components/studio/connect-claude.tsx) */
+.ccdialog {
+  max-width: 480px;
+}
+.ccdialog p {
+  margin: 0;
+}
+.cclede {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.ccnote {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.ccnote a {
+  color: var(--text);
+}
+.ccstatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgb(47 125 79 / 0.6);
+  background: rgb(47 125 79 / 0.14);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.ccstatus svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: #5fb585; /* the Queue's ok dot (#2f7d4f), lifted to read on the dark */
+}
+.ccurl {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.ccurl .zin {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.ccurl .zbtn,
+.ccgo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: none;
+}
+.ccgo {
+  align-self: flex-start;
+  text-decoration: none;
+  line-height: 36px;
+}
+.ccsteps {
+  margin: 0;
+  /* Tailwind's preflight takes the numbers off every <ol> */
+  list-style: decimal;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+.ccsteps li::marker {
+  color: var(--signal);
+  font-weight: 600;
+}
+
 /* the toast the shell shows for a moment */
 /* the toast stack (2026-10-08): newest on top, each with its own timer, a
    dismiss, and an Undo where the action has one. TOP-centre of the stage,

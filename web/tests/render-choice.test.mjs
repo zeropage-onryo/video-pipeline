@@ -62,15 +62,13 @@ test('the button carries shot count and price; a timed scene is priced by the se
   assert.deepEqual(waiting.lengths, []);
   assert.equal(approveText(waiting), 'Approve · 2 shots · pricing…');
   assert.equal(approveText(planFor(spec, pick, parts, { error: 'no', timed: true, durations: [], estimate_usd: 0 })), 'Approve · 2 shots · refused');
-  // a whole scene the server has not priced yet is "pricing…" -- never the
-  // rate card's dollars (2026-10-08: the studio shows credits, only)
+  // a scene that renders whole with no quote yet: no dollar label, ever
+  // (2026-10-08) -- the client never prices a render itself
   const whole = planFor(spec, pick, null);
   assert.equal(approveText(whole), 'Approve · 1 shot · pricing…');
   assert.equal(chipText(spec, pick, whole), 'KLING · 5S · 1080P');
   assert.equal(approveText(planFor({ ...spec, price: undefined }, pick, null)), 'Approve · 1 shot · pricing…');
-  // a quote that came back without a credit price is unpriced, not dollars
-  assert.equal(approveText(planFor(spec, pick, null, { timed: false, durations: [5], estimate_usd: 0.35, credits: null })), 'Approve · 1 shot · unpriced');
-  assert.equal(approveText(planFor(spec, pick, parts, quote.credits ? { ...quote, credits: null } : quote)), 'Approve · 2 shots · unpriced');
+  assert.equal('usd' in whole, false);
 });
 
 test('a charged account sees credits from the server, never a client-side conversion', () => {

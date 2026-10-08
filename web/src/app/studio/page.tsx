@@ -269,6 +269,9 @@ function Composer() {
   const [busy, setBusy] = useState(false);
   // the Guide's progress line while it answers (null = not answering)
   const [guideWorking, setGuideWorking] = useState<string | null>(null);
+  // the Guide's answer as the model writes it (the job's `partial`), typed
+  // into the stream until the turn lands with the same words
+  const [guideWriting, setGuideWriting] = useState("");
   const [dragging, setDragging] = useState(false);
   // the frames "Use in a shot" handed over, held until the draft has loaded
   const [attachPhotos, setAttachPhotos] = useState<string[] | null>(null);
@@ -442,15 +445,18 @@ function Composer() {
   // again when it finishes (a finished turn is taller). Without it a still
   // landed with its bottom under the box and nothing on screen said so.
   const lastMade = last?.made;
+  // An answer being typed is lifted too, a line at a time.
+  const writingLines = Math.ceil(guideWriting.length / 70);
   useEffect(() => {
     const stack = stackRef.current;
     const box = stack?.querySelector<HTMLElement>(".zc-box");
-    const turn = stack?.querySelector<HTMLElement>(".zc-turn:last-of-type");
+    const turn =
+      stack?.querySelector<HTMLElement>(".zc-typing") ?? stack?.querySelector<HTMLElement>(".zc-turn:last-of-type");
     if (!box || !turn) return;
     const hidden = turn.getBoundingClientRect().bottom + 16 - box.getBoundingClientRect().top;
     if (hidden <= 0) return;
     window.scrollBy({ top: hidden, behavior: still ? "auto" : "smooth" });
-  }, [thread.length, lastMade?.status, guideWorking, still]);
+  }, [thread.length, lastMade?.status, guideWorking, writingLines, still]);
 
   // @Michael in the box attaches his frames as references
   const attachAsset = (hit: AssetHit) => {
@@ -611,6 +617,7 @@ function Composer() {
       stop();
       setLive({});
       setGuideWorking(null);
+      setGuideWriting("");
       setFilledBy(null);
       setPreset(null);
       setTimeout(() => textarea.current?.focus(), 50);
@@ -766,10 +773,19 @@ function Composer() {
         // runCreativeGuide, never a bare fetch: the route is behind
         // mutation_header and a call without GUARDED_HEADERS is refused 403.
         const started = await runCreativeGuide(form);
-        const job = await waitForJob(started.job_id, (j) => setGuideWorking(j.detail || "Considering your direction…"));
+        // polled faster once its words are arriving, so the typing keeps up
+        const job = await waitForJob(
+          started.job_id,
+          (j) => {
+            setGuideWorking(j.detail || "Considering your direction…");
+            setGuideWriting(j.status === "running" ? (j.partial ?? "") : "");
+          },
+          (j) => (j.partial ? 500 : 1500),
+        );
         const reply = (job as unknown as { reply?: GuideReply }).reply;
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
         setGuideWorking(null);
+        setGuideWriting("");
         const proposal = reply.proposal;
         if (proposal && isMake(proposal.tool)) {
           // THE BRAIN MADE: its line is the turn, the tiles go under it.
@@ -811,6 +827,7 @@ function Composer() {
       failRun(e);
     } finally {
       setGuideWorking(null);
+      setGuideWriting("");
       setBusy(false);
     }
   }
@@ -1092,6 +1109,7 @@ function Composer() {
               live={live}
               choices={choices}
               working={guideWorking}
+              writing={guideWriting}
               handlers={{
                 busy,
                 modelLabel,

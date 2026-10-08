@@ -507,18 +507,17 @@ export default function QueuePage() {
   /* What approving everything on the page would make and cost: the SAME
      plan each card prints on its button, summed. Display only -- every
      approve is still its own click and its own signed quote. A card still
-     pricing, refused or unpriced is counted out loud rather than as $0. */
+     pricing or refused is counted out loud rather than as 0. */
   const spendable = (pending || []).filter((c) => !lockedFor(c) && !didFor(c));
-  // Credits are what this account is charged, and the only price the
-  // studio prints (2026-10-08): a card the server has not priced in credits
-  // is counted as "not priced", never summed in dollars.
+  // Credits, only: what this account is charged, as the server priced it.
+  // The studio shows no dollars (2026-10-08).
   const tally = spendable.reduce(
     (t, c) => {
       const pick = pickOf(c);
       const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
       if (!pick || !spec || !renderers[pick.provider]?.available) return { ...t, open: t.open + 1 };
       const plan = planFor(spec, pick, c.timeline ? partsOf(c) : null, quoteOf(c, pick));
-      if (plan.credits === null) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
+      if (plan.pending || plan.refused || plan.credits === null) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
       return { ...t, shots: t.shots + plan.n, credits: t.credits + plan.credits };
     },
     { credits: 0, shots: 0, open: 0 },

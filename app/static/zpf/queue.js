@@ -232,11 +232,12 @@ async function renderPending() {
     return pick;
   }
 
-  /* ORDERING ONLY, never shown (2026-10-08): the rate card the catalogue
-     ships, multiplied out so the default pick can be the cheapest usable
-     model. The price a card PRINTS is the server's quote, in credits (see
-     plan below). tests/test_providers.py asserts the two agree for every
-     model, duration and frame. */
+  /* ORDERS models, never shown: the default pick is the cheapest usable
+     one, and this multiplies the rate card the catalogue ships to find it.
+     tests/test_providers.py asserts it agrees with the adapters for every
+     model, duration and frame. What a person READS is the server's credit
+     price (pricing.display, below) -- the studio shows no dollars
+     (2026-10-08). */
   function estimate(spec, pick, seconds = pick.duration) {
     const price = spec && spec.price;
     if (!price) return null;
@@ -245,13 +246,12 @@ async function renderPending() {
     return (per === undefined || per === null) ? null : per * seconds;
   }
 
-  /* A SCENE'S PRICE IS THE SERVER'S (src/pricing.py, 2026-09-17; a whole
-     scene's too since 2026-10-08, when the label became credits).
-     Each shot renders at its own window's length fitted UP to what the
-     model can make, and that fitting used to be done twice -- here, as a
-     JS twin of timeline.fit_seconds, and again on approve. Two
+  /* EVERY PRICE IS THE SERVER'S (src/pricing.py; timed scenes since
+     2026-09-17, every scene since 2026-10-08). Each shot renders at its
+     own window's length fitted UP to what the model can make, and the
+     credit price adds the markup, rounds up and floors per render -- two
      implementations of a price is how a person is shown one number and
-     charged another, so the twin is gone: the listing carries
+     charged another, so there is no twin here: the listing carries
      pricing.display for the card's default pick (`card.quote`), and a
      pick that differs asks GET /api/queue/{id}/quote once and repaints.
      Until that answers the button names the shots without a number,
@@ -349,9 +349,8 @@ async function renderPending() {
   }
 
   /* what an approve would make and cost: the count, the lengths, and the
-     price IN CREDITS -- the server's quote for this pick, timed or whole
-     (2026-10-08: the studio shows credits, never dollars, and this shell
-     no longer prices a whole scene off the rate card itself) */
+     server's credits for THIS pick (a scene that renders whole is quoted
+     too, since 2026-10-08 -- it used to print the rate card's dollars) */
   function plan(card, spec, pick) {
     const todo = shotsToRender(card);
     const q = timedQuote(card, pick);
@@ -361,12 +360,14 @@ async function renderPending() {
       return { timed: !!todo, n: todo ? todo.length : 1, lengths: todo ? [] : [pick.duration],
                credits: null, pending: !q, refused: q ? q.error : '' };
     }
-    return { timed: !!todo, n: q.durations.length, lengths: q.durations, credits: q.credits };
+    return { timed: !!todo, n: todo ? q.durations.length : 1,
+             lengths: todo ? q.durations : [pick.duration], credits: q.credits };
   }
 
-  const approveText = ({ n, credits, pending, refused }) =>
-    `Approve · ${n} shot${n === 1 ? '' : 's'} · ${refused ? 'refused' : pending ? 'pricing…'
-      : credits === null || credits === undefined ? 'unpriced' : credits.toLocaleString('en-US') + ' cr'}`;
+  const approveText = ({ n, credits, refused }) =>
+    `Approve · ${n} shot${n === 1 ? '' : 's'} · ${refused ? 'refused'
+      : credits === null || credits === undefined ? 'pricing…'
+      : credits.toLocaleString('en-US') + ' cr'}`;
 
   function renderZone(card) {
     const pick = pickFor(card);

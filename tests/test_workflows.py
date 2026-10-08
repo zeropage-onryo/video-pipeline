@@ -1445,7 +1445,9 @@ def test_api_me_names_the_signed_in_user_and_the_active_account(tmp_db):
     Jinja shell reads, so the two shells cannot disagree about who is
     signed in. The test client's session is whatever conftest signs."""
     data = client.get("/api/me").json()
-    assert set(data) == {"user", "account", "accounts"}
+    # mcp_url / claude_directory_url: the account menus' Connect to Claude
+    # panel (2026-10-08), tested in tests/test_auth.py
+    assert set(data) == {"user", "account", "accounts", "mcp_url", "claude_directory_url"}
     assert data["user"]["id"]
     assert data["user"]["display_name"]
     for account in data["accounts"]:
