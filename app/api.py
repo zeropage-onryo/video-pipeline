@@ -141,9 +141,11 @@ def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
     question of whether the account has anything for it to be included in.
     A new route that calls a model asks it too."""
     from src import charge as charging
-    reason = charging.create_refusal(account_id)
-    if reason:
-        return _error(402, "subscribe_or_top_up", reason)
+    refused = charging.create_refusal_code(account_id)
+    if refused:
+        # subscribe_or_top_up, or trial_thinking_used once the sign-up
+        # trial's included thinking is spent (2026-10-08)
+        return _error(402, *refused)
     return None
 
 

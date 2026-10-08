@@ -190,13 +190,15 @@ async function apiForm<T>(
   });
   if (!res.ok) {
     let message = res.statusText || `request failed (${res.status})`;
+    let code: string | undefined;
     try {
       const body = await res.clone().json();
       message = body?.error?.message ?? body?.detail ?? message;
+      code = body?.error?.code;
     } catch {
       /* not JSON */
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, code);
   }
   return (await res.json()) as T;
 }

@@ -156,6 +156,8 @@ export type Turn = {
   content: string;
   /** the guide never answered: drawn on the bubble, dropped from the next turn */
   failed?: boolean;
+  /** why, when sending again will not help (notSentWhy): drawn instead of "try again" */
+  failedWhy?: string;
   /** an assistant turn's extras -- chips, directions, brief, proposal, the contact sheet */
   reply?: GuideReply;
   /** the sheet's frames as the person has them chosen (default: what the check kept) */
@@ -333,4 +335,15 @@ export function asProjectConversation(turns: Turn[]) {
     });
   const scenes = [...new Set(turns.map((t) => t.made?.conceptId).filter((id): id is number => typeof id === "number"))];
   return { conversation, scenes };
+}
+
+/** The bubble's note for a turn the server REFUSED, where pressing send
+ *  again will not help (2026-10-08): the trial's included thinking is
+ *  used, or the account has no plan and no credits. Undefined for anything
+ *  else -- a dropped connection, a failed job -- which a retry may fix. */
+export function notSentWhy(e: unknown): string | undefined {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (code === "trial_thinking_used") return "the trial's thinking is used · subscribe to keep going";
+  if (code === "subscribe_or_top_up") return "needs a plan or credits";
+  return undefined;
 }

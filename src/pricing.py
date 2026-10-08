@@ -127,6 +127,29 @@ def still_credits(model: str) -> int:
     return credits_for(usd_micros(still_usd(model)))
 
 
+# THE TRIAL'S THINKING (2026-10-08, Mike's call: "fix the trial"). On a
+# plan the brain is free -- the Guide, Create, Direct, the index -- its cost
+# carried by the render markup, the way Runway and Higgsfield carry theirs.
+# The sign-up trial has no plan to carry it, and its 100 credits only bound
+# what it RENDERS: without this it could think on the studio's key without
+# limit and never spend a credit. So the trial includes this much model
+# text, ONCE (not per day), measured by the meter (spend.thinking_spent).
+# $1.00 is the trial credits' own value at the plan rate: about 25
+# Creates or 250 Guide turns on Flash. ZEROPAGE_TRIAL_THINKING_USD
+# overrides it; 0 means the trial thinks not at all.
+TRIAL_THINKING_USD = 1.00
+TRIAL_THINKING_ENV = "ZEROPAGE_TRIAL_THINKING_USD"
+
+
+def trial_thinking_usd() -> float:
+    """The model text, in USD, the sign-up trial includes, once."""
+    raw = (os.environ.get(TRIAL_THINKING_ENV) or "").strip()
+    try:
+        return max(0.0, float(raw)) if raw else TRIAL_THINKING_USD
+    except ValueError:
+        return TRIAL_THINKING_USD
+
+
 # --- the plans --------------------------------------------------------------
 # What a person buys. `credits` is the monthly allowance, granted as ONE
 # subscription lot per paid invoice (ledger.EXPIRY_MONTHS governs its

@@ -151,7 +151,7 @@ def client(monkeypatch):
     monkeypatch.setattr(auth, 'current_user', lambda request: {'id': 'alice'})
     # the account here is a made-up id with no plan and no balance: the
     # Create gate (tested in test_spend_gates.py) is held open
-    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
+    monkeypatch.setattr(charge, "create_refusal_code", lambda *a, **k: None)
     app.dependency_overrides[auth.current_account_id] = lambda: 12
     return TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
 

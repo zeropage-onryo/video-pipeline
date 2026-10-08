@@ -279,38 +279,71 @@ def refusal(e: ledger.InsufficientCredit, what: str = "this render") -> str:
 
 CREATE_REFUSAL = ("Create is included with a plan -- subscribe or top up "
                   "credits to continue")
+TRIAL_THINKING_REFUSAL = ("Your trial's writing and Guide time is used up -- "
+                          "subscribe to keep going")
+
+# the 402 code each refusal answers with, so a client can word them apart
+NO_PLAN_CODE = "subscribe_or_top_up"
+TRIAL_CODE = "trial_thinking_used"
 
 
-def create_refusal(account_id: Optional[int], *, dsn: Optional[str] = None) -> Optional[str]:
-    """Why this account may not Create (write a scene), or None when it may.
+def create_refusal_code(account_id: Optional[int], *,
+                        dsn: Optional[str] = None) -> Optional[tuple[str, str]]:
+    """(code, message) when this account may not Create -- or ask the
+    Guide, or anything else that spends model text -- None when it may.
 
-    A Create costs no credits (2026-09-29, Mike's call: it is included in
-    the subscription, its Gemini cost priced into the plans rather than
-    debited per click). "Included" still needs something to be included
-    IN: an account may Create while it has an active plan or any credit
-    balance -- the 100-credit trial counts -- and is refused with
-    CREATE_REFUSAL once it has neither. The operator's exempt accounts and
-    the unowned pool (the CLI, the nightly walk) are never refused.
+    A Create costs no credits (2026-09-29, Mike's call): writing, the Guide
+    and the rest are included, their cost carried by the render markup
+    (2026-10-08: "keep the first approach" -- the brain is free, renders
+    pay for it). "Included" still needs something to be included IN:
 
-    Fails OPEN on a read error, with a stderr line: a Create is free per
-    click, so a flaky balance read must not take the composer down; the
-    renders and stills behind it still hold credit and still refuse."""
+    - NO_PLAN_CODE: no active plan and no credit balance.
+    - TRIAL_CODE: no plan, and the account has never had credit the trial
+      did not give it (ledger.beyond_trial), and its model text so far
+      (spend.thinking_spent) has reached what the trial includes, ONCE
+      (pricing.trial_thinking_usd). Without it the 100-credit trial could
+      think on the studio's key without limit, never spending a credit.
+      A paying account is never held to it, and neither is a lapsed
+      subscriber still spending what it paid for.
+
+    The operator's exempt accounts and the unowned pool (the CLI) are never
+    refused. Fails OPEN on a read error, each check on its own, with a
+    stderr line: a Create is free per click, so a flaky read must not take
+    the composer down; the renders and stills behind it still hold credit
+    and still refuse."""
     if account_id is None:
         return None
+    import sys
     try:
         from . import accounts
         if accounts.is_credit_exempt(account_id, dsn=dsn):
             return None
         if accounts.plan_of(account_id, dsn=dsn):
             return None
-        if ledger.available(account_id, dsn=dsn) > 0:
-            return None
+        if ledger.available(account_id, dsn=dsn) <= 0:
+            return (NO_PLAN_CODE, CREATE_REFUSAL)
     except Exception as e:  # noqa: BLE001 -- see docstring
-        import sys
         print(f"[charge] create gate unreadable for account {account_id}: {e}",
               file=sys.stderr)
         return None
-    return CREATE_REFUSAL
+    try:
+        from . import pricing, spend
+        if (not ledger.beyond_trial(account_id, dsn=dsn)
+                and spend.thinking_spent(dsn, account_id=account_id)
+                >= pricing.trial_thinking_usd()):
+            return (TRIAL_CODE, TRIAL_THINKING_REFUSAL)
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        print(f"[charge] trial gate unreadable for account {account_id}: {e}",
+              file=sys.stderr)
+    return None
 
 
-__all__ = ["Charge", "CREATE_REFUSAL", "attempt_ref", "create_refusal", "refusal"]
+def create_refusal(account_id: Optional[int], *, dsn: Optional[str] = None) -> Optional[str]:
+    """create_refusal_code's message alone, for a caller with no status
+    code to set (the MCP tools raise it as the tool's error)."""
+    refused = create_refusal_code(account_id, dsn=dsn)
+    return refused[1] if refused else None
+
+
+__all__ = ["Charge", "CREATE_REFUSAL", "NO_PLAN_CODE", "TRIAL_CODE", "TRIAL_THINKING_REFUSAL",
+           "attempt_ref", "create_refusal", "create_refusal_code", "refusal"]

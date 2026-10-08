@@ -253,7 +253,7 @@ export function ComposerStream({
                     </span>
                   ) : null}
                   <p>{t.content}</p>
-                  {t.failed ? <span className="zc-bubble-failed">Not sent — try again</span> : null}
+                  {t.failed ? <span className="zc-bubble-failed">Not sent — {t.failedWhy ?? "try again"}</span> : null}
                 </div>
               </div>
             ) : (

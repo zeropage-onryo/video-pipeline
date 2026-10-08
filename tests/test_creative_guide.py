@@ -17,7 +17,7 @@ def client(monkeypatch):
     monkeypatch.setattr(auth, "current_account", lambda request: {"slug": "zeropage"})
     # the account here is a made-up id with no plan and no balance: the
     # Create gate (tested in test_spend_gates.py) is held open
-    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
+    monkeypatch.setattr(charge, "create_refusal_code", lambda *a, **k: None)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     return TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
 

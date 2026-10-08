@@ -116,6 +116,7 @@ import {
   NEW_SESSION_EVENT,
   asProjectConversation,
   keepReferences,
+  notSentWhy,
   takePendingFill,
   type ContactSheet,
   type Turn,
@@ -908,7 +909,7 @@ function Composer() {
       // words back for a retry.
       if (asking) {
         const mine = asking;
-        setThread((all) => all.map((m) => (m === mine ? { ...m, failed: true } : m)));
+        setThread((all) => all.map((m) => (m === mine ? { ...m, failed: true, failedWhy: notSentWhy(e) } : m)));
         setIdea((now) => now || mine.content);
       }
       failRun(e);
