@@ -131,7 +131,15 @@ def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
     subscription, priced into the plans). It is refused -- 402, BEFORE any
     job or model call -- only for an account with no plan and no credit
     balance (charge.create_refusal, the one predicate the MCP tools ask
-    too)."""
+    too).
+
+    EVERY ROUTE THAT SPENDS MODEL TEXT ASKS IT (2026-10-08, the spend
+    holes, docs/tasks/task-spend-holes-and-credits.md): the Guide, the
+    brief draft, an element's vision describe, Direct and Polish, the
+    canvas's Ground / Enhance / Run all, the research crawl, the evals and
+    the cut's index and agent. Each stays free per click; this is the one
+    question of whether the account has anything for it to be included in.
+    A new route that calls a model asks it too."""
     from src import charge as charging
     reason = charging.create_refusal(account_id)
     if reason:
@@ -693,6 +701,13 @@ async def creative_guide_reply(request: Request,
     elif not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
+    # gated like Create (2026-10-08, the spend holes): a turn is free per
+    # click but runs the guide, the reference hunt, the link reader and the
+    # story judge -- refused here, before any of them and before an upload
+    # is saved, for an account with no plan and no balance
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     image_refs, ref_urls, _ = await _collect_refs(form)
     idea = (form.get("idea") or form.get("prompt") or "").strip()
     # The composer's Image | Video switch (2026-10-04): with it, the turn
@@ -1573,6 +1588,11 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     photo_urls = [u for u in form.getlist("photo_urls") if str(u or "").strip()]
     if not images and not photo_urls:
         return _error(400, "no_photos", "at least one photo is required")
+    # gated like Create (2026-10-08): saving an element describes its
+    # photos (a vision call) and teaches the RAG shelf (an embedding)
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     space_dir = LOCATIONS_DIR / slug
     space_dir.mkdir(parents=True, exist_ok=True)
@@ -1631,6 +1651,10 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     slug = _slug(name)
     if not slug:
         return _error(400, "invalid_name", "a name is required")
+    # gated like Create (2026-10-08): see asset_create_location
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     field = (form.get(label) or "").strip()
     notes = (form.get("notes") or "").strip()
     ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"),
@@ -1691,6 +1715,9 @@ def assets_backfill(body: BackfillBody, account_id: int = Depends(auth.current_a
     Runs as a job because a real library takes a while."""
     if body.describe and not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         client = None
@@ -2658,6 +2685,9 @@ def projects_draft_brief(body: ProjectDraftBody,
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     if not any((body.answers.get(k) or "").strip() for k, _ in projects.QUESTIONS):
         return _error(400, "no_answers", "answer at least one question first")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     from google import genai
     try:
         brief = projects.draft_brief(body.title or "untitled",
@@ -2802,10 +2832,14 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     brand = body.brand if body.brand in preprod.BRANDS else "antihero"
     count = max(1, min(6, int(body.count or 4)))
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         jobs.progress(job, 0.15, "crawling")
-        result = scout.scout(brand, count, lanes=scout.default_lanes(account_id))
+        result = scout.scout(brand, count, lanes=scout.default_lanes(account_id),
+                             account_id=account_id)
         jobs.progress(job, 0.9, "banking")
         if not result["ok"]:
             raise RuntimeError(result["errors"][0] if result["errors"]
@@ -3154,13 +3188,21 @@ def _render_state(account_id: Optional[int] = None) -> dict:
     pick = providers.check_render_choice()
     spec = providers.model_options(pick["provider"], pick["model"])
     axis = spec["duration"]
+    # what the studio shows: credits, never the provider's dollars
+    # (2026-10-08) -- the same conversion pricing.display makes per render
+    try:
+        credits = pricing.credits_for(pricing.usd_micros(pick["estimate_usd"]))
+    except pricing.PricingRefused:
+        credits = None
     return {"label": providers.RENDER_LABELS.get(pick["provider"], pick["provider"]),
             "provider": pick["provider"],
             "available": fal.has_key(account_id),
             # TRUE whenever the key is: the click is the approval (2026-09-09)
             "spend_ok": fal.has_key(account_id),
             "model": pick["model"],
+            # the provider's cost, for the operator's pages; the studio reads `credits`
             "estimate_usd": pick["estimate_usd"],
+            "credits": credits,
             "duration": pick["duration"],
             "resolution": pick["frame"],
             # every model with what a second of it costs at its default
@@ -4197,6 +4239,9 @@ def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(
     note = body.note.strip()
     if not note:
         return _error(400, "empty_note", "an empty note directs nothing")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
@@ -4239,6 +4284,9 @@ def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.cur
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -5092,6 +5140,9 @@ def concept_approve(concept_id: int, account_id: int = Depends(auth.current_acco
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -5437,6 +5488,9 @@ def evals_run(body: EvalRunBody, account_id: int = Depends(auth.current_account_
     if not (api_key and _rag_reachable()):
         return _error(503, "evals_unavailable",
                       "needs the RAG store and GEMINI_API_KEY")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     cases = [{"query": g["query"], "relevant": g["relevant"]} for g in golden]
     # the view already appends "· n queries · k=…", so the default label
     # stays bare to avoid stuttering
@@ -5650,6 +5704,9 @@ def workflow_exec_ground(body: GroundBody, account_id: int = Depends(auth.curren
     "" with the store down, same as everywhere else."""
     from src import shootgen
 
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     references = shootgen.reference_block(
         spark=body.spark.strip() or None, db_path=None)
     return {"references": references}
@@ -5672,6 +5729,9 @@ def workflow_exec_enhance(body: EnhanceBody, account_id: int = Depends(auth.curr
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -5899,6 +5959,12 @@ def workflows_run(workflow_id: int, account_id: int = Depends(auth.current_accou
     graph = workflow.get("graph") or {}
     if not graph.get("nodes"):
         return _error(400, "empty_graph", "the workflow has no nodes to run")
+    # gated like Create (2026-10-08): the enhance node is free per click
+    # but billed to the studio; the Nano and Generate nodes hold credits
+    # of their own and refuse on an empty balance regardless
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     api_key = _gemini_key(account_id)
 
     def work(job):

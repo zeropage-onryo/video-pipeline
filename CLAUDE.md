@@ -2296,8 +2296,12 @@ is yours, in Resolve, by hand.
   never raises.** No usage counts = UNPRICED (NULL), never $0; a render with `cost_usd` NULL
   is FREE (subscription), never backfilled. `costs.summary` is the four numbers on `/costs`
   and `GET /api/costs`: cost per kept clip per tool, cost per stage per night, wasted spend,
-  today against the caps. Every figure is an estimate and the page says so; embeddings are
-  not metered.
+  today against the caps. Every figure is an estimate and the page says so. **Since
+  2026-10-08 the meter also covers** embeddings (`rag.embed_texts`, stage `embed`, estimated at
+  four characters a token when the API reports none), the story judge's two raw calls, fal
+  Whisper (priced per AUDIO MINUTE at an unverified third-party rate, `cut/index.
+  WHISPER_USD_PER_MIN`, since fal publishes none) and Serper (per query): the last two hand
+  `record_call` an explicit `cost_usd`, which `reprice` leaves alone.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -2453,7 +2457,12 @@ buttons say so and nothing else changes.
 charged the still that drew it, since 2026-09-29); a **Create costs 0** --
 included in the subscription, priced into the plans -- but `charge.create_refusal` refuses
 it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and the MCP
-`research` / `generate` tools ask the same predicate; a new open sign-up gets a one-time
+`research` / `generate` tools ask the same predicate. **Since 2026-10-08 every route that
+spends model text asks it too** (`api._create_gate`: the Guide, the brief draft, an element's
+describe, Direct / Polish, the canvas's Ground / Enhance / Run all, the scout, the evals, the
+cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`); a trial account can
+still think without limit until its credits go (BACKLOG #24, deferred). **The studio shows
+credits, never dollars** (`tests/test_studio_shows_credits.py` guards it); a new open sign-up gets a one-time
 **100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
 everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
 

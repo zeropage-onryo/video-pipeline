@@ -755,3 +755,26 @@ def test_sources_for_refs_joins_on_the_content_hash_and_prefers_a_real_source(tm
 
 def test_sources_for_refs_answers_nothing_without_a_bin(pg):
     assert scout.sources_for_refs(["aaa.jpg"], dsn=pg) == {}
+
+
+def test_the_generated_reference_is_charged_to_whoever_ran_the_pass(tmp_db, monkeypatch):
+    """The crawl's refgen used to pass no account, so a pass someone ran
+    from the Studio drew its references on nobody's bill (2026-10-08, the
+    spend holes). The CLI's pass still passes None: the unowned pool."""
+    from src import refgen
+    payers = []
+    monkeypatch.setattr(refgen, "render_for_finding",
+                        lambda fid, hook, dsn=None, account_id=None:
+                        payers.append(account_id) or {"ok": True})
+    monkeypatch.setattr(scout, "gather_web", lambda *a, **k: [
+        {"lane": "web", "detail": "night rituals everywhere"}, FAKE_IMAGE_SIGNAL])
+    digest = json.dumps({"candidates": [
+        {"image": 1, "spark": "the last check before leaving", "score": 0.8,
+         "hook_frame": "a gloved hand on a cold ignition"}]})
+
+    scout.scout("zeropage", 1, client=FakeClient(digest), model="fake",
+                lanes=("web",), dsn=tmp_db, fetch=fake_fetch, account_id=7)
+    assert payers == [7]
+    scout.scout("zeropage", 1, client=FakeClient(digest.replace("last check", "first look")),
+                model="fake", lanes=("web",), dsn=tmp_db, fetch=fake_fetch)
+    assert payers == [7, None]

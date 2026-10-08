@@ -168,10 +168,19 @@ def judge_ad(concept: str, turn: str, client, model: str, *, seconds=None,
         prompt = build_ad_prompt(concept, turn, _format_context(craft),
                                  _format_context(refs), seconds=seconds)
         resp = client.models.generate_content(model=model, contents=prompt)
+        _meter(model, resp)
         return parse_judge_response(getattr(resp, "text", "") or "")
     except Exception as e:
         return {"ok": False, "score": None, "verdict": "", "missing": [],
                 "error": f"{type(e).__name__}: {e}"}
+
+
+def _meter(model: str, resp) -> None:
+    """One llm_calls row for a judge call (2026-10-08). These two calls
+    bypass generate_with_retry, so they meter themselves, the way the
+    scout's raw calls do; record_call never raises."""
+    from . import spend
+    spend.record_call(stage="story_judge", model_asked=model, response=resp)
 
 
 def judge_spark(spark: str, rationale: str, client, model: str, *,
@@ -196,6 +205,7 @@ def judge_spark(spark: str, rationale: str, client, model: str, *,
                                     _format_context(craft_refs),
                                     _format_context(reference_refs))
         resp = client.models.generate_content(model=model, contents=prompt)
+        _meter(model, resp)
         return parse_judge_response(getattr(resp, "text", "") or "")
     except Exception as e:
         return {"ok": False, "score": None, "verdict": "", "missing": [],

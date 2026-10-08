@@ -229,7 +229,10 @@ def test_a_talking_clip_is_logged_transcribed_and_embedded(banked):
                              "('shot_log', 'transcribe') AND account_id = %s ORDER BY stage",
                              (banked["a"],)).fetchall()
     assert n == 3                                   # the shot and two sentences, not the words
-    assert [(r["stage"], r["cost_usd"]) for r in spent][1] == ("transcribe", None)   # unpriced
+    # priced by the audio minute (2026-10-08): three seconds of audio
+    stage, cost = [(r["stage"], r["cost_usd"]) for r in spent][1]
+    assert stage == "transcribe" and cost == pytest.approx(index.whisper_usd(3))
+    assert cost > 0
 
 
 @needs_ffmpeg

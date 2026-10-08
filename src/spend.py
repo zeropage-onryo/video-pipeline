@@ -30,9 +30,12 @@ THREE RULES.
   differently from input; image models price per image. The page says
   "estimate" too. No counts at all = UNPRICED (NULL), never $0.
 
-WHAT IS NOT METERED, on purpose: the embedding path (`gemini-embedding-001`
-in src/rag.py) runs on a different API surface and is left out; the page
-says so. Renders are metered by the tools themselves in `generations`.
+WHAT ELSE IS METERED HERE (2026-10-08, the spend-holes pass): the
+embedding path (`rag.embed_texts`, stage `embed`, priced per input token
+like any other model), the story judge's two raw calls, and two calls that
+are not priced per token at all -- fal's Whisper (by audio minute) and the
+Serper image search (per query) -- which hand `record_call` an explicit
+`cost_usd`. Renders are metered by the tools themselves in `generations`.
 
 `llm_calls` is OWNED (db.OWNED_TABLES): every read carries an account
 predicate, the way every other owned table does. The one deliberate
@@ -61,7 +64,8 @@ STAGES = (
     "shot_prompt",     # promptgen: structure a Shot, refine a tool prompt
     "timeline",        # timeline.plan: a scene's timed windows -> its shots
     "shot_log",        # src/cut/index: Gemini logs each shot of a clip
-    "transcribe",      # src/cut/index: fal Whisper, word level (unpriced: fal states no rate)
+    "transcribe",      # src/cut/index: fal Whisper, word level (priced per audio minute,
+                       # cut/index.WHISPER_USD_PER_MIN -- fal's page states no rate)
     "cut_agent",       # src/cut/agent_tools: the editor's agent turn (proposes ops, never edits)
     "prompt_gate",     # the orchestrator's credit-gate judge
     "taste_judge",
@@ -71,6 +75,9 @@ STAGES = (
     "scout",           # research crawl + digest
     "reference_map",   # reference_needs.plan: what a scene needs photos OF
     "reference_check", # refcheck: looking at the frames a lane returned
+    "story_judge",     # story_judge.judge_spark / judge_ad: the second, independent grade
+    "embed",           # rag.embed_texts: gemini-embedding-001, every ingest and query
+    "image_search",    # imagesearch: Serper's Google Images lane, a flat price per query
     "research",        # the research agent (langchain), per model turn
     "caption",         # scheduling.build_caption
     "director",        # director.direct_scene
@@ -143,6 +150,10 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
     # until 2026-09-28, so every Pro still was metered UNPRICED -- and,
     # once stills were charged, would have priced off the fallback.
     "gemini-3-pro-image":       {"input": 2.00, "output": 12.00, "cached": 0.20, "image": 0.134},
+    # The RAG library's embedder: $0.15 per 1M input tokens, no output
+    # charge (Gemini API pricing, read 2026-10-08). Metered since that day;
+    # rag.embed_texts reports the tokens (see there for when it estimates).
+    "gemini-embedding-001":     {"input": 0.15, "output": 0.0, "cached": 0.15},
 }
 
 
@@ -286,11 +297,17 @@ def record_call(*, stage: str, model_asked: str, model_used: Optional[str] = Non
                 response=None, usage: Optional[dict] = None, images: int = 0,
                 ok: bool = True, ms: Optional[int] = None,
                 account_id: Optional[int] = None, run_id: Optional[str] = None,
+                cost_usd: Optional[float] = None,
                 dsn: Optional[str] = None) -> Optional[int]:
     """One llm_calls row. NEVER RAISES -- returns the row id, or None when
     anything at all went wrong, because the accounting must not cost the
     generation it is accounting for. `stage` outside STAGES is stored as
-    "unknown" rather than refused, for the same reason."""
+    "unknown" rather than refused, for the same reason.
+
+    `cost_usd` is for a call that is not priced per token -- Whisper by
+    the audio minute, Serper by the query: stored as given (a successful
+    call only), with the token counts left NULL. `reprice` leaves such a
+    row alone, since it has no counts to recompute from."""
     try:
         stage = stage if stage in STAGES else "unknown"
         model_used = model_used or model_asked
@@ -303,14 +320,17 @@ def record_call(*, stage: str, model_asked: str, model_used: Optional[str] = Non
         # no counts at all and no image: the call happened but its size is
         # unknown -- that is UNPRICED (NULL), never $0.00
         measured = any(counts.get(k) is not None for k in _COUNTS)
-        cost = estimate_cost(
-            model_used,
-            prompt_tokens=counts.get("prompt_tokens") or 0,
-            output_tokens=counts.get("output_tokens") or 0,
-            cached_tokens=counts.get("cached_tokens") or 0,
-            thought_tokens=counts.get("thought_tokens") or 0,
-            images=images,
-        ) if ok and (measured or images) else None
+        if cost_usd is not None:
+            cost = round(float(cost_usd), 6) if ok else None
+        else:
+            cost = estimate_cost(
+                model_used,
+                prompt_tokens=counts.get("prompt_tokens") or 0,
+                output_tokens=counts.get("output_tokens") or 0,
+                cached_tokens=counts.get("cached_tokens") or 0,
+                thought_tokens=counts.get("thought_tokens") or 0,
+                images=images,
+            ) if ok and (measured or images) else None
         if db.resolve_dsn(dsn) not in _ready:
             init(dsn)
         with db.connect(dsn) as conn:
@@ -350,11 +370,16 @@ def reprice(dsn: Optional[str] = None, *, account_id: Optional[int]) -> int:
             "WHERE ok = 1 AND account_id IS NOT DISTINCT FROM %s", (account_id,)).fetchall()
         for r in rows:
             measured = any(r[k] is not None for k in _COUNTS)
+            if not (measured or r["images"]):
+                # nothing to recompute from: an unmeasured call stays
+                # UNPRICED, and a call priced explicitly (record_call's
+                # cost_usd -- Whisper, Serper) keeps the price it was given
+                continue
             cost = estimate_cost(
                 r["model_used"], prompt_tokens=r["prompt_tokens"] or 0,
                 output_tokens=r["output_tokens"] or 0, cached_tokens=r["cached_tokens"] or 0,
                 thought_tokens=r["thought_tokens"] or 0, images=r["images"] or 0,
-            ) if (measured or r["images"]) else None
+            )
             if cost != r["cost_usd"]:
                 conn.execute(
                     "UPDATE llm_calls SET cost_usd = %s "
