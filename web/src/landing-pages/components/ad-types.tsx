@@ -14,6 +14,12 @@ import type { MakePage, MakeTile } from "../pages";
 // divider; a cutout (`alpha`) sits on a checkerboard so the transparency
 // reads. Reduced motion: the swaps are instant.
 //
+// On a phone (checked live 2026-10-08) the tabs are a sideways strip, so a
+// tapped tab is scrolled to the middle of it, and the "drawn on" line sits
+// between the tabs and the still -- below the still it would be under the
+// fold, since a 4:5 frame fills the screen. The divider's hit area is 32px
+// tall, not the 16px of a bare range input.
+//
 // `signatureFrames` are the six formats: `title` the format, `tag` the
 // variant and quality, `prompt` the instruction (abridged where the source
 // was), `src` the still.
@@ -29,6 +35,14 @@ export function AdTypes({ page }: { page: MakePage }) {
   if (!types.length) return null;
   const t = types[i];
   const fade = still ? { duration: 0 } : { duration: 0.35, ease: EASE_OUT };
+  // the strip only scrolls on a phone; on a desktop the tabs are a column
+  const centre = (tab: HTMLElement) => {
+    const strip = tab.parentElement;
+    if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+    const s = strip.getBoundingClientRect();
+    const b = tab.getBoundingClientRect();
+    strip.scrollBy({ left: b.left + b.width / 2 - (s.left + s.width / 2), behavior: still ? "auto" : "smooth" });
+  };
 
   return (
     <section id="formats" className="border-t border-border">
@@ -47,9 +61,10 @@ export function AdTypes({ page }: { page: MakePage }) {
                 type="button"
                 role="tab"
                 aria-selected={k === i}
-                onClick={() => {
+                onClick={(e) => {
                   setI(k);
                   setSplit(50);
+                  centre(e.currentTarget);
                 }}
                 className="relative flex shrink-0 items-baseline gap-3 rounded-xl px-4 py-3 text-left outline-none transition-colors hover:bg-secondary focus-visible:ring-3 focus-visible:ring-ring/50"
               >
@@ -69,38 +84,44 @@ export function AdTypes({ page }: { page: MakePage }) {
             ))}
           </div>
 
-          {/* the still */}
-          <div className="relative mx-auto aspect-[4/5] w-full max-w-[480px] overflow-hidden rounded-2xl shadow-[0_30px_70px_-35px_rgba(0,0,0,0.45)]" style={{ background: t.alpha ? CHECKER : "var(--card)" }}>
-            <AnimatePresence initial={false}>
-              <motion.div key={i} initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={still ? undefined : { opacity: 0 }} transition={fade} className="absolute inset-0">
-                {t.from ? <Divided tile={t} split={split} /> : <Still tile={t} />}
-              </motion.div>
-            </AnimatePresence>
-            {t.from && (
-              <>
-                <label htmlFor="adtype-split" className="sr-only">
-                  Before and after divider
-                </label>
-                <input
-                  id="adtype-split"
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={split}
-                  onChange={(e) => setSplit(Number(e.target.value))}
-                  className="absolute inset-x-4 bottom-4 z-10 accent-[var(--primary)]"
-                />
-              </>
-            )}
+          {/* the still, with the model that drew it above it on a phone */}
+          <div className="min-w-0">
+            <p aria-live="polite" className="mb-3 text-[14px] leading-snug md:hidden">
+              <span className="eyebrow mr-2">Drawn on</span>
+              <span className="font-semibold">{t.tag}</span>
+            </p>
+            <div className="relative mx-auto aspect-[4/5] w-full max-w-[480px] overflow-hidden rounded-2xl shadow-[0_30px_70px_-35px_rgba(0,0,0,0.45)]" style={{ background: t.alpha ? CHECKER : "var(--card)" }}>
+              <AnimatePresence initial={false}>
+                <motion.div key={i} initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={still ? undefined : { opacity: 0 }} transition={fade} className="absolute inset-0">
+                  {t.from ? <Divided tile={t} split={split} /> : <Still tile={t} />}
+                </motion.div>
+              </AnimatePresence>
+              {t.from && (
+                <>
+                  <label htmlFor="adtype-split" className="sr-only">
+                    Before and after divider
+                  </label>
+                  <input
+                    id="adtype-split"
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={split}
+                    onChange={(e) => setSplit(Number(e.target.value))}
+                    className="absolute inset-x-4 bottom-2 z-10 h-8 cursor-ew-resize accent-[var(--primary)]"
+                  />
+                </>
+              )}
+            </div>
           </div>
 
           {/* how it was made */}
           <aside aria-live="polite" className="min-h-[220px]">
             <AnimatePresence mode="wait" initial={false}>
               <motion.div key={i} initial={still ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={still ? undefined : { opacity: 0, y: -6 }} transition={{ duration: 0.25, ease: EASE_OUT }}>
-                <span className="eyebrow">Drawn on</span>
-                <p className="mt-1 text-[18px] font-bold tracking-[-0.01em]">{t.tag}</p>
-                {t.meta && <p className="mt-3 text-[14px] leading-relaxed text-[var(--ink-2)]">{t.meta}</p>}
+                <span className="eyebrow hidden md:inline">Drawn on</span>
+                <p className="mt-1 hidden text-[18px] font-bold tracking-[-0.01em] md:block">{t.tag}</p>
+                {t.meta && <p className="text-[14px] leading-relaxed text-[var(--ink-2)] md:mt-3">{t.meta}</p>}
                 {t.prompt && (
                   <>
                     <span className="eyebrow mt-5 block">The instruction</span>
