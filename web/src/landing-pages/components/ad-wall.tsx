@@ -4,10 +4,16 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { ArrowRight } from "lucide-react";
-import { motion, useInView, useMotionValue, useReducedMotion, useSpring, useTransform } from "motion/react";
+import { motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { SectionTitle } from "./section-title";
+import { ShowcaseWall } from "./showcase-wall";
+import { EditorialWall, FilmstripWall, PostersWall, PromptsWall } from "./walls";
+import { ReelsWall } from "./clips";
 import { Button } from "@/components/ui/button";
+import { SPRINGS, reveal } from "@/lib/motion";
+import { useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
+import { clipSrc } from "../media";
 
 // The wall right under the hero, in the shape of InVideo's model wall
 // (2026-10-01, Mike's reference): one line of heavy condensed uppercase, a
@@ -19,11 +25,9 @@ import type { MakePage, MakeTile } from "../pages";
 // than snap), the still inside pushes in, and the label slides up. Every
 // bit of it is off under reduced motion.
 
-// The gradient plates: warm, like the reference's two colour slots.
-const PLATES = [
-  "linear-gradient(135deg, #f6d7a6 0%, #e9a67f 55%, #d78a8a 100%)",
-  "linear-gradient(135deg, #cfe3f2 0%, #e8c9a8 50%, #b9d9a3 100%)",
-];
+// The gradient plates are the page's accent (theme.ts): `--plate-1` and
+// `--plate-2` on the skin wrapper, the reference's two colour slots.
+const PLATES = ["var(--plate-1)", "var(--plate-2)"];
 
 // Below lg every wrapper is `contents`, so the eight tiles fall into one
 // two-column grid; at lg the wrappers become the reference's four columns
@@ -31,13 +35,31 @@ const PLATES = [
 const COL = "contents lg:flex lg:flex-col lg:gap-4";
 
 export function AdWall({ page }: { page: MakePage }) {
-  const still = !!useReducedMotion();
-  // ONE observer on the wall drives every tile's entrance (a per-tile
-  // whileInView left three tiles stuck invisible in a short viewport,
-  // 2026-10-01): once a fifth of the wall is on screen the eight rise in
-  // with a stagger, and a tile never waits on its own intersection.
-  const wall = useRef<HTMLDivElement>(null);
-  const show = useInView(wall, { once: true, amount: 0.15 });
+  switch (page.wall.layout) {
+    case "showcase":
+      return <ShowcaseWall page={page} />;
+    case "filmstrip":
+      return <FilmstripWall page={page} />;
+    case "prompts":
+      return <PromptsWall page={page} />;
+    case "editorial":
+      return <EditorialWall page={page} />;
+    case "posters":
+      return <PostersWall page={page} />;
+    case "reels":
+      return <ReelsWall page={page} />;
+    default:
+      return <BentoWall page={page} />;
+  }
+}
+
+function BentoWall({ page }: { page: MakePage }) {
+  const still = useStill();
+  // ONE observer on the wall drives every tile's entrance (lib/motion's
+  // rule, learned here 2026-10-01): once a fifth of the wall is on screen
+  // the eight rise in with a stagger, and a tile never waits on its own
+  // intersection.
+  const { ref: wall, show } = useRevealGroup<HTMLDivElement>(0.15);
   const t = page.wall.tiles;
   const tile = (i: number, h: number, extra = "") =>
     t[i] ? (
@@ -103,9 +125,8 @@ export function Tile({
   const [hover, setHover] = useState(false);
   const px = useMotionValue(0);
   const py = useMotionValue(0);
-  const spring = { stiffness: 220, damping: 20, mass: 0.6 };
-  const rotateY = useSpring(useTransform(px, [-0.5, 0.5], [-TILT, TILT]), spring);
-  const rotateX = useSpring(useTransform(py, [-0.5, 0.5], [TILT, -TILT]), spring);
+  const rotateY = useSpring(useTransform(px, [-0.5, 0.5], [-TILT, TILT]), SPRINGS.settle);
+  const rotateX = useSpring(useTransform(py, [-0.5, 0.5], [TILT, -TILT]), SPRINGS.settle);
 
   // a looping tile plays only while on screen (the landing page's rule)
   useEffect(() => {
@@ -142,9 +163,7 @@ export function Tile({
   return (
     <motion.div
       ref={ref}
-      initial={still ? false : { opacity: 0, y: 28, scale: 0.97 }}
-      animate={still || show ? { opacity: 1, y: 0, scale: 1 } : undefined}
-      transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1], delay: 0.08 + index * 0.06 }}
+      {...reveal(index, { still, show, y: 28, scale: 0.97, duration: 0.6, base: 0.08 })}
       whileHover={still ? undefined : { scale: 1.03, zIndex: 2 }}
       onPointerMove={onMove}
       onPointerEnter={() => setHover(true)}
@@ -167,7 +186,7 @@ export function Tile({
         tile.video ? (
           <video
             className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
-            src={tile.video}
+            src={clipSrc(tile.video)}
             poster={tile.src}
             muted
             loop
@@ -187,7 +206,7 @@ export function Tile({
           />
         )
       ) : (
-        <div aria-hidden className="absolute inset-0" style={{ background: plate }} />
+        <div aria-hidden className="absolute inset-0" style={{ background: tile.plate ?? plate }} />
       )}
 
       {labelled && (

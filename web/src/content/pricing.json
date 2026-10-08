@@ -66,6 +66,28 @@
     },
     {
       "provider": "fal",
+      "model": "ltx2.5-fast",
+      "name": "LTX 2.5 Fast",
+      "blurb": "LTX's newest, with sound, up to 20 seconds, 720p to 4K.",
+      "tier": "standard",
+      "max_seconds": null,
+      "seconds": 6,
+      "credits": 130,
+      "frame": "720p"
+    },
+    {
+      "provider": "fal",
+      "model": "ltx2.5",
+      "name": "LTX 2.5 Pro",
+      "blurb": "LTX 2.5 at full quality, with sound, 720p or 1080p.",
+      "tier": "standard",
+      "max_seconds": null,
+      "seconds": 6,
+      "credits": 173,
+      "frame": "720p"
+    },
+    {
+      "provider": "fal",
       "model": "wan3",
       "name": "Wan 3.0",
       "blurb": "Open-weight realism up to 1080p.",
@@ -106,6 +128,17 @@
       "max_seconds": null,
       "seconds": 5,
       "credits": 365,
+      "frame": "720p"
+    },
+    {
+      "provider": "fal",
+      "model": "seedance2.5",
+      "name": "Seedance 2.5",
+      "blurb": "ByteDance's newest, with sound, up to 30 seconds; 1080p is premium.",
+      "tier": "creator",
+      "max_seconds": null,
+      "seconds": 5,
+      "credits": 568,
       "frame": "720p"
     },
     {
