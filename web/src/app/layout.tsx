@@ -2,14 +2,28 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, JetBrains_Mono, Lora, Oswald } from "next/font/google";
 import "./globals.css";
 
+// PRELOAD ONLY WHAT THE FIRST SCREEN NEEDS (2026-10-08, Lighthouse). All six
+// faces used to be preloaded at high priority on every page, ~190 KiB of
+// font ahead of the first paint, and on a phone that held the public pages'
+// LCP at 4.5-5 s. Inter (body copy, the landing skin's sans), Lora (every
+// public headline) and Oswald (the condensed section titles) keep their
+// preload. Oswald has to: un-preloaded, its swap re-wrapped the Ad
+// Generator's wall title in the first screen and shifted the wall (CLS
+// 0.025, "web font loaded"). The other three are `preload: false`: still
+// declared, so a page that uses one downloads it on first use, but no page
+// pays for a face it does not draw -- JetBrains Mono and Geist are the
+// studio's, Geist Mono is the one-line eyebrow labels.
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  preload: false,
 });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  preload: false,
 });
 
 // Tall, condensed, heavy display face for headlines -- carries the
@@ -44,6 +58,7 @@ const jetbrains = JetBrains_Mono({
   variable: "--font-jetbrains",
   subsets: ["latin"],
   weight: ["400", "500"],
+  preload: false,
 });
 
 // The public origin, for absolute OG/canonical URLs. Vercel's own
