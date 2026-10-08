@@ -1229,7 +1229,7 @@ is yours, in Resolve, by hand.
   postable channels' hold rows. Billed work runs through `app/jobs.py` — an in-process,
   deliberately non-persistent job registry whose one push channel is the
   `/api/jobs/stream` SSE feed. That feed is why uvicorn runs with
-  `--timeout-graceful-shutdown 3` (`.claude/launch.json`): without it, `--reload` waits
+  `--timeout-graceful-shutdown 3` (`ops/serve.sh`, and `ops/fly/supervisord.conf` in production): without it, `--reload` waits
   forever on the open SSE socket and the dev server wedges on every code change. `/ui` is
   the product surface; `/studio` beside it is stats + system improvement only (2026-08-26).
   The Pipeline view's scene board closes the render loop two ways: copy a shot's stored
@@ -1952,6 +1952,35 @@ is yours, in Resolve, by hand.
   `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
   `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
   still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
+- **The job feed and the activity tray (2026-10-08, gap list items 4, 5 and 7).** The React studio
+  opens ONE `EventSource` per tab on `/api/jobs/stream` (`web/src/lib/jobs.ts`, started by the shell
+  once an account is known) and nothing polls jobs any more: the Queue's list, the Elements sheet,
+  the Director's node and Run all loops, the cut export and agent waits, the composer and the Guide
+  all go through `studio-api.followJob` / `waitForJob` / `composer.pollJob`, which ride the stream
+  through `setJobFeed` while it is live and poll exactly as before when it is not. The stream opens
+  with `retry: 3000` and `event: hello {boot}` -- job ids restart at 1 with the in-memory registry,
+  and a tab that sees another boot drops what it held -- then replays the live jobs and the newest
+  `jobs.REPLAY_FINISHED` (50) finished ones, then `event: job` per change and `event: gone` when a job
+  is cleared (`jobs.remove` / the new `DELETE /api/jobs` bulk clear never used to say so). Its
+  `Cache-Control` carries `no-transform`: **Next's proxy gzips any `text/*` response that does not,
+  and a gzipped stream sits in the compressor**. The store trusts the stream only after the hello; no
+  hello in 6s or three errors in a row and it POLLS the list (3s busy / 15s idle, never in a hidden
+  tab) and retries the stream a minute later, telling every wait riding the stream it was lost.
+  Verified locally: a SIGKILLed API drops the tab to polling, a restart (new boot) brings it back live.
+  A graceful stop is different: uvicorn without `--timeout-graceful-shutdown` holds the stream open
+  forever, which is why that flag is set wherever the server runs. **What a job spent is exact and on
+  the job**: `src/charge.metering` is a contextvar listener that every `Charge` reports its hold,
+  settle and release to; `app/jobs.start`'s runner binds one and keeps `credits` (debited),
+  `credits_held` (held right now, a multi-shot render's running cost) and `charged` on the job.
+  An uncharged render that RAN (the exempt operator account) reports what it would have cost with
+  `charged: false`, which the tray prints as "87 cr · not charged" like the Queue. The tray
+  (`components/studio/activity-tray.tsx`, a bell beside search) lists running and finished jobs with
+  their words, progress, credits, age, Open (`lib/job-feed.resultOf`: a concept id -> the scene, a
+  cut export's uuid -> the editor, a sheet -> Elements, a Director render -> Assets) and Cancel; its
+  dot counts jobs this tab SAW end since it was last opened, and an opt-in browser notification
+  (permission asked only on the click that turns it on) fires for a job that ran 20s+ and ended done
+  or failed while the tab was hidden. Any job ending re-reads the balance and the Queue badge (a Queue
+  render finishing used to tell neither). Below 640px the header drops Library too, for the bell.
 - **The ⌘K palette and global search (2026-10-08, gap list items 1 and 2).** ⌘K / Ctrl+K from
   any studio page, the rail's "Search ⌘K" and the header's search button (the phone's only door:
   the header's Timeline tab gives way below 640px) open `components/studio/command-palette.tsx`,

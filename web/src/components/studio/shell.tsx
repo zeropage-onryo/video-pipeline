@@ -54,6 +54,8 @@ import {
 import { CreditPill } from "@/components/studio/credit-pill";
 import { ConnectClaude } from "@/components/studio/connect-claude";
 import { CommandPalette } from "@/components/studio/command-palette";
+import { ActivityTray } from "@/components/studio/activity-tray";
+import { onJobEnded, startJobFeed } from "@/lib/jobs";
 import { modKey, openPalette } from "@/lib/palette";
 import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
@@ -305,6 +307,25 @@ export function StudioShell({ children }: { children: ReactNode }) {
     // /api/me is re-read on a switch and hands back a new object for the
     // same account
   }, [accountId, refreshBalance]);
+
+  // THE ONE JOB CONNECTION (lib/jobs.ts): opened once an account is known,
+  // re-opened on an account switch (the stream is scoped to the account),
+  // closed on the way out. Every job wait in the studio rides on it.
+  useEffect(() => {
+    if (accountId === null) return;
+    return startJobFeed();
+  }, [accountId]);
+  // a job that ends -- in this tab or another, on any page -- may have
+  // settled a hold and changed what waits in the Queue: the balance and the
+  // badge re-read then (a Queue render finishing used to tell neither)
+  useEffect(
+    () =>
+      onJobEnded(() => {
+        refreshBalance();
+        refreshBadge();
+      }),
+    [refreshBalance, refreshBadge],
+  );
 
   // the palette's modifier as this machine presses it (⌘ on a Mac, Ctrl
   // elsewhere); "⌘" on the server, so the first paint matches the old hint
@@ -559,7 +580,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                   key={t.href}
                   href={t.href}
                   aria-current={view === t.view ? "page" : undefined}
-                  className={t.view === "cut" ? "htab-cut" : undefined}
+                  className={t.view === "cut" ? "htab-cut" : t.view === "assets" ? "htab-lib" : undefined}
                 >
                   {t.label}
                 </Link>
@@ -580,6 +601,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                   <Search size={15} strokeWidth={1.7} />
                 </button>
               ) : null}
+              {!signedOut && me?.account ? <ActivityTray toast={toast} /> : null}
               <CreditPill balance={balance} onError={(text) => toast(text, "err")} />
               {!signedOut && me?.account ? (
                 <button

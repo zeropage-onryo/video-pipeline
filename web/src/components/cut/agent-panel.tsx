@@ -46,18 +46,15 @@ import {
   type AgentReply,
   type Suggested,
 } from "@/lib/cut/api";
-import { getJob, type Job } from "@/lib/studio-api";
+import { waitForJob, type Job } from "@/lib/studio-api";
 import { timecode } from "@/lib/cut/timeline";
 import { COMMANDS, runCommand, type Command } from "@/components/cut/commands";
 
 const st = () => useCut.getState();
 
+/* on the studio's job stream (lib/jobs.ts); polled only when it is down */
 async function waitJob(id: number): Promise<Job & Partial<AgentReply>> {
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 1200));
-    const j = (await getJob(id)) as Job & Partial<AgentReply>;
-    if (["done", "failed", "cancelled"].includes(j.status)) return j;
-  }
+  return (await waitForJob(id, undefined, 1200)) as Job & Partial<AgentReply>;
 }
 
 const signed = (frames: number, fps: number) => {

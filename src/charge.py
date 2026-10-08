@@ -64,12 +64,48 @@ match a hold to the row it paid for.
 
 from __future__ import annotations
 
+import contextvars
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from . import ledger
+
+# WHO IS TOLD WHAT A RENDER COST (2026-10-08, the studio's activity tray).
+# A job never learned what it spent: the hold's ref is the output file's
+# name, which the job never sees, and no route lists ledger entries. So the
+# job runner (app/jobs.py) binds a listener here, in its worker thread, and
+# every Charge made inside that job reports to it as it moves:
+#
+#   ("hold",    held, held,  True)   the credits taken before the submit
+#   ("settle",  debited, held, True) what the hold closed at
+#   ("release", 0, held, True)       the hold given back
+#   ("spent",   would, 0, False)     an UNCHARGED render that ran (the
+#                                    operator's exempt account): what it
+#                                    would have cost, as the Queue shows it
+#
+# A contextvar, like spend.bind's, so a thread started with a copied context
+# (scene_chain's parallel keyframes) still reports to its job. A listener
+# that raises is ignored: this is bookkeeping beside the money, never on it.
+Meter = Callable[[str, int, int, bool], None]
+_meter: contextvars.ContextVar[Optional[Meter]] = contextvars.ContextVar("charge_meter", default=None)
+
+
+def metering(listener: Optional[Meter]) -> contextvars.Token:
+    """Report every Charge in this context to `listener`; returns the
+    token to reset with."""
+    return _meter.set(listener)
+
+
+def _tell(event: str, credits: int, held: int, charged: bool) -> None:
+    listener = _meter.get()
+    if listener is None:
+        return
+    try:
+        listener(event, int(credits or 0), int(held or 0), charged)
+    except Exception:  # noqa: BLE001 -- never let the tray touch the money path
+        pass
 
 
 class Charge:
@@ -134,6 +170,7 @@ class Charge:
         if self.hold_id is not None:
             self.held = (credits if credits is not None
                          else ledger.charge_credits(self.estimate_usd))
+            _tell("hold", self.held, self.held, True)
         return self.hold_id
 
     def _quoted(self) -> Optional[int]:
@@ -161,7 +198,17 @@ class Charge:
         """Close the hold at the actual cost (the estimate when None),
         never above what was held. Returns credits debited, 0 when
         nothing was held. Idempotent through the ledger's own guard."""
-        if self.hold_id is None or self._done:
+        if self._done:
+            return 0
+        if self.hold_id is None:
+            # nothing held -- the operator's exempt account, the unowned
+            # pool. A render that RAN still says what it would have cost,
+            # marked not charged, so the tray agrees with the Queue's
+            # "87 cr · not charged"; one that never reached the provider
+            # says nothing.
+            if self.attempted:
+                self._done = True
+                _tell("spent", self._would_cost(), 0, False)
             return 0
         self._done = True
         if actual_usd is None and self.quote is not None:
@@ -169,15 +216,29 @@ class Charge:
         else:
             usd = self.estimate_usd if actual_usd is None else actual_usd
             credits = ledger.charge_credits(usd)
-        return ledger.settle(self.hold_id, credits=credits,
-                             generation_id=generation_id, cap=self.held, dsn=self.dsn)
+        debited = ledger.settle(self.hold_id, credits=credits,
+                                generation_id=generation_id, cap=self.held, dsn=self.dsn)
+        _tell("settle", debited, self.held, True)
+        return debited
+
+    def _would_cost(self) -> int:
+        """What this render would have held: the Quote's credits, else the
+        estimate's. 0 when neither can be priced."""
+        try:
+            if self.quote is not None:
+                return int(self.quote.credits)
+            return int(ledger.charge_credits(self.estimate_usd))
+        except Exception:  # noqa: BLE001 -- an unpriceable render costs nothing to say
+            return 0
 
     def release(self, reason: str) -> int:
         """Give the whole hold back. Returns credits restored."""
         if self.hold_id is None or self._done:
             return 0
         self._done = True
-        return ledger.release(self.hold_id, reason, dsn=self.dsn)
+        restored = ledger.release(self.hold_id, reason, dsn=self.dsn)
+        _tell("release", 0, self.held, True)
+        return restored
 
     # -- bookkeeping ----------------------------------------------------------
 

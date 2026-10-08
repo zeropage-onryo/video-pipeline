@@ -63,7 +63,8 @@
    Base UI mounts on <body> outside it (the font variables come from the
    root layout, so they resolve there too) */
 .zps,
-.zpk {
+.zpk,
+.ztray {
   --r1: 14px;
   --r2: 20px;
   --r3: 28px;
@@ -572,6 +573,56 @@
   border-color: rgb(255 255 255 / 0.3);
   color: var(--text);
 }
+/* the activity tray's bell (activity-tray.tsx): the search button's chrome,
+   with a count while something runs and a red dot for what ended unseen */
+.htray {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 9px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.02);
+  color: var(--dim);
+  transition:
+    border-color var(--t),
+    color var(--t);
+}
+.htray:hover,
+.htray[data-popup-open] {
+  border-color: rgb(255 255 255 / 0.3);
+  color: var(--text);
+}
+.htray.busy {
+  color: var(--text);
+}
+.htray-count,
+.htray-dot {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: var(--rp);
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1;
+}
+.htray-count {
+  background: var(--raise);
+  border: 1px solid var(--signal);
+  color: var(--text);
+}
+.htray-dot {
+  background: var(--signal);
+  color: #fff;
+}
 .hnew {
   height: 36px;
   padding: 0 14px;
@@ -645,11 +696,21 @@
   .hnew {
     display: none;
   }
-  /* the search button (2026-10-08) is the phone's only door to the ⌘K
-     palette, and it needs the room Timeline had: the editor has no phone
-     layout, and the bottom bar still carries Edit */
-  .htabs .htab-cut {
+  /* the search button and the activity bell (2026-10-08) are the phone's
+     only doors to the ⌘K palette and the tray, and they need the room
+     Timeline and Library had: the bottom bar still carries Edit and Assets,
+     and the editor has no phone layout */
+  .htabs .htab-cut,
+  .htabs .htab-lib {
     display: none;
+  }
+  .hsearch,
+  .htray {
+    width: 32px;
+    height: 32px;
+  }
+  .zps .hright {
+    gap: 6px;
   }
 }
 .brand {
@@ -3760,5 +3821,212 @@ select.zin {
   .zpk-foot span:not(.zpk-note),
   .zpk-verb {
     display: none !important;
+  }
+}
+
+/* ── THE ACTIVITY TRAY (2026-10-08, activity-tray.tsx) ── a Base UI
+   popover, so on <body>: :root palette tokens and .zpk's font tokens
+   (the selector list at the top of this file carries .ztray too). */
+.ztray {
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - 90px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.6);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 13px;
+  line-height: 1.45;
+  outline: none;
+  overflow: hidden;
+  transition:
+    opacity 140ms,
+    transform 160ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.ztray[data-starting-style],
+.ztray[data-ending-style] {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+.ztray *,
+.ztray *::before,
+.ztray *::after {
+  box-sizing: border-box;
+}
+.ztray-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--edge-lo);
+}
+.ztray-head strong {
+  display: block;
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ztray-line {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ztray-clear,
+.ztray-acts a,
+.ztray-acts button {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: var(--rp);
+  border: 1px solid var(--edge);
+  background: none;
+  color: var(--bone);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--t),
+    color var(--t);
+}
+.ztray-clear:hover,
+.ztray-acts a:hover,
+.ztray-acts button:hover {
+  border-color: var(--edge-hi);
+  color: var(--text);
+}
+.ztray-mode {
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--edge-lo);
+  font-size: 12px;
+  color: var(--warn);
+}
+.ztray-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  overscroll-behavior: contain;
+}
+.ztray-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+.ztray-row + .ztray-row {
+  border-top: 1px solid var(--edge-lo);
+  border-radius: 0;
+}
+.ztray-state {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--edge);
+  color: var(--dim);
+}
+.ztray-row.s-running .ztray-state,
+.ztray-row.s-queued .ztray-state {
+  color: var(--text);
+  border-color: var(--signal);
+}
+.ztray-row.s-done .ztray-state {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.ztray-row.s-failed .ztray-state {
+  color: var(--signal-hi);
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
+}
+.ztray-spin {
+  animation: zpk-spin 0.9s linear infinite;
+}
+.ztray-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ztray-label {
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ztray-words {
+  font-size: 12px;
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ztray-row.s-failed .ztray-words {
+  color: var(--signal-hi);
+}
+.ztray-bar {
+  display: block;
+  height: 3px;
+  margin: 4px 0 2px;
+  border-radius: var(--rp);
+  background: var(--edge-lo);
+  overflow: hidden;
+}
+.ztray-bar i {
+  display: block;
+  height: 100%;
+  background: var(--signal);
+  transition: width 400ms;
+}
+.ztray-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--dimmer);
+}
+.ztray-acts {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.ztray-empty {
+  margin: 18px 14px;
+  color: var(--dim);
+  font-size: 13px;
+}
+.ztray-notify {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border-top: 1px solid var(--edge-lo);
+  font-size: 12px;
+  color: var(--dim);
+  cursor: pointer;
+}
+.ztray-notify input {
+  accent-color: var(--signal);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ztray {
+    transition: none;
+  }
+  .ztray-spin {
+    animation: none;
   }
 }

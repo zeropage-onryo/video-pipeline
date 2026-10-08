@@ -47,7 +47,8 @@ import {
   drawKeyframes,
   fileLaneClip,
   getCapabilities,
-  listJobs,
+  clearFinishedJobs,
+  getJob,
   pickConcept,
   queueApprove,
   queueQuote,
@@ -70,6 +71,7 @@ import { cardFonts } from "@/components/studio/card-fonts";
 import { CARD, Hero, RefImg, RefThumbs, TAG, TAG_DARK, TitleBlock, brandName, partsOf, refItems, shotsLabel, stillsOf, windowLabel } from "@/components/studio/concept-card";
 import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
+import { forgetJobs, refreshJobs, rememberJob, useJobs } from "@/lib/jobs";
 import {
   approveText,
   chipText,
@@ -112,8 +114,9 @@ export default function QueuePage() {
   const [renderer, setRenderer] = useState<RendererState | null>(null);
   const [renderers, setRenderers] = useState<Record<string, RendererSpec>>({});
   const [error, setError] = useState<string | null>(null);
-  const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [jobsError, setJobsError] = useState<string | null>(null);
+  // the account's jobs, off the studio's one stream (lib/jobs.ts): this
+  // page used to poll the list every 2.5s while anything ran
+  const jobs = useJobs() as JobRow[];
   const [busy, setBusy] = useState<Record<number, string>>({});
   const [paint, repaint] = useState(0); // held/acted live outside state (they outlive the page)
   const [popId, setPopId] = useState<number | null>(null);
@@ -168,28 +171,16 @@ export default function QueuePage() {
         if (!stale()) setReady([]);
       });
   }, [brand]);
-  const loadJobs = useCallback(() => {
-    listJobs()
-      .then((r) => {
-        setJobs(r.items.sort((a, b) => b.id - a.id));
-        setJobsError(null);
-      })
-      .catch((e) => setJobsError(e instanceof Error ? e.message : "Jobs unavailable"));
-  }, []);
+  const loadJobs = refreshJobs;
   useEffect(() => {
-    loadJobs();
     getCapabilities()
       .then((c) => setLaneOn(c.manual_lane === true))
       .catch(() => setLaneOn(false));
-  }, [loadJobs]);
-  // the registry moves while anything runs: poll it, and re-read the
-  // rows when a render finishes (a finished clip leaves the pending list)
+  }, []);
+  // the registry moves while anything runs (the stream says so as it does);
+  // the rows are re-read when it goes quiet -- a finished clip leaves the
+  // pending list
   const active = jobs.some((j) => ["queued", "running"].includes(j.status));
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(loadJobs, 2500);
-    return () => clearInterval(timer);
-  }, [active, loadJobs]);
   // the rows: on mount, whenever the brand resolves or changes, whenever
   // the lane opens, and whenever the registry goes quiet (a finished clip
   // leaves the pending list). A response from before any of those
@@ -390,12 +381,12 @@ export default function QueuePage() {
         acted.set(c.id, { status: "SHOT BY HAND", at: Date.now() });
       }
       held.delete(c.id);
-      // the registry BEFORE the card is released: the RENDERING tag is read
-      // against it, and a priced button that came back live for the beat in
-      // between is a button that can be pressed twice
-      await listJobs()
-        .then((r) => setJobs(r.items.sort((a, b) => b.id - a.id)))
-        .catch(() => loadJobs());
+      // the render's job BEFORE the card is released: the RENDERING tag is
+      // read against the registry, and a priced button that came back live
+      // for the beat before the stream said so is a button that can be
+      // pressed twice
+      const startedJob = acted.get(c.id)?.job;
+      if (what === "approve" && startedJob) await getJob(startedJob).then(rememberJob).catch(() => {});
       if (laneOn) loadLane();
       announceQueueChange();
       if (what === "approve") loadPending();
@@ -534,10 +525,10 @@ export default function QueuePage() {
     !!plan && plan.credits !== null && charged && plan.credits > balance!.available;
   const blockedCount = (pending || []).filter(lockedFor).length;
   const clearFinished = async () => {
-    // one at a time: the registry has no bulk route, and a row that is
-    // already gone (a restart cleared it) must not stop the rest
-    await Promise.all(finished.map((j) => clearJob(j.id).catch(() => {})));
-    loadJobs();
+    // one request for every finished job (DELETE /api/jobs); the stream
+    // tells every open tab, and a polling one is told here
+    await clearFinishedJobs().catch(() => {});
+    forgetJobs(finished.map((j) => j.id));
   };
 
   return (
@@ -1146,7 +1137,6 @@ export default function QueuePage() {
           </button>
         ) : null}
       </div>
-      {jobsError ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{jobsError}</div> : null}
       <div className="qlist">
         {!jobs.length ? (
           <p className="stateline" style={{ padding: 0 }}>
