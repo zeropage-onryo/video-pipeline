@@ -19,19 +19,27 @@ Gates before a commit: `npx tsc --noEmit`, `npx eslint src`, a look at 375 / 768
 
 ## The pages
 
-| # | Page | Route | Entry | Accent | Signature | Status |
+| # | Page | Route | Entry | Accent | Hero / signature / wall | Status |
 |---|---|---|---|---|---|---|
-| 1 | AI Ad Generator | `/make/ai-product-ad-generator` | `ai-product-ad-generator.ts` | RED | none | [ ] |
-| 2 | LTX 2.3 | `/models/ltx-video-generator` | `ltx-video-generator.ts` | EMERALD | **none yet** | [ ] |
-| 3 | Wan 3.0 | `/models/wan-video-generator` | `wan-video-generator.ts` | AMBER | **none yet** | [ ] |
-| 4 | Kling 3 Turbo Pro | `/models/kling-video-generator` | `kling-video-generator.ts` | ROSE | **none yet** | [ ] |
-| 5 | Seedance 2.0 / Fast | `/models/seedance-video-generator` | `seedance-video-generator.ts` | INDIGO | shot-timeline | [ ] |
-| 6 | Veo 3.1 | `/models/veo-video-generator` | `veo-video-generator.ts` | BLUE | **none yet** | [ ] |
-| 7 | Nano Banana Pro | `/models/nano-banana-image-generator` | `nano-banana-image-generator.ts` | AMBER | reference-stack | [ ] |
-| 8 | FLUX.2 Pro | `/models/flux-image-generator` | `flux-image-generator.ts` | EMERALD | frame-picker | [ ] |
-| 9 | Seedream 4.0 | `/models/seedream-image-generator` | `seedream-image-generator.ts` | ROSE | edit-loop | [ ] |
-| 10 | GPT Image 2 | `/models/gpt-image-generator` | `gpt-image-generator.ts` | BLUE | type-frame | [ ] |
-| 11 | Ideogram 3 | `/models/ideogram-image-generator` | `ideogram-image-generator.ts` | VIOLET | poster-type | [ ] |
+| 1 | AI Ad Generator | `/make/ai-product-ad-generator` | `ai-product-ad-generator.ts` | RED | center / none / bento | done (before 2026-10-08) |
+| 2 | LTX 2.5 | `/models/ltx-video-generator` | `ltx-video-generator.ts` | CYAN | reel / tier-pair / none | [x] 2026-10-08, 4 clips on Runway |
+| 3 | Wan 3.0 | `/models/wan-video-generator` | `wan-video-generator.ts` | ORANGE | split / length-dial / none | [x] 2026-10-08, 4 clips on Higgsfield |
+| 4 | Kling 3 Turbo Pro | `/models/kling-video-generator` | `kling-video-generator.ts` | FUCHSIA | phone / none / reels | [x] 2026-10-08, 4 clips on Higgsfield |
+| 5 | Seedance 2.5 | `/models/seedance-video-generator` | `seedance-video-generator.ts` | INDIGO | center / shot-timeline / showcase | done (docs/tasks/task-seedance-page.md) |
+| 6 | Veo 3.1 | `/models/veo-video-generator` | `veo-video-generator.ts` | BLUE | theater / sound-board / none | [x] 2026-10-08, 4 clips on Higgsfield |
+| 7 | Nano Banana Pro | `/models/nano-banana-image-generator` | `nano-banana-image-generator.ts` | AMBER | split / reference-stack / filmstrip | [x] 2026-10-08, 14 stills |
+| 8 | FLUX.2 Pro | `/models/flux-image-generator` | `flux-image-generator.ts` | EMERALD | cover / frame-picker / prompts | [x] 2026-10-08, 12 stills |
+| 9 | Seedream 4.5 | `/models/seedream-image-generator` | `seedream-image-generator.ts` | ROSE | stack / edit-loop / editorial | [x] 2026-10-08, 15 stills |
+| 10 | GPT Image 2 | `/models/gpt-image-generator` | `gpt-image-generator.ts` | BLUE | center / type-frame / bento | [ ] skipped 2026-10-08 (Mike); shares BLUE with Veo |
+| 11 | Ideogram 4.5 | `/models/ideogram-image-generator` | `ideogram-image-generator.ts` | VIOLET | fan / poster-type / posters | [x] 2026-10-08, 15 designs |
+
+2026-10-08: every model page's media is that model's own output (images on
+Higgsfield, LTX 2.5 on Runway, Kling / Wan / Veo on Higgsfield), with the
+provenance in each entry's header; Seedream and Ideogram moved to 4.5 in
+`src/fal.py`, LTX 2.5 joined the catalog. Spend: 96 Higgsfield credits for
+stills, about 254 for clips; 270 Runway credits. Open: the MP4s are
+gitignored (`*.mp4`), so the clips do not ship until they are committed past
+the rule or moved to R2; GPT Image 2 is untouched.
 
 ## Known per page, going in
 
