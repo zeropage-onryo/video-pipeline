@@ -487,7 +487,7 @@ export function AssistantPill() {
       const job = await waitForJob(started.job_id, (j) => setDetail(j.detail || "Drawing the still…"));
       announceBalanceChange();
       if (job.status !== "done") throw new Error(job.error || "The still did not finish.");
-      const conceptId = job.ref_id ?? null;
+      const conceptId = typeof job.ref_id === "number" ? job.ref_id : null;
       const concept = conceptId ? await getConceptDetail(conceptId).catch(() => null) : null;
       const shots = concept?.shots ?? [];
       const image = concept?.reference_image || shots[shots.length - 1]?.reference_image || null;
