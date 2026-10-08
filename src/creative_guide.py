@@ -316,6 +316,12 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
     if proposal is not None:
         message = (f"I can {proposal['label'].lower()}: "
                    f"{json.dumps(proposal['args'], default=str)}. Confirm on the card to do it.")
+        # A make is no confirm card (2026-10-08): the composer writes a scene
+        # at once and holds a still on Approve, under this line -- so the line
+        # is what will be made, in the brain's own words, never the JSON.
+        prompt = str(proposal["args"].get("prompt") or "").strip()
+        if guide_tools.is_make(proposal["tool"]) and prompt:
+            message = prompt if len(prompt) <= 1200 else prompt[:1200].rsplit(" ", 1)[0] + "…"
         return Reply(message=message, proposal=proposal, tool_runs=runs,
                      sheet=sheet).model_dump()
     reply = _parse_reply(text)

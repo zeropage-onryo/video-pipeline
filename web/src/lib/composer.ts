@@ -38,9 +38,12 @@ import { getJob, type Job, type TimelinePart } from "@/lib/studio-api";
 
 export type Output = "image" | "video";
 
-/* The Guide's make tools (src/guide_tools.MAKE_TOOLS): a proposal naming
-   one is run by the page the moment it arrives, never drawn as a confirm
-   card -- the send was the ask. */
+/* The Guide's make tools (src/guide_tools.MAKE_TOOLS). A make_video is run
+   by the page the moment it arrives -- writing a scene costs nothing, the
+   send was the ask. A make_image spends credits on a still, so it is drawn
+   as a STEP CARD (2026-10-08, Mike: "similar to Runway's in their chat"):
+   the prompt, the model and what it costs, and -- in Ask mode, below --
+   an Approve it waits on. */
 export const MAKE_TOOLS: Record<string, Output> = { make_image: "image", make_video: "video" };
 export const isMake = (tool?: string | null) => !!tool && tool in MAKE_TOOLS;
 
@@ -150,6 +153,31 @@ export function loadOutput(): Output {
 export function saveOutput(o: Output) {
   try {
     localStorage.setItem(OUTPUT_KEY, o);
+  } catch {
+    /* fine */
+  }
+}
+
+/* Before a still is drawn (2026-10-08, Runway Agent's setting of the same
+   name): "ask" holds the step card on its Approve, "auto" draws on the send
+   and the card is the step's record. Remembered per browser; Ask unless
+   the person turned it off -- a still spends credits. */
+export type GenerateMode = "ask" | "auto";
+export const GENERATE_MODES: { id: GenerateMode; label: string; note: string }[] = [
+  { id: "ask", label: "Ask before generating", note: "Review each still before it runs" },
+  { id: "auto", label: "Generate automatically", note: "Skip confirmation, go straight to results" },
+];
+const GENERATE_KEY = "zpf:composer:generate";
+export function loadGenerateMode(): GenerateMode {
+  try {
+    return localStorage.getItem(GENERATE_KEY) === "auto" ? "auto" : "ask";
+  } catch {
+    return "ask";
+  }
+}
+export function saveGenerateMode(mode: GenerateMode) {
+  try {
+    localStorage.setItem(GENERATE_KEY, mode);
   } catch {
     /* fine */
   }

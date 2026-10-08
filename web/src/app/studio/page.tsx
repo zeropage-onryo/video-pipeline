@@ -17,8 +17,12 @@
    reasoning/brain"). Every send is a Guide turn carrying the Image | Video
    switch: the brain talks when the person is bouncing ideas and MAKES when
    they ask for the thing -- a make_image / make_video proposal comes back
-   and this page runs it at once (lib/composer.ts MAKE_TOOLS), on the brain's
-   own prompt, through the same two routes a send used to post to directly.
+   (lib/composer.ts MAKE_TOOLS), on the brain's own prompt, through the same
+   two routes a send used to post to directly. A scene is written at once;
+   a still spends credits, so it is a STEP CARD (2026-10-08, after Runway
+   Agent's chat): the prompt, the model, what it costs -- and, with "Ask
+   first" on (the settings line's pill, Runway's "Ask before generating
+   media"), an Approve it waits on, with the model and its price below.
    The Fast / Reasoning pill is the brain's and shows in both outputs; the
    Image output also picks WHICH MODEL DRAWS (GET /api/image-models: Nano
    Banana on the Gemini key, or fal's image models). Without the guide
@@ -121,6 +125,10 @@ import {
   BASE_COMMANDS,
   IMAGE_ASPECTS,
   MAKE_TOOLS,
+  GENERATE_MODES,
+  loadGenerateMode,
+  saveGenerateMode,
+  type GenerateMode,
   isMake,
   loadImageModel,
   loadOutput,
@@ -226,7 +234,7 @@ const imageFiles = (list: FileList | File[] | null | undefined) =>
   Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
 
 function Composer() {
-  const { brand, toast } = useShell();
+  const { brand, toast, balance } = useShell();
   const params = useSearchParams();
   const attachId = params.get("attach");
   // An idea typed into the landing page's hero arrives as ?spark= and the
@@ -311,6 +319,17 @@ function Composer() {
   const setImageModel = (id: string) => {
     setImageModelState(id);
     saveImageModel(id);
+  };
+  // whether a still waits on its card's Approve; read after mount, like the output
+  const [generate, setGenerateState] = useState<GenerateMode>("ask");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
+    setGenerateState(loadGenerateMode());
+  }, []);
+  const setGenerate = (mode: string) => {
+    const m: GenerateMode = mode === "auto" ? "auto" : "ask";
+    setGenerateState(m);
+    saveGenerateMode(m);
   };
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
@@ -637,7 +656,10 @@ function Composer() {
   async function make(
     text: string,
     out: Output,
-    by: { role: "user" } | { role: "assistant"; message: string; reply: GuideReply },
+    by:
+      | { role: "user" }
+      // `at`: the Approve card's own turn, which the still fills in place
+      | { role: "assistant"; message: string; reply: GuideReply; at?: Turn },
     on: { aspect?: string; seconds?: number } = {},
   ) {
     const madeId = newMadeId();
@@ -656,17 +678,24 @@ function Composer() {
       prompt: text,
       ...(isImage && imageModel ? { model: imageModel } : {}),
     };
-    setThread((ts) => [
-      ...ts,
-      by.role === "user"
-        ? { role: "user", content: text, made }
-        : { role: "assistant", content: by.message, reply: by.reply, decided: "done", made },
-    ]);
+    const approved = by.role === "assistant" ? by.at : undefined;
+    setThread((ts) =>
+      approved && ts.includes(approved)
+        ? ts.map((x) => (x === approved ? { ...x, decided: "done" as const, made } : x))
+        : [
+            ...ts,
+            by.role === "user"
+              ? { role: "user", content: text, made }
+              : { role: "assistant", content: by.message, reply: by.reply, decided: "done", made },
+          ],
+    );
     const me = { madeId, stopped: false } as { madeId: string; jobId?: number; stopped: boolean };
     running.current = me;
     polling.current.add(madeId);
-    // the box and the brief are spent: what they held is in the prompt now
-    setDraft({ idea: "", brief: "" });
+    // the box and the brief are spent: what they held is in the prompt now.
+    // Not on an Approve: the send that asked was earlier, and the box may
+    // hold what the person is typing next.
+    if (!approved) setDraft({ idea: "", brief: "" });
 
     const form = new FormData();
     if (brand) form.append("brand", brand);
@@ -712,6 +741,40 @@ function Composer() {
           ? `${content}\n[made ${made.output} from the prompt: "${made.prompt ?? content}" — ${made.status}]`
           : content,
       }));
+
+  /* A still's step: the brain's answer turn carries the make_image
+     proposal, and the still is drawn on its prompt into that same turn --
+     on the card's Approve, or at once with Ask first off. A step whose
+     still failed or was stopped can be approved again. */
+  async function runStill(t: Turn) {
+    const proposal = t.reply?.proposal;
+    const again = t.made?.status === "failed" || t.made?.status === "stopped";
+    if (!t.reply || !proposal || MAKE_TOOLS[proposal.tool] !== "image" || (t.made && !again)) return;
+    const args = proposal.args as { prompt?: unknown; aspect?: unknown };
+    const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : t.content;
+    await make(prompt, "image", { role: "assistant", message: t.content, reply: t.reply, at: t }, {
+      aspect: typeof args.aspect === "string" ? args.aspect : undefined,
+    });
+  }
+  async function approveStill(i: number) {
+    const t = thread[i];
+    if (busy || !t) return;
+    setBusy(true);
+    try {
+      await runStill(t);
+    } catch (e) {
+      failRun(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  // what a step card says under its Approve: the model that draws the still
+  // (the one it was drawn on, or the picker's as it stands) and what one costs
+  const stillLine = (modelId?: string) => {
+    const m = imageModels.find((x) => x.id === (modelId || imageModel)) ?? imageModels[0];
+    if (!m) return "";
+    return `${m.label} · ${balance?.exempt ? "not charged" : `${m.credits.toLocaleString()} credits`}`;
+  };
 
   /* Make from the brief: the person's own click on the card the brain
      wrote, so it rides on their turn. */
@@ -787,7 +850,14 @@ function Composer() {
         setGuideWorking(null);
         setGuideWriting("");
         const proposal = reply.proposal;
-        if (proposal && isMake(proposal.tool)) {
+        if (proposal && MAKE_TOOLS[proposal.tool] === "image") {
+          // A STILL SPENDS: the answer is its step card -- held on Approve
+          // with Ask first on, drawn at once with it off
+          if (output !== "image") setOutput("image");
+          const step: Turn = { role: "assistant", content: reply.message, reply };
+          setThread((all) => [...all, step]);
+          if (generate === "auto") await runStill(step);
+        } else if (proposal && isMake(proposal.tool)) {
           // THE BRAIN MADE: its line is the turn, the tiles go under it.
           // The tool says which output -- the switch follows it, so a
           // "make that a video" lands where the person will look next.
@@ -1123,6 +1193,8 @@ function Composer() {
                 },
                 onDecide: decide,
                 onPick: sendMadeToQueue,
+                onApprove: (i) => void approveStill(i),
+                stillLine,
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
               }}
@@ -1400,6 +1472,21 @@ function Composer() {
                       onChange={setBrain}
                       options={brains}
                       label={brainLabel}
+                      chevron
+                    />
+                  </>
+                ) : null}
+                {guideReady ? (
+                  <>
+                    <span className="zc-dot" aria-hidden>
+                      ·
+                    </span>
+                    <OptMenu
+                      heading="Before a still is drawn"
+                      value={generate}
+                      onChange={setGenerate}
+                      options={GENERATE_MODES}
+                      label={generate === "ask" ? "Ask first" : "Auto"}
                       chevron
                     />
                   </>
