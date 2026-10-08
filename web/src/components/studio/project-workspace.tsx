@@ -50,6 +50,8 @@ import { DrawerBody } from "@/components/studio/scene-drawer";
 import { DeleteProjectDialog } from "@/components/studio/project-delete";
 import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
+import { useVerdictKeys } from "@/lib/use-verdict-keys";
+import { moveCursor, nextAfter } from "@/lib/verdict-keys";
 
 type Pane = "scenes" | "canvas" | "brief";
 
@@ -87,7 +89,7 @@ export function ProjectWorkspace({ id }: { id: number }) {
   const [doomed, setDoomed] = useState<Project | null>(null);
   const [, bump] = useState(0);
   // the canvas's save-then-go, handed up by FlowWorkspace (CanvasNav.registerLeave)
-  const leave = useRef<((destination: string) => Promise<void>) | null>(null);
+  const leave = useRef<((destination: string) => Promise<boolean>) | null>(null);
   const drawerClose = useRef<HTMLButtonElement>(null);
   const seq = useRef(0);
 
@@ -138,25 +140,30 @@ export function ProjectWorkspace({ id }: { id: number }) {
   const selected = askedHere ? asked : live.find((c) => !c.media_url)?.id || live[0]?.id || null;
 
   const go = useCallback((href: string) => router.push(href, { scroll: false }), [router]);
-  const registerLeave = useCallback((fn: ((destination: string) => Promise<void>) | null) => {
+  const registerLeave = useCallback((fn: ((destination: string) => Promise<boolean>) | null) => {
     leave.current = fn;
   }, []);
-  const select = (sceneId: number) => {
-    setPane("canvas");
-    if (sceneId === selected) return;
+  /** Open a scene on the canvas. On a phone that also flips to the canvas
+   *  pane -- except from the keys, which keep the list in view. Resolves
+   *  false when the canvas could not save and stayed where it was. */
+  const select = async (sceneId: number, stay = false): Promise<boolean> => {
+    if (!stay) setPane("canvas");
+    if (sceneId === selected) return true;
     const href = workspaceHref(id, sceneId);
-    if (leave.current) void leave.current(href);
-    else go(href);
+    if (leave.current) return leave.current(href);
+    go(href);
+    return true;
   };
 
   /** `undo`, when given, puts an Undo on the toast that runs through this
-   *  same path -- the server's inverse route, then the list re-read */
+   *  same path -- the server's inverse route, then the list re-read.
+   *  Resolves true when it went through. */
   const act = async (
     c: Concept,
     fn: () => Promise<unknown>,
     done?: string,
     undo?: { run: () => Promise<unknown>; done: string },
-  ) => {
+  ): Promise<boolean> => {
     setBusy((b) => ({ ...b, [c.id]: true }));
     try {
       await fn();
@@ -165,12 +172,77 @@ export function ProjectWorkspace({ id }: { id: number }) {
       loadScenes();
       void loadProject(); // a pick or a pass is a lesson the memory just learned
       announceQueueChange();
+      return true;
     } catch (e) {
       toast(e instanceof Error ? e.message : "That did not go through", "err");
+      return false;
     } finally {
       setBusy((b) => ({ ...b, [c.id]: false }));
     }
   };
+  // the card's two verdicts, one body for its buttons and its keys
+  const togglePick = (c: Concept) =>
+    act(c, () => pickConcept(c.id, !c.picked), c.picked ? "Unpicked" : `${c.n} is in the Queue — approving there renders it`);
+  const pass = (c: Concept) =>
+    act(c, () => archiveConcept(c.id, true), `${c.n} archived — it still counts`, {
+      run: () => archiveConcept(c.id, false),
+      done: `${c.n} is back in the project`,
+    });
+
+  /* THE KEYS (lib/verdict-keys.ts), on the scene open on the canvas -- the
+     ringed card: A picks it, X passes on it, and either moves the canvas
+     on to the next scene still on the list; → ↓ and ← ↑ walk the list.
+     Only while focus is on the list or on nothing: the canvas, its prompt
+     bar and the brief keep their own keys. A pick spends nothing (the
+     Queue's Approve is the spend), so A here is one press. */
+  const sceneList = useRef<HTMLElement>(null);
+  // where the keys last sent the canvas. A scene change waits on the
+  // canvas's own save, so a second ↓ steps on from where the first one
+  // went -- but a VERDICT waits for the canvas to get there: it only ever
+  // lands on the scene that is ringed and drawn, never one still loading.
+  const heading = useRef<number | null>(null);
+  useEffect(() => {
+    heading.current = selected;
+  }, [selected]);
+  const goTo = (sceneId: number | null) => {
+    if (sceneId == null || sceneId === heading.current) return;
+    const from = selected;
+    heading.current = sceneId;
+    // a save that failed leaves the canvas where it was (it says why);
+    // the keys go back to pointing at that scene
+    void select(sceneId, true).then((went) => {
+      if (!went && heading.current === sceneId) heading.current = from;
+    });
+    const el = sceneList.current?.querySelector<HTMLElement>(`article[data-id="${sceneId}"]`);
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView({ block: "nearest" });
+  };
+  useVerdictKeys(
+    sceneList,
+    (verdict) => {
+      if (!listed.length) return false;
+      const order = listed.map((c) => c.id);
+      const at = heading.current ?? selected;
+      if (verdict === "next" || verdict === "prev" || !listed.some((c) => c.id === at)) {
+        goTo(moveCursor(order, listed.some((c) => c.id === at) ? at : null, verdict === "prev" ? -1 : 1));
+        return true;
+      }
+      // the canvas is still on its way to the scene the arrows asked for
+      if (at !== selected) return true;
+      const here = listed.find((c) => c.id === selected)!;
+      if (busy[here.id]) return true;
+      const onward = () => nextAfter(order, here.id, (sid) => live.some((c) => c.id === sid));
+      if (verdict === "reject") {
+        if (here.archived) toast(`${here.n} is passed already`);
+        else void pass(here).then((ok) => ok && goTo(onward()));
+      } else if (here.archived) toast(`${here.n} was passed — put it back first`, "err");
+      else if (here.media_url) toast(`${here.n} is rendered already`);
+      else if (here.picked) toast(`${here.n} is picked already — it waits in the Queue`);
+      else void togglePick(here).then((ok) => ok && goTo(onward()));
+      return true;
+    },
+    { vertical: true },
+  );
 
   const shown = drawer ? (scenes || []).find((c) => c.id === drawer) || null : null;
   const previewRefs = (c: Concept, index: number, trigger: HTMLElement) =>
@@ -215,7 +287,11 @@ export function ProjectWorkspace({ id }: { id: number }) {
       </nav>
       <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)_300px] max-lg:grid-cols-1 max-2xl:grid-cols-[260px_minmax(0,1fr)_260px]">
         {/* ── the scenes ── */}
-        <aside className={`${paneClass("scenes")} flex min-h-0 flex-col border-r border-noir-line bg-noir-well`} aria-label="Scenes">
+        <aside
+          ref={sceneList}
+          className={`${paneClass("scenes")} flex min-h-0 flex-col border-r border-noir-line bg-noir-well`}
+          aria-label="Scenes"
+        >
           <div className="flex items-center gap-2 border-b border-noir-line px-3 py-2.5">
             <Link href="/studio/projects" className={`${ICON_BTN} size-9!`} title="All projects" aria-label="All projects">
               <ArrowLeft size={16} strokeWidth={2} aria-hidden />
@@ -239,6 +315,12 @@ export function ProjectWorkspace({ id }: { id: number }) {
               </button>
             ) : null}
           </div>
+          {listed.length ? (
+            <div className="zkeys px-3 pb-1 max-lg:hidden!" aria-hidden>
+              <kbd>A</kbd> pick · <kbd>X</kbd> pass · <kbd>↑</kbd>
+              <kbd>↓</kbd> move
+            </div>
+          ) : null}
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 pb-28">
             {!scenes ? (
               Array.from({ length: 3 }, (_, i) => (
@@ -263,7 +345,10 @@ export function ProjectWorkspace({ id }: { id: number }) {
                   <article
                     key={c.id}
                     data-id={c.id}
-                    className={`${CARD} ${on ? "border-noir-red shadow-[0_0_0_2px_var(--signal)]" : "border-noir-line2"} ${c.archived ? "opacity-50 hover:opacity-100" : ""}`}
+                    // focusable by the keys (never by Tab): the red ring is the focus mark
+                    tabIndex={-1}
+                    aria-current={on ? "true" : undefined}
+                    className={`${CARD} outline-none ${on ? "border-noir-red shadow-[0_0_0_2px_var(--signal)]" : "border-noir-line2"} ${c.archived ? "opacity-50 hover:opacity-100" : ""}`}
                   >
                     <Hero concept={c} label={`Open ${c.title} on the canvas`} onOpen={() => select(c.id)}>
                       {status ? (
@@ -301,28 +386,23 @@ export function ProjectWorkspace({ id }: { id: number }) {
                           <button
                             type="button"
                             className={`${ICON_BTN} size-9! ${c.picked ? "border-noir-red! bg-noir-red! text-noir-bg!" : "text-bone!"}`}
-                            title={c.picked ? "Picked — click to unpick" : "Pick this — it goes to the Queue, where approving renders"}
+                            title={c.picked ? "Picked — click to unpick" : "Pick this (A) — it goes to the Queue, where approving renders"}
                             aria-label={`${c.picked ? "Unpick" : "Pick"} ${c.title}`}
                             aria-pressed={c.picked}
+                            aria-keyshortcuts={on && !c.picked ? "A" : undefined}
                             disabled={busy[c.id] || !!c.media_url}
-                            onClick={() =>
-                              act(c, () => pickConcept(c.id, !c.picked), c.picked ? "Unpicked" : `${c.n} is in the Queue — approving there renders it`)
-                            }
+                            onClick={() => togglePick(c)}
                           >
                             <Check size={16} strokeWidth={2} aria-hidden />
                           </button>
                           <button
                             type="button"
                             className={`${ICON_BTN} size-9!`}
-                            title="Not this one — archive"
+                            title="Not this one — archive (X)"
                             aria-label={`Archive ${c.title}`}
+                            aria-keyshortcuts={on ? "X" : undefined}
                             disabled={busy[c.id]}
-                            onClick={() =>
-                              act(c, () => archiveConcept(c.id, true), `${c.n} archived — it still counts`, {
-                                run: () => archiveConcept(c.id, false),
-                                done: `${c.n} is back in the project`,
-                              })
-                            }
+                            onClick={() => pass(c)}
                           >
                             <Archive size={16} strokeWidth={2} aria-hidden />
                           </button>

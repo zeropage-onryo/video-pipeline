@@ -1956,6 +1956,16 @@ is yours, in Resolve, by hand.
   `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
   `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
   still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
+  **Keyboard verdicts (2026-10-08, BACKLOG #15's keys):** on the Queue and on a workspace's scene
+  list, `A` approves, `X` rejects / passes, `←`/`→` move (`↑`/`↓` on the list too). The pure half
+  (`lib/verdict-keys.ts`) plus ONE listener (`lib/use-verdict-keys.ts`) that answers only when
+  focus is on the page itself or inside the list. It never fires while typing, inside a
+  dialog/popover/menu, with a modifier key, or from the canvas, the pill or the header. On the
+  Queue a keystroke NEVER spends on its own: the first `A` focuses the card's priced Approve and
+  says the price, and a second `A` or Enter renders. The button and the key read one `approveOf(c)`,
+  so the key cannot approve what the button would refuse. On a workspace `A` is a pick (free) and
+  acts on the scene the canvas has OPEN, never one it is still saving its way to.
+  `CanvasNav.registerLeave` now resolves `false` when the canvas's save failed and it stayed put.
 - **The job feed and the activity tray (2026-10-08, gap list items 4, 5 and 7).** The React studio
   opens ONE `EventSource` per tab on `/api/jobs/stream` (`web/src/lib/jobs.ts`, started by the shell
   once an account is known) and nothing polls jobs any more: the Queue's list, the Elements sheet,

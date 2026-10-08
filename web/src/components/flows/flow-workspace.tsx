@@ -650,7 +650,8 @@ export type CanvasNav = {
   hrefFor?: (id: number, shot?: number) => string;
   embedded?: boolean;
   go?: (destination: string) => void;
-  registerLeave?: (leave: ((destination: string) => Promise<void>) | null) => void;
+  /** resolves false when the save failed and the canvas stayed put */
+  registerLeave?: (leave: ((destination: string) => Promise<boolean>) | null) => void;
 };
 
 function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?: number; nav?: CanvasNav }) {
@@ -893,7 +894,7 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
       notify(error instanceof Error ? error.message : "Could not save prompt");
     }
   };
-  const flushAndGo = async (destination: string) => {
+  const flushAndGo = async (destination: string): Promise<boolean> => {
     if (conceptId && activeShot && ready && !sceneError) {
       try {
         stopped.current = true;
@@ -907,11 +908,12 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
       } catch (error) {
         stopped.current = false;
         notify(`Could not save before leaving: ${error instanceof Error ? error.message : "connection lost"}`);
-        return;
+        return false;
       }
     }
     if (nav.go && destination.startsWith("/")) nav.go(destination);
     else window.location.assign(destination);
+    return true;
   };
   // the page beside the canvas leaves through the same save
   const registerLeave = nav.registerLeave;
