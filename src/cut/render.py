@@ -570,6 +570,22 @@ def reverse_source(exe: str, src: Path, start: int, end: int, fps: int, work: Pa
     return final
 
 
+def length_note(final: Path, got: dict, doc: dict, fmt: str) -> Optional[str]:
+    """The post-render safety check: a note when the file is more than two
+    frames off the cut, else None. `got` is sources.probe(final). A picture
+    export is measured on its VIDEO stream, since its sound is padded to the
+    cut's length and the format duration would read full length over a short
+    picture; the sound-only export keeps the file's length."""
+    frames = got["frames"]
+    if fmt == "mp4":
+        picture = sources.video_frames(final, doc["fps"])
+        if picture is not None:
+            frames = picture
+    if abs(frames - doc["duration"]) > 2:
+        return f"rendered {frames} frames against a {doc['duration']}-frame cut"
+    return None
+
+
 def render(doc: dict, *, account_id: Optional[int], name: str,
            paths: Optional[dict[str, Path]] = None, media: Optional[dict] = None,
            dsn: Optional[str] = None, out_dir: Optional[Path] = None,
@@ -631,8 +647,9 @@ def render(doc: dict, *, account_id: Optional[int], name: str,
         got = {"seconds": 0.0}
     else:
         got = sources.probe(final, doc["fps"])
-        if abs(got["frames"] - doc["duration"]) > 2:
-            notes.append(f"rendered {got['frames']} frames against a {doc['duration']}-frame cut")
+        note = length_note(final, got, doc, fmt)
+        if note:
+            notes.append(note)
 
     from .. import media as media_mod
     stored = url = None

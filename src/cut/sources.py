@@ -176,6 +176,41 @@ def probe(path: Path, fps: int) -> dict[str, Any]:
             "height": int(vid["height"]) if vid and vid.get("height") else None}
 
 
+def video_frames(path: Path, fps: int) -> Optional[int]:
+    """How many frames of PICTURE a file holds, from its first video
+    stream alone -- or None when it has none, or ffprobe cannot say.
+
+    Not probe(): that measures SOURCE media for the timeline, where the
+    format duration (the longest stream) is the right answer. The render's
+    own length check needs the picture, because an export pads its sound to
+    the cut's length -- a video stream that rendered short (2026-10-07: a
+    reversed clip losing a frame per chunk join) hides behind full-length
+    audio in the format duration."""
+    exe = ffprobe_bin()
+    if not exe:
+        return None
+    try:
+        out = subprocess.run(
+            [exe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration,nb_frames", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=30, check=True).stdout
+        streams = json.loads(out).get("streams") or []
+    except (subprocess.SubprocessError, ValueError):
+        return None
+    if not streams:
+        return None
+    try:
+        seconds = float(streams[0].get("duration") or 0)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    if seconds > 0:
+        return d.to_frames(seconds, fps)
+    try:
+        return int(streams[0].get("nb_frames")) or None
+    except (TypeError, ValueError):
+        return None
+
+
 def frames_of(facts: dict, fps: int) -> dict[str, Any]:
     """A cached probe row -> the {"frames", "video", "audio", "seconds",
     "still"} shape validate takes, at THIS doc's fps (the cache stores
