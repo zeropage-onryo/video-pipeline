@@ -48,3 +48,35 @@ export function useRevealBelowFold<T extends Element = HTMLElement>(
   // the one move to the hidden state (below the fold, unseen) is instant
   return { ref, shown, instant: !shown };
 }
+
+/**
+ * Has the element come within `margin` of the viewport yet (once, then it
+ * stays true)? For media that should not load until it is about to be
+ * seen (2026-10-08, Lighthouse): a <video poster> is fetched the moment it
+ * is in the DOM, and thirteen of them on one page were all requested
+ * before the first paint, which is what slow-4G LCP is computed from.
+ * `eager` starts true, for a clip at the top of the page.
+ */
+export function useNearView<T extends Element = HTMLElement>(
+  ref: RefObject<T | null>,
+  { margin = "100% 0px", eager = false }: { margin?: string; eager?: boolean } = {},
+): boolean {
+  const [near, setNear] = useState(eager);
+  useEffect(() => {
+    if (near) return;
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setNear(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: margin },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, margin, near]);
+  return near;
+}

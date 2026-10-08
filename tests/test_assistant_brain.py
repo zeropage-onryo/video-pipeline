@@ -628,3 +628,29 @@ def test_route_puts_steps_and_the_written_words_on_the_job(client, monkeypatch):
     assert {"partial": "Found"} in seen
     assert done["reply"]["message"] == "Found two."
     assert done["steps"] is None and done["partial"] is None
+
+
+def test_the_pills_still_turn_is_a_maker_turn_with_one_tool(client, monkeypatch):
+    """output=still: the route hands the turn make_image only, and the brain
+    is told it is in the card, not the composer."""
+    async def refs(form, **kwargs):
+        return [], [], []
+
+    monkeypatch.setattr(api, "_collect_refs", refs)
+    monkeypatch.setattr(scene_chain, "ground", lambda *a, **k: {})
+    monkeypatch.setattr(assistant_brain, "memory", lambda brand, account_id: {})
+    seen = {}
+
+    def tools(account_id, **kwargs):
+        seen.update(kwargs)
+        return None, None
+
+    monkeypatch.setattr(api, "_guide_tools", tools)
+    monkeypatch.setattr(creative_guide, "respond",
+                        lambda conversation, **kw: seen.update(output=kw["output"]) or {"message": "ok"})
+    r = client.post("/api/creative-guide", data={
+        "conversation": json.dumps({"messages": [{"role": "user", "content": "make me a still"}]}),
+        "assistant": "1", "output": "still"})
+    _wait(client, r.json()["job_id"])
+    assert seen["maker"] is True and seen["makes"] == ("make_image",)
+    assert seen["output"] == "still"

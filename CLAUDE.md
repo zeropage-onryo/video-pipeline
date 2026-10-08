@@ -150,7 +150,8 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # NO board tools. --surface board (or
 # ZEROPAGE_MCP_SURFACE=board) serves the full board; src/research_agent.py
 # asks for it by name. The Guide and the HTTP mount build the board surface.
-# Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
+# Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json -- two entries,
+# `zeropage` = studio and `zeropage-board` = --surface board --engine -- then ⌘Q, reopen)
 
 # THE MANUAL RENDER LANE — a clip that reaches a concept without an API render.
 # ONE lane since 2026-09-28: the generic `manual` import (a clip rendered
@@ -1229,7 +1230,7 @@ is yours, in Resolve, by hand.
   postable channels' hold rows. Billed work runs through `app/jobs.py` — an in-process,
   deliberately non-persistent job registry whose one push channel is the
   `/api/jobs/stream` SSE feed. That feed is why uvicorn runs with
-  `--timeout-graceful-shutdown 3` (`.claude/launch.json`): without it, `--reload` waits
+  `--timeout-graceful-shutdown 3` (`ops/serve.sh`, and `ops/fly/supervisord.conf` in production): without it, `--reload` waits
   forever on the open SSE socket and the dev server wedges on every code change. `/ui` is
   the product surface; `/studio` beside it is stats + system improvement only (2026-08-26).
   The Pipeline view's scene board closes the render loop two ways: copy a shot's stored
@@ -1332,8 +1333,11 @@ is yours, in Resolve, by hand.
   `web`, `API_UPSTREAM` + `NEXT_PUBLIC_AUTH_ORIGIN` set to the API origin and no
   `NEXT_PUBLIC_API_URL`, live at `zpf-web.vercel.app`, which the API's `STUDIO_URL`
   names; `web/README.md` has the recipe. **A push that touches nothing under `web/` no
-  longer builds it** (2026-09-22, `web/vercel.json`'s `ignoreCommand`; the README says how
-  it decides and why it can only over-build). The studio's `/api`, `/auth` and media
+  longer builds it** (2026-09-22, `web/vercel.json`'s `ignoreCommand`, now
+  `web/scripts/vercel-ignore.sh`; the README says how it decides). Since 2026-10-08 a
+  preview branch is judged against its merge base with `main`, not against `HEAD^`: the
+  old rule skipped PR #182's `web/` change because its first push ended in a merge from
+  `main`. Unsure means build. The studio's `/api`, `/auth` and media
   traffic still proxies through Vercel's edge ON PURPOSE -- that is what keeps the session
   cookie first-party (the 2026-09-14 note above) -- and every poll and every photo is
   therefore a Vercel edge request plus origin transfer; `docs/tasks/task-api-domain-move.md`
@@ -1952,6 +1956,35 @@ is yours, in Resolve, by hand.
   `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
   `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
   still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
+- **The job feed and the activity tray (2026-10-08, gap list items 4, 5 and 7).** The React studio
+  opens ONE `EventSource` per tab on `/api/jobs/stream` (`web/src/lib/jobs.ts`, started by the shell
+  once an account is known) and nothing polls jobs any more: the Queue's list, the Elements sheet,
+  the Director's node and Run all loops, the cut export and agent waits, the composer and the Guide
+  all go through `studio-api.followJob` / `waitForJob` / `composer.pollJob`, which ride the stream
+  through `setJobFeed` while it is live and poll exactly as before when it is not. The stream opens
+  with `retry: 3000` and `event: hello {boot}` -- job ids restart at 1 with the in-memory registry,
+  and a tab that sees another boot drops what it held -- then replays the live jobs and the newest
+  `jobs.REPLAY_FINISHED` (50) finished ones, then `event: job` per change and `event: gone` when a job
+  is cleared (`jobs.remove` / the new `DELETE /api/jobs` bulk clear never used to say so). Its
+  `Cache-Control` carries `no-transform`: **Next's proxy gzips any `text/*` response that does not,
+  and a gzipped stream sits in the compressor**. The store trusts the stream only after the hello; no
+  hello in 6s or three errors in a row and it POLLS the list (3s busy / 15s idle, never in a hidden
+  tab) and retries the stream a minute later, telling every wait riding the stream it was lost.
+  Verified locally: a SIGKILLed API drops the tab to polling, a restart (new boot) brings it back live.
+  A graceful stop is different: uvicorn without `--timeout-graceful-shutdown` holds the stream open
+  forever, which is why that flag is set wherever the server runs. **What a job spent is exact and on
+  the job**: `src/charge.metering` is a contextvar listener that every `Charge` reports its hold,
+  settle and release to; `app/jobs.start`'s runner binds one and keeps `credits` (debited),
+  `credits_held` (held right now, a multi-shot render's running cost) and `charged` on the job.
+  An uncharged render that RAN (the exempt operator account) reports what it would have cost with
+  `charged: false`, which the tray prints as "87 cr · not charged" like the Queue. The tray
+  (`components/studio/activity-tray.tsx`, a bell beside search) lists running and finished jobs with
+  their words, progress, credits, age, Open (`lib/job-feed.resultOf`: a concept id -> the scene, a
+  cut export's uuid -> the editor, a sheet -> Elements, a Director render -> Assets) and Cancel; its
+  dot counts jobs this tab SAW end since it was last opened, and an opt-in browser notification
+  (permission asked only on the click that turns it on) fires for a job that ran 20s+ and ended done
+  or failed while the tab was hidden. Any job ending re-reads the balance and the Queue badge (a Queue
+  render finishing used to tell neither). Below 640px the header drops Library too, for the bell.
 - **The ⌘K palette and global search (2026-10-08, gap list items 1 and 2).** ⌘K / Ctrl+K from
   any studio page, the rail's "Search ⌘K" and the header's search button (the phone's only door:
   the header's Timeline tab gives way below 640px) open `components/studio/command-palette.tsx`,
@@ -2099,7 +2132,12 @@ is yours, in Resolve, by hand.
   (`lib/composer.ts GENERATE_MODES`, per browser, Ask by default) is Runway's toggle: Auto
   draws on the send and the card is only the record. The click draws the still into that
   same turn; the card stays as the step's record (Generating / Done, or "Approve again"
-  after a failure) and survives a reload with the thread. `/creative-guide/act` and `guide_tools.run`
+  after a failure) and survives a reload with the thread. **The pill has the same card**
+  (same day): `components/studio/still-step.tsx` is ONE card for both surfaces; the pill's
+  turns ask as `output=still` (`creative_guide.OUTPUT_NOTES["still"]`, `MAKES_FOR` ->
+  `guide_tools.session(makes=("make_image",))`: a still, never a scene), its Approve draws
+  through `/generate/run` on the composer's remembered model into the shared turn (so the
+  composer shows it as its own), and a still waiting on Approve turns the face amber. `/creative-guide/act` and `guide_tools.run`
   refuse the make tools. `prompts/creative_guide_make.txt` is the rule the brain follows:
   make ONLY on an ask in this turn in so many words or a confirmed offer, talk on "let's
   bounce ideas", and write the prompt as the work; `creative_guide.OUTPUT_NOTES` tells it

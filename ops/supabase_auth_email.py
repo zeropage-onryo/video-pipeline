@@ -13,7 +13,7 @@ SUPABASE_ACCESS_TOKEN (or type it when asked; it is never printed).
     python -m ops.supabase_auth_email apply --templates \\
         --smtp-host smtp.resend.com --smtp-port 465 --smtp-user resend \\
         --sender-email no-reply@zeropage.studio --sender-name "Zero Page" \\
-        --site-url https://zeropage-studio.fly.dev --rate-limit 100
+        --site-url https://api.zeropage.studio --rate-limit 100
     SMTP_PASS=... python -m ops.supabase_auth_email apply --smtp-host ...
 
 The project is read off SUPABASE_URL (https://<ref>.supabase.co) or

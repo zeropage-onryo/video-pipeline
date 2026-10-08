@@ -24,12 +24,12 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | C12 | no AI image/video/audio generation | **FAIL — open review risk** | Built as Mike chose: `approve` renders stills and clips after a quote and a yes in chat. The checklist says such connectors "aren't accepted"; the Compliance step asks for the acknowledgment. Answer it truthfully; if refused, drop `approve` from LISTED_TOOLS (one line) and the Queue is the approve |
 | C13–C19 | OAuth, 401, metadata, AS metadata, DCR, PKCE, scopes | PASS | verified live from here 2026-10-07 |
 | C20 | callback URLs (incl. Claude Code loopback) | **PASS live 2026-10-08** | a Claude Code-shaped client registered `http://localhost:<port>/callback` through DCR (201) and completed the code flow (OAUTH_TEST.md, live results) |
-| C21 | consent screen | **PASS live 2026-10-08**, one open warning | shown and approved live; Chrome's lookalike interstitial on `zeropage-studio.fly.dev` until the Site URL moves to `https://api.zeropage.studio` (OAUTH_TEST.md Finding 4) |
+| C21 | consent screen | **PASS live 2026-10-08** | shown and approved live; the Site URL is `https://api.zeropage.studio` since the same day, so the consent page no longer meets Chrome's lookalike warning (OAUTH_TEST.md Finding 4) |
 | C22–C24 | token endpoint, latency, no tokens in URLs | PASS | |
 | C25 | remote HTTPS | PASS | |
 | C26 | tested in Claude + Inspector | PARTIAL | claude.ai on Mike's account and a second account through a local OAuth client, 2026-10-08; Inspector not run |
 | C27 | listing materials | PARTIAL | privacy/terms live; docs URL and icon: see "By hand" |
-| C28 | test account | **OPEN** | `zp-billing-test` (account 5) has NO members, so nobody can sign in as it; the reviewer needs an account with a sign-in (OAUTH_TEST.md, live results) |
+| C28 | test account | **READY but one step** | `zp-billing-test` (account 5), member `deals4michael@gmail.com`, populated 2026-10-08 (below); that user has NO password yet -- Mike sets one in /studio/settings before handing it over |
 | C29 | public documentation | PARTIAL | the plugin README once the repo is public; a `zeropage.studio/connector` page would be better |
 | C39 | no clientInfo gating | PASS | |
 | — | rate limit | **PASS live 2026-10-08** | 120/min per account, 1200/min operator key; 429 + Retry-After; a deploy mid-window resets the in-process count |
@@ -148,13 +148,20 @@ keyed) with our own keys. No personal health data. No sponsored content.
 **Test & launch** — reviewer instructions:
 
 1. Account: `zp-billing-test` (account 5) — a real workspace, kept for billing
-   checks. **It has no members (2026-10-08), so as written nobody can sign
-   in to it**: invite the reviewer's address to it (`src.accounts invite`),
-   or hand over a fresh sign-up's workspace instead. Mike populates it before submitting: three to five captured ideas,
-   one picked, one with a written scene and two reference images, a small
-   credit balance so `pick` returns a keyframe quote and `imagine_reference`
-   can be refused or charged as the reviewer chooses. Credentials (the
-   Supabase email + password for that user) go in the portal field only.
+   checks. Its member is `deals4michael@gmail.com` (invited 2026-10-08; it is
+   that user's home workspace, so the studio and the connector both land on
+   it). **Populated 2026-10-08** through the product's own code, nothing
+   rendered: four product elements with one photo each, all invented brands
+   off the /make wall (Solene perfume, Tonal One headphones, Fuego Dulce hot
+   sauce, Kumo matcha; described, no sheets); four ideas filed under the
+   project "Spring product spots" -- #398 and #401 open, #399 picked (idea
+   only), #400 with a written two-shot scene (8s) on the headphones and the
+   matcha, so `pick` → `quote` → `approve` works on it; 501 credits (lot 11,
+   expires 2026-12-08), which covers the keyframes and one small clip. The
+   two old billing-test copies (#385, #386) are archived. **Still to do:**
+   the user signed up by emailed code and has no password -- sign in as it
+   and set one in /studio/settings, then put the email + password in the
+   portal field only (a code would go to Mike's inbox).
 2. Steps: sign in once at https://zeropage.studio with those credentials
    (workspace exists already); add the connector; approve the consent page;
    call `board`, `idea`, `search`, `capture`, `pick`, `archive`, `stats`,
@@ -217,17 +224,17 @@ Not on the listed server (operator's door only): sparks, tonight, add_spark, ima
    `main` deploys Fly with Phase 4 and the rate limit.
 3. **Supabase dashboard** (Authentication → OAuth Server): set the
    Authorization Path to `/oauth/consent` (done 2026-10-07). The Site URL is
-   the API origin, and should be `https://api.zeropage.studio` -- the same
-   Fly app -- rather than `zeropage-studio.fly.dev`, which Chrome flags as a
-   lookalike on the consent page (`OAUTH_TEST.md` Finding 4 has the command).
+   the API origin, `https://api.zeropage.studio` (moved from
+   `zeropage-studio.fly.dev` on 2026-10-08, which Chrome flagged as a
+   lookalike on the consent page; `OAUTH_TEST.md` Finding 4).
 4. **Fly**: `fly releases` to confirm the live commit. `QUOTE_SIGNING_SECRET`
    is already set there, so `quote` will carry tokens. Optionally set
    `ZEROPAGE_MCP_RATE` / `ZEROPAGE_MCP_RATE_OPERATOR` (defaults 120 / 1200
    per minute) and `ZEROPAGE_SIGNUP_URL` (default https://zeropage.studio).
 5. ~~**Walk `OAUTH_TEST.md`**~~ walked 2026-10-08 with a fresh sign-up
    (account 5 cannot sign in); the claude.ai screenshots are still to take.
-6. **Populate the test account** as the reviewer instructions describe; put
-   its credentials in the portal only.
+6. ~~**Populate the test account**~~ done 2026-10-08 (reviewer item 1); set
+   its password, then put its credentials in the portal only.
 7. ~~Create the GitHub repo~~ **Done 2026-10-07:**
    https://github.com/zeropage-onryo/zeropage-studio-plugin, public, `main`,
    Issues on (the support contact), MIT detected by GitHub. Commits are

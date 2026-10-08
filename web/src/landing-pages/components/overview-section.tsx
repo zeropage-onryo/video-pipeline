@@ -4,8 +4,8 @@ import Image from "next/image";
 import { useEffect, useRef, type PointerEvent } from "react";
 import { ClipPlayer } from "./clips";
 import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from "motion/react";
-import { SPRINGS, reveal } from "@/lib/motion";
-import { useRevealGroup, useStill } from "@/lib/motion-hooks";
+import { EASE_OUT, RISE, SPRINGS } from "@/lib/motion";
+import { useNearView, useRevealBelowFold, useStill } from "@/lib/motion-hooks";
 import type { MakeOverviewBlock, MakePage, MakeTile } from "../pages";
 import { clipSrc } from "../media";
 
@@ -17,7 +17,11 @@ import { clipSrc } from "../media";
 // still or clip lands). Two extras a block can ask for: `sound` (an
 // unmute toggle, since autoplay is always muted) and `compare` (a second
 // clip under a draggable divider, a draft against its final). Clips play
-// only while on screen. Blocks rise in off ONE observer; nothing moves
+// only while on screen. A block is VISIBLE in the server HTML and only one
+// that mounts below the fold rises in (useRevealBelowFold, the section
+// titles' rule): on a phone the first block sits just under the hero and
+// its paragraph was the page's LCP, held invisible until hydration ran
+// the entrance (2026-10-08, Lighthouse mobile LCP 6.4 s). Nothing moves
 // under reduced motion. A page with no `overview` draws nothing.
 
 const PLATES = ["var(--plate-1)", "var(--plate-2)"];
@@ -25,13 +29,12 @@ const PLATES = ["var(--plate-1)", "var(--plate-2)"];
 export function OverviewSection({ page }: { page: MakePage }) {
   const items = page.overview?.items ?? [];
   const still = useStill();
-  const { ref, show } = useRevealGroup<HTMLDivElement>(0.1);
   if (!items.length) return null;
   return (
     <section id="overview" className="border-t border-border">
-      <div ref={ref} className="mx-auto flex max-w-[1100px] flex-col gap-16 px-4 py-20 md:gap-24 md:px-6 md:py-24">
+      <div className="mx-auto flex max-w-[1100px] flex-col gap-16 px-4 py-20 md:gap-24 md:px-6 md:py-24">
         {items.map((block, i) => (
-          <Block key={block.title} block={block} index={i} flip={i % 2 === 1} still={still} show={show} />
+          <Block key={block.title} block={block} index={i} flip={i % 2 === 1} still={still} />
         ))}
       </div>
     </section>
@@ -43,18 +46,20 @@ function Block({
   index,
   flip,
   still,
-  show,
 }: {
   block: MakeOverviewBlock;
   index: number;
   flip: boolean;
   still: boolean;
-  show: boolean;
 }) {
   const plate = block.media?.plate ?? PLATES[index % PLATES.length];
+  const { ref, shown, instant } = useRevealBelowFold<HTMLDivElement>(still, 0.15);
   return (
     <motion.div
-      {...reveal(index, { still, show })}
+      ref={ref}
+      initial={false}
+      animate={shown ? RISE.shown : RISE.hidden}
+      transition={instant ? { duration: 0 } : { duration: 0.55, ease: EASE_OUT }}
       className={`grid items-center gap-8 md:grid-cols-2 md:gap-14 ${flip ? "md:[&>*:first-child]:order-2" : ""}`}
     >
       <div className="flex flex-col gap-4">
@@ -82,23 +87,34 @@ function Block({
 }
 
 /** Play a clip only while its frame is on screen (the landing page's rule). */
-function useOnScreenPlay(ref: React.RefObject<HTMLElement | null>, still: boolean) {
+function useOnScreenPlay(ref: React.RefObject<HTMLElement | null>, still: boolean, near: boolean) {
   useEffect(() => {
     const el = ref.current;
     const videos = el ? Array.from(el.querySelectorAll("video")) : [];
-    if (!el || !videos.length || still) return;
+    if (!el || !videos.length || still || !near) return;
     const io = new IntersectionObserver(
       ([entry]) => videos.forEach((v) => (entry.isIntersecting ? v.play().catch(() => {}) : v.pause())),
       { threshold: 0.25 },
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [ref, still]);
+  }, [ref, still, near]);
 }
 
-function Fill({ tile, alt, plate }: { tile?: MakeTile; alt: string; plate: string }) {
+/** A slot's picture. A clip's poster and video load only once `near`. */
+function Fill({ tile, alt, plate, near }: { tile?: MakeTile; alt: string; plate: string; near: boolean }) {
   if (tile?.video)
-    return <video className="absolute inset-0 size-full object-cover" src={clipSrc(tile.video)} poster={tile.src} muted loop playsInline preload="none" />;
+    return (
+      <video
+        className="absolute inset-0 size-full object-cover"
+        src={near ? clipSrc(tile.video) : undefined}
+        poster={near ? tile.src : undefined}
+        muted
+        loop
+        playsInline
+        preload="none"
+      />
+    );
   if (tile?.src)
     return <Image src={tile.src} alt={alt} fill sizes="(min-width: 768px) 50vw, 100vw" quality={70} className="object-cover" />;
   return <div aria-hidden className="absolute inset-0" style={{ background: plate }} />;
@@ -120,7 +136,8 @@ const CHIP = "rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium text-whit
 
 function Media({ tile, title, plate, still, sound }: { tile?: MakeTile; title: string; plate: string; still: boolean; sound: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  useOnScreenPlay(ref, still);
+  const near = useNearView(ref);
+  useOnScreenPlay(ref, still, near);
   // a clip with sound goes through the shared player (clips.tsx), so it
   // obeys the page's one-soundtrack-at-a-time rule like every other clip
   const speaks = Boolean(sound && tile?.video);
@@ -139,7 +156,7 @@ function Media({ tile, title, plate, still, sound }: { tile?: MakeTile; title: s
       style={tile?.aspect ? { aspectRatio: tile.aspect.replace(":", " / ") } : undefined}
       className={`relative w-full overflow-hidden rounded-2xl bg-card ${frame}`}
     >
-      {speaks && tile ? <ClipPlayer tile={tile} /> : <Fill tile={tile} alt={tile?.title || title} plate={plate} />}
+      {speaks && tile ? <ClipPlayer tile={tile} /> : <Fill tile={tile} alt={tile?.title || title} plate={plate} near={near} />}
       {tile?.tag && <span className={`absolute bottom-3 left-3 z-10 ${CHIP}`}>{tile.tag}</span>}
     </div>
   );
@@ -162,7 +179,8 @@ function Compare({
   still: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useOnScreenPlay(ref, still);
+  const near = useNearView(ref);
+  useOnScreenPlay(ref, still, near);
   const raw = useMotionValue(0.5);
   const x = useSpring(raw, still ? { stiffness: 1000, damping: 100 } : SPRINGS.glow);
   const clip = useMotionTemplate`inset(0 ${useTransform(x, (v) => (1 - v) * 100)}% 0 0)`;
@@ -192,9 +210,9 @@ function Compare({
       aria-valuenow={50}
       className="relative aspect-[4/3] w-full touch-pan-y overflow-hidden rounded-2xl bg-card outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
-      <Fill tile={right} alt={rightLabel} plate={plate} />
+      <Fill tile={right} alt={rightLabel} plate={plate} near={near} />
       <motion.div aria-hidden style={{ clipPath: clip }} className="absolute inset-0">
-        <Fill tile={left} alt={leftLabel} plate={left.plate ?? "var(--plate-2)"} />
+        <Fill tile={left} alt={leftLabel} plate={left.plate ?? "var(--plate-2)"} near={near} />
       </motion.div>
       <span className={`absolute top-3 left-3 ${CHIP}`}>{leftLabel}</span>
       <span className={`absolute top-3 right-3 ${CHIP}`}>{rightLabel}</span>

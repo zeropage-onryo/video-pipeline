@@ -47,6 +47,11 @@ export type MakeTile = {
   mode?: string;
   /** The showcase wall only: the tile's frame, "w:h" (default "3:4"). */
   aspect?: string;
+  /** The still this one was edited from, shown under a draggable divider
+   *  (the GPT Image page's before/after, 2026-10-08). */
+  from?: string;
+  /** The still has a transparent background: draw it on a checkerboard. */
+  alpha?: boolean;
 };
 
 export type MakeCard = {
@@ -163,6 +168,9 @@ export type MakePage = {
    *  page, shared.ts IMAGE_MODELS ids for an image page -- so the /models
    *  listing can link each model to its page. */
   modelIds?: string[];
+  /** The page's name in the Models dropdown and the footer when it is not
+   *  its first model's catalog name (one page, two variants). */
+  navLabel?: string;
   /** <title> without the site suffix (layout.tsx adds " — Zero Page"). */
   title: string;
   description: string;

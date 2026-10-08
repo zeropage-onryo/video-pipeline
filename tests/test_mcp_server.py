@@ -867,6 +867,21 @@ def test_write_scene_with_no_photos_is_refused_by_the_reference_gate(studio, mon
     assert preprod.get_concept(idea, dsn=path, account_id=None)["shots"] == []
 
 
+def test_write_scene_grounds_a_captured_idea_with_the_rule_on(studio, monkeypatch):
+    """Production runs with the reference rule ON. A captured idea comes
+    back from get_concept with a top-level `refs: []`, which the gate
+    read before the new shot's refs -- so every write_scene on a captured
+    idea was refused as ungrounded (2026-10-08)."""
+    path, idea = studio
+    monkeypatch.setattr(preprod, "refs_required", lambda: True)
+    assert preprod.get_concept(idea, dsn=path, account_id=None).get("refs") == []
+    out = mcp_server.write_scene(idea, SCENE, seconds=10, refs=[FACE], dsn=path)
+    assert out["shots_written"] == 2
+    concept = preprod.get_concept(idea, dsn=path, account_id=None)
+    assert concept["shots"][0]["refs"] == [FACE]
+    assert preprod.reference_gate(concept) is None
+
+
 def test_write_scene_saves_the_timed_shots_without_a_model_call(studio):
     from src import timeline
 

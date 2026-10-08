@@ -17,14 +17,14 @@
    its prompt, its frame, and Approve with the model and price under it --
    then the same card as the step's record, the still drawn below it. */
 import Link from "next/link";
-import { useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Check, Clapperboard, Film, ImagePlus, ListVideo, Play, RotateCcw } from "lucide-react";
+import { Clapperboard, Film, ImagePlus, ListVideo, Play, RotateCcw } from "lucide-react";
 import { sceneHref } from "@/lib/studio-api";
 import { cssAspect, isMake, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 import { TypedText } from "@/components/studio/typed-text";
+import { StillStep, isStillStep, lineIsPrompt } from "@/components/studio/still-step";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -50,49 +50,6 @@ type Handlers = {
    *  picker's) and what one costs -- "Nano Banana · 10 credits" */
   stillLine: (modelId?: string) => string;
 };
-
-/* A still's step card (2026-10-08): what the brain will draw, on what and
-   for how much, and Approve -- the one click here that spends. It stays as
-   the step's record once drawn; a step that failed can be approved again. */
-function StillStep({ t, i, h }: { t: Turn; i: number; h: Handlers }) {
-  const [more, setMore] = useState(false);
-  const args = (t.reply?.proposal?.args ?? {}) as { prompt?: unknown; aspect?: unknown };
-  const prompt = typeof args.prompt === "string" ? args.prompt : t.content;
-  const frame = t.made?.frame ?? (typeof args.aspect === "string" ? args.aspect : "");
-  const status = t.made?.status;
-  const state = !t.made ? "waiting" : status === "running" ? "running" : status === "done" ? "done" : "failed";
-  const label = { waiting: "Waiting for approval", running: "Generating", done: "Done", failed: "Not drawn" }[state];
-  const line = h.stillLine(t.made?.model);
-  return (
-    <div className="zc-step" data-state={state}>
-      <div className="zc-step-head">
-        <ImagePlus strokeWidth={1.6} />
-        <b>Image</b>
-        {frame ? <span>{frame}</span> : null}
-        <em>{label}</em>
-      </div>
-      <p className={more ? "open" : undefined}>{prompt}</p>
-      {prompt.length > 240 ? (
-        <button type="button" className="zc-step-more" onClick={() => setMore((v) => !v)}>
-          {more ? "Less" : "Full prompt"}
-        </button>
-      ) : null}
-      <div className="zc-step-go">
-        {state === "waiting" || state === "failed" ? (
-          <button type="button" disabled={h.busy} onClick={() => h.onApprove(i)}>
-            {state === "failed" ? "Approve again" : "Approve"}
-          </button>
-        ) : (
-          <span className="zc-step-ok">
-            {state === "done" ? <Check strokeWidth={2.2} /> : <span className="zc-live" aria-hidden />}
-            {state === "done" ? "Approved" : "Generating…"}
-          </span>
-        )}
-        {line ? <small>{line}</small> : null}
-      </div>
-    </div>
-  );
-}
 
 function Meta({ m, live, h }: { m: Made; live?: Live; h: Handlers }) {
   if (m.status === "running") {
@@ -303,9 +260,7 @@ export function ComposerStream({
               <div className="zc-reply">
                 {t.looked?.length ? <span className="zc-looked">looked at {t.looked.join(", ")}</span> : null}
                 {/* a still's step card carries its prompt; the line is the same words */}
-                {t.reply?.proposal?.tool === "make_image" && t.content === t.reply.proposal.args.prompt ? null : (
-                  <p>{t.content}</p>
-                )}
+                {lineIsPrompt(t) ? null : <p>{t.content}</p>}
                 {t.reply?.sheet ? (
                   <ContactSheetView
                     sheet={t.reply.sheet}
@@ -342,7 +297,14 @@ export function ComposerStream({
                     )}
                   </div>
                 ) : null}
-                {t.reply?.proposal?.tool === "make_image" ? <StillStep t={t} i={i} h={handlers} /> : null}
+                {isStillStep(t) ? (
+                  <StillStep
+                    turn={t}
+                    line={handlers.stillLine(t.made?.model)}
+                    busy={handlers.busy}
+                    onApprove={() => handlers.onApprove(i)}
+                  />
+                ) : null}
                 {i === lastAnswer && choices.length ? (
                   <div className="zc-choices">
                     {choices.map((c) => (

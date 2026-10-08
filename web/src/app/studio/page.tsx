@@ -569,7 +569,8 @@ function Composer() {
         toast(job.error || "That run did not finish.", "err");
         return;
       }
-      const conceptId = job.ref_id ?? null;
+      // a composer send returns the concept it wrote (an id, never a cut uuid)
+      const conceptId = typeof job.ref_id === "number" ? job.ref_id : null;
       const detail = conceptId ? await getConceptDetail(conceptId).catch(() => null) : null;
       if (output === "image") {
         const shots = detail?.shots ?? [];

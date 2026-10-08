@@ -492,6 +492,43 @@ IMAGE_MODELS: dict[str, dict] = {
                     "$0.042; 1536x1024 assumed the same as its portrait twin -- re-check)"),
         "source": "https://fal.ai/models/openai/gpt-image-2",
     },
+    # GPT Image 2.5 (added 2026-10-08, Mike: "swap out the gpt 2 page with
+    # the gpt image 2.5 page"), two variants read off fal's queue OpenAPI
+    # schemas and model pages that day: Flare, "OpenAI's default image model
+    # ... fast, high-quality generation", and Sunburst, its "precision-
+    # focused" sibling "with extra fidelity on intricate detail". Same wire
+    # as each other: `image_size` as {width, height}, `quality` low..max
+    # (sent at high -- 1024x1024 high is $0.05268 on both; other sizes bill
+    # by tokens, so the hold is a rounded-up $0.06), references to `/edit`
+    # as `image_urls` up to 16, `background` transparent on request (not
+    # wired). xhigh and max exist and are not offered. GPT Image 2 stays as
+    # the older sibling.
+    "gpt-image-2.5-flare": {
+        "label": "GPT Image 2.5 Flare",
+        "note": "OpenAI's fast default; text, layouts and edits, up to 16 references.",
+        "endpoint": "openai/gpt-image-2.5/flare/text-to-image",
+        "edit": "openai/gpt-image-2.5/flare/edit",
+        "size": "wh",
+        "quality": "high",
+        "max_references": 16,
+        "params": ("image_size", "quality"),
+        "usd_per_image": 0.06,
+        "checked": "2026-10-08 (fal page + queue OpenAPI: 1024x1024 high $0.05268, token-billed by size)",
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+    },
+    "gpt-image-2.5-sunburst": {
+        "label": "GPT Image 2.5 Sunburst",
+        "note": "OpenAI's precision tier; fine detail and identity kept across edits, up to 16 references.",
+        "endpoint": "openai/gpt-image-2.5/sunburst/text-to-image",
+        "edit": "openai/gpt-image-2.5/sunburst/edit",
+        "size": "wh",
+        "quality": "high",
+        "max_references": 16,
+        "params": ("image_size", "quality"),
+        "usd_per_image": 0.06,
+        "checked": "2026-10-08 (fal page + queue OpenAPI: 1024x1024 high $0.05268, token-billed by size)",
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+    },
     # Ideogram 4.5 replaced 3 on 2026-10-08 (same call), read off the queue
     # OpenAPI schema that day: `ideogram/v4.5` (no fal-ai/ prefix), fal's
     # named sizes, `quality` low/medium/high at $0.03/$0.06/$0.22 an image

@@ -715,7 +715,9 @@ async def creative_guide_reply(request: Request,
     # told which one a "make it" means (creative_guide.OUTPUT_NOTES). A
     # proposal naming one comes back unrun, as every write does, and the
     # composer's own send runs it against /generate/run or /scenes/run.
-    # Absent (the pill, older callers), the turn is what it was.
+    # The pill sends `still` (2026-10-08): make_image only, drawn behind the
+    # same step card and Approve. Absent (older callers), the turn is what
+    # it was.
     output = (form.get("output") or "").strip().lower()
     output = output if output in creative_guide.OUTPUT_NOTES else None
     # The Guide talks inside the same project a Create would write into
@@ -796,7 +798,9 @@ async def creative_guide_reply(request: Request,
             # find_references comes back as reply.sheet, which both
             # threads now draw.
             tools, run_tool = _guide_tools(account_id, local=True, brand=brand,
-                                           maker=output is not None, on_step=on_step)
+                                           maker=output is not None,
+                                           makes=creative_guide.MAKES_FOR.get(output or ""),
+                                           on_step=on_step)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
@@ -838,7 +842,7 @@ def _remember_turn(project_id: int, conversation, reply: dict, account_id: int) 
 
 
 def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
-                 maker: bool = False, on_step=None):
+                 maker: bool = False, makes=None, on_step=None):
     """(specs, run_tool) for a Guide turn, or (None, None) when the
     `mcp` package is absent or the server cannot be opened. Never
     raises: a board that cannot be read costs the answer its tools,
@@ -852,7 +856,7 @@ def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
         return None, None
     try:
         return guide_tools.session(account_id=account_id, local=local, brand=brand,
-                                   maker=maker, on_step=on_step)
+                                   maker=maker, makes=makes, on_step=on_step)
     except Exception as exc:
         print(f"  guide tools unavailable: {exc}", file=sys.stderr)
         return None, None
@@ -6088,19 +6092,38 @@ async def jobs_stream(account_id: int = Depends(auth.current_account_id)):
 
     The registry publishes every job to every subscriber; the filter
     is here, at the one place the account is known, so a subscriber
-    only ever sees its own."""
+    only ever sees its own.
+
+    THE REACT STUDIO'S ONE CONNECTION (2026-10-08, the activity tray):
+    - `retry: 3000` first, so a dropped connection is retried in three
+      seconds rather than the browser's own guess;
+    - `event: hello` with this process's boot id: job ids restart at 1
+      with the registry, and a tab that saw another boot drops what it
+      held instead of matching a new job 7 with an old one;
+    - then every live job and the newest finished ones (`jobs.replay`),
+      not everything a long-running process ever ran;
+    - `event: job` with the whole job on every change, and `event: gone`
+      when one is cleared, so every open tab drops it;
+    - `no-transform`: Next's proxy gzips any text/* response it is not
+      told to leave alone, and a gzipped stream sits in the compressor --
+      the events would arrive in a lump, or never."""
     queue = jobs.subscribe()
 
     async def gen():
         import asyncio
         try:
+            yield "retry: 3000\n\n"
+            yield f"event: hello\ndata: {json.dumps({'boot': jobs.BOOT})}\n\n"
             # current state first, so a fresh subscriber isn't blind
-            for job in jobs.list_jobs(account_id=account_id):
+            for job in jobs.replay(account_id=account_id):
                 yield f"event: job\ndata: {json.dumps(job)}\n\n"
             while True:
                 try:
                     job = await asyncio.wait_for(queue.get(), timeout=25)
                     if not jobs.owned_by(job, account_id):
+                        continue
+                    if job.get("gone"):
+                        yield f"event: gone\ndata: {json.dumps({'id': job['id']})}\n\n"
                         continue
                     yield f"event: job\ndata: {json.dumps(job)}\n\n"
                 except asyncio.TimeoutError:
@@ -6109,8 +6132,15 @@ async def jobs_stream(account_id: int = Depends(auth.current_account_id)):
             jobs.unsubscribe(queue)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
+                             headers={"Cache-Control": "no-cache, no-transform",
                                       "X-Accel-Buffering": "no"})
+
+
+@router.delete("/jobs")
+def jobs_clear_finished(account_id: int = Depends(auth.current_account_id)):
+    """Clear every finished job of yours (the tray's "Clear finished");
+    running ones stay. Each one cleared is said on the stream."""
+    return {"cleared": jobs.clear_finished(account_id=account_id)}
 
 
 @router.get("/jobs/{job_id}")

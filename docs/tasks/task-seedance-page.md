@@ -83,9 +83,9 @@ keyframe on all three.
 - [x] `related`: the four sibling video pages (Kling, Veo, LTX, Wan; each already links back here), then the Ad Generator; all five resolve
 - [x] Final CTA: "Your first scene" / "Render your first scene on Seedance 2.5." / "Write it, draw the keyframes, check the price, approve. The sound comes with the picture."
 
-## 9. Check
+## 9. Check, done 2026-10-08 (on main 6d1c274, production build)
 
-- [ ] 375 / 768 / 1440 in the preview, the signature pinning and un-pinning cleanly
-- [ ] The Models dropdown and the footer's Models column still read "Seedance 2.0"
-- [ ] `npx tsc --noEmit`, `npx eslint src`
-- [ ] Lighthouse mobile if the media landed (last: perf 84, a11y / BP / SEO 100, CLS 0)
+- [x] 375 / 768 / 1440: no sideways scroll; the signature fits its pin (572/607, 807/964, 780/840 px) and pins at 60 px for the whole span, then lets go
+- [x] "Seedance 2.5" in the Models menu and the footer
+- [x] `npx tsc --noEmit` clean; `npx eslint src` 0 errors (2 warnings in components/ui, not this page)
+- [x] Lighthouse mobile: a11y / BP / SEO 100, CLS 0. Performance had fallen to 74-75 (LCP 6.4 s) once the media landed: all thirteen video posters and an MP4 loaded before first paint (1.1 MB), and the first overview block's paragraph (the LCP) was held invisible until hydration. Fixed: posters and clips load within a screen of view (`useNearView`; hero clips stay `eager`), and overview blocks render visible and only animate below the fold. Now 77-81, LCP 4.5-4.9 s, 643 KiB; Kling 78 and the Ad Generator 76 on the same build. What is left is site-wide: six font files (189 KiB) from the root layout on every page.

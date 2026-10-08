@@ -1,0 +1,1826 @@
+{
+ "exported_at": "2026-10-07T18:30:08.499201+00:00",
+ "account_id": 1,
+ "note": "the concept-level rates before the 2026-10-07 wipe; they reset by design",
+ "pick_rate": {
+  "generated": 165,
+  "picked": 12,
+  "rate": 0.073,
+  "by_prompt": [
+   {
+    "prompt_hash": "000d4c9246e1",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "004260452ff2",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "02324a49fd73",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "045ae856d13a",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "0671b56aca9c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "068d82d36f4b",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "0f06fd2df72d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "0f6183051b23",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "106e5b8cd83c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "10719683d580",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1220c7ec6c34",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "13bcc7b10f01",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "19ffc2bd7fff",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1a8191a1b5c2",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1ca734a84cb6",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1eecda2081da",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "20a2360dc629",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "219e56587283",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "231c781ccd38",
+    "generated": 2,
+    "picked": 1,
+    "rate": 0.5
+   },
+   {
+    "prompt_hash": "25c11894dd67",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "26d996c75283",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "28c33dd180d5",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "29a80c97e649",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2a62c9153b63",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2ae23e20df4c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2b477c449830",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2b75b191e3dd",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2ba332bb5a39",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2c447173b1ad",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "34304000b714",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "361c79d71b67",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3aa4c5fc519c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3bdc0516318c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3cf9003a8210",
+    "generated": 3,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3e0b7e0ef85d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3e7edd7f44e2",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "3e8368c950dd",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3f5c8c7c0a37",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "46fc4e93a464",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "47af8c046a81",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4895b90f89d3",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "48df12027ec0",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4ba7db84c9e4",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "4bdccc7ed2cb",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4e2bffe092d5",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4e63698da5b7",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4f74c25269f5",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5011674662ad",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "51492198f0e9",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5248844bf7c1",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "52497d2c1bf8",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "52a002601eb2",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "538c15f1dd14",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "560b7e37713d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5687d5860e7b",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "56fb1a8488b2",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "573be2fd81d7",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5837fa8af91d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "587e61bd1ea2",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "5ef70749cc3d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "603161e62f07",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "615ca6b7c63a",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "641424f4e0ff",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "65f16476b8d5",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "693f0d9fe2c3",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "6f85c4eb3164",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "6fcf1d1bf317",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "6ff7bb1514a9",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "70391d452818",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "70ef7e27ff95",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "716234a9ee87",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "725220cd5c61",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "74c4e77a35c4",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "75f5e1fcdfaa",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7681471ec4cf",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "790b12d94bd3",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7954bf5c8173",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7c4706454e11",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7e5b11542c50",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7ec35239ddf4",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7f26937d3b95",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8150efb7e4e7",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8464089ab039",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "848c48c1ede6",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8621ffc7c3b8",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "869c69886926",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "87d7c440e276",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8b58d4850e28",
+    "generated": 2,
+    "picked": 1,
+    "rate": 0.5
+   },
+   {
+    "prompt_hash": "8be4ecd8fcf6",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8d0a1c580a6d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8da3a033b0ff",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8dc2df8ad4f4",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "93164e8ddff4",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "9461f7b8601f",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "95234d8bcc1a",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "962a7b795d01",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "968a7dad3b78",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "98ef92d2a936",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a071fa0d0da6",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a1f5dc1b7703",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a2c09645e7ed",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a53c76ac298c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a6c4345dee2e",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a821bc92c715",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "a82725c2a694",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ab13db7918ef",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "ad64fa970b5b",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b14ef4481f96",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b41ce83169d2",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "b4f62bd922de",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b508fd5d5934",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b8d830f537ea",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "bedf65371918",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "bf6027882f7c",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c07ce06b5aa5",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c1f5b7025215",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c42285757798",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c5a61e1a0fbb",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c89efd18f4aa",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c9e128a7fe97",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "cb70bbfa45b2",
+    "generated": 2,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "cc3a5e992e95",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "d3cf69248fef",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "d690a9663411",
+    "generated": 1,
+    "picked": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "d7676ca70c22",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "d85c51e48e73",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "da3d887704dd",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "daa00aca8f46",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "de1460331434",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "de4e0197124e",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e1c473b35f4f",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e26815c2e318",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e2f3a53e7f0a",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e349b2569427",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e8d2d83e47c2",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "eba1d958c05d",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ec6bf51cc6f0",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "eebb23ee88f9",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f13b18ad8e26",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f1c4b3976cb6",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f5e3fa5f7876",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f9b92d9fdcca",
+    "generated": 3,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "fc0205af577f",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "fd5f14554977",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "febe79aa1b38",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "feee884a47de",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ff839e5a1d26",
+    "generated": 1,
+    "picked": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": null,
+    "generated": 4,
+    "picked": 0,
+    "rate": 0.0
+   }
+  ]
+ },
+ "shoot_rate": {
+  "generated": 184,
+  "shot": 20,
+  "rate": 0.109,
+  "by_prompt": [
+   {
+    "prompt_hash": "cb70bbfa45b2",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "eebb23ee88f9",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b8d830f537ea",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3aa4c5fc519c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "70ef7e27ff95",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": null,
+    "generated": 23,
+    "shot": 16,
+    "rate": 0.696
+   },
+   {
+    "prompt_hash": "4e2bffe092d5",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "daa00aca8f46",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3e8368c950dd",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8621ffc7c3b8",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "93164e8ddff4",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4f74c25269f5",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f1c4b3976cb6",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "6f85c4eb3164",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1eecda2081da",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "56fb1a8488b2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "19ffc2bd7fff",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c9e128a7fe97",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "641424f4e0ff",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "74c4e77a35c4",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b508fd5d5934",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4bdccc7ed2cb",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ec6bf51cc6f0",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1a8191a1b5c2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "fd5f14554977",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7681471ec4cf",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "eba1d958c05d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c1f5b7025215",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3f5c8c7c0a37",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "790b12d94bd3",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e349b2569427",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "d3cf69248fef",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8464089ab039",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "52a002601eb2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "573be2fd81d7",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "25c11894dd67",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "bedf65371918",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8dc2df8ad4f4",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "fc0205af577f",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e26815c2e318",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3bdc0516318c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2b75b191e3dd",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7e5b11542c50",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a6c4345dee2e",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8b58d4850e28",
+    "generated": 2,
+    "shot": 1,
+    "rate": 0.5
+   },
+   {
+    "prompt_hash": "95234d8bcc1a",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "6fcf1d1bf317",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c89efd18f4aa",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "29a80c97e649",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8da3a033b0ff",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "26d996c75283",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "75f5e1fcdfaa",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8d0a1c580a6d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "13bcc7b10f01",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c42285757798",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "48df12027ec0",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "da3d887704dd",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "d690a9663411",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "361c79d71b67",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3e7edd7f44e2",
+    "generated": 1,
+    "shot": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "1220c7ec6c34",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "538c15f1dd14",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "28c33dd180d5",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "968a7dad3b78",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a82725c2a694",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4ba7db84c9e4",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3cf9003a8210",
+    "generated": 3,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "87d7c440e276",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "000d4c9246e1",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5837fa8af91d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2ae23e20df4c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "02324a49fd73",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "219e56587283",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "716234a9ee87",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "cc3a5e992e95",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e1c473b35f4f",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "3e0b7e0ef85d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c5a61e1a0fbb",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a53c76ac298c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "20a2360dc629",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f9b92d9fdcca",
+    "generated": 3,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "52497d2c1bf8",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e8d2d83e47c2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "615ca6b7c63a",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a2c09645e7ed",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "603161e62f07",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ad64fa970b5b",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "693f0d9fe2c3",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5ef70749cc3d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "bf6027882f7c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "587e61bd1ea2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "febe79aa1b38",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7f26937d3b95",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "e2f3a53e7f0a",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "560b7e37713d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a071fa0d0da6",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2b477c449830",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2a62c9153b63",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "0f06fd2df72d",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f5e3fa5f7876",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5687d5860e7b",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7c4706454e11",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "34304000b714",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "feee884a47de",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4895b90f89d3",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "045ae856d13a",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "10719683d580",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7ec35239ddf4",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5011674662ad",
+    "generated": 1,
+    "shot": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "d85c51e48e73",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "0f6183051b23",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ab13db7918ef",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "a1f5dc1b7703",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "47af8c046a81",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "4e63698da5b7",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "d7676ca70c22",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "98ef92d2a936",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b4f62bd922de",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "068d82d36f4b",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8be4ecd8fcf6",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "231c781ccd38",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "725220cd5c61",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "7954bf5c8173",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "51492198f0e9",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "c07ce06b5aa5",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "9461f7b8601f",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "0671b56aca9c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "8150efb7e4e7",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b41ce83169d2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "6ff7bb1514a9",
+    "generated": 1,
+    "shot": 1,
+    "rate": 1.0
+   },
+   {
+    "prompt_hash": "a821bc92c715",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "1ca734a84cb6",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "de1460331434",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "65f16476b8d5",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "de4e0197124e",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "5248844bf7c1",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "b14ef4481f96",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2ba332bb5a39",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "848c48c1ede6",
+    "generated": 2,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "869c69886926",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "106e5b8cd83c",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "70391d452818",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "962a7b795d01",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "f13b18ad8e26",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "004260452ff2",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "2c447173b1ad",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "46fc4e93a464",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   },
+   {
+    "prompt_hash": "ff839e5a1d26",
+    "generated": 1,
+    "shot": 0,
+    "rate": 0.0
+   }
+  ]
+ },
+ "reason_counts": [
+  {
+   "reason": "weak concept",
+   "n": 8
+  },
+  {
+   "reason": "other",
+   "n": 7
+  },
+  {
+   "reason": "seen it",
+   "n": 7
+  },
+  {
+   "reason": "no turn",
+   "n": 2
+  },
+  {
+   "reason": "off-brand",
+   "n": 2
+  },
+  {
+   "reason": "boring",
+   "n": 1
+  },
+  {
+   "reason": "unshootable",
+   "n": 1
+  }
+ ],
+ "ungrounded_count": 88
+}

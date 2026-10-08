@@ -30,7 +30,7 @@ Gates before a commit: `npx tsc --noEmit`, `npx eslint src`, a look at 375 / 768
 | 7 | Nano Banana Pro | `/models/nano-banana-image-generator` | `nano-banana-image-generator.ts` | AMBER | split / reference-stack / filmstrip | [x] 2026-10-08, 14 stills |
 | 8 | FLUX.2 Pro | `/models/flux-image-generator` | `flux-image-generator.ts` | EMERALD | cover / frame-picker / prompts | [x] 2026-10-08, 12 stills |
 | 9 | Seedream 4.5 | `/models/seedream-image-generator` | `seedream-image-generator.ts` | ROSE | stack / edit-loop / editorial | [x] 2026-10-08, 15 stills |
-| 10 | GPT Image 2 | `/models/gpt-image-generator` | `gpt-image-generator.ts` | BLUE | center / type-frame / bento | [ ] skipped 2026-10-08 (Mike); shares BLUE with Veo |
+| 10 | GPT Image 2.5 | `/models/gpt-image-generator` | `gpt-image-generator.ts` | LIME | theater (portrait) / ad-types / none | [x] 2026-10-08, the GPT Image 2.5 "Brightly" set (made 2026-10-05) + one VOLT poster |
 | 11 | Ideogram 4.5 | `/models/ideogram-image-generator` | `ideogram-image-generator.ts` | VIOLET | fan / poster-type / posters | [x] 2026-10-08, 15 designs |
 
 2026-10-08: every model page's media is that model's own output (images on
@@ -40,7 +40,15 @@ provenance in each entry's header; Seedream and Ideogram moved to 4.5 in
 stills, about 254 for clips; 270 Runway credits. The MP4s are gitignored
 (`*.mp4`), so all 29 page clips (these 16 and Seedance's 13) were uploaded to
 R2 under `site/models/<slug>/` and the pages read them through
-`web/src/landing-pages/media.ts`. Open: GPT Image 2 is untouched.
+`web/src/landing-pages/media.ts`.
+
+Same day, later: the GPT Image 2 page became the GPT Image 2.5 page (Mike: "swap
+out the gpt 2 page with the gpt image 2.5 page"). `gpt-image-2.5-flare` and
+`-sunburst` joined `src/fal.py`; GPT Image 2 stays in the picker. The media is the
+Brightly set made on GPT Image 2.5 through fal on 2026-10-05 (one bottle, six ad
+formats edited from one reference each) plus one Sunburst text-to-image poster; no
+Higgsfield or Runway credit was spent on it. The showcase slides with fal prices
+printed into the art are not used.
 
 ## Known per page, going in
 
@@ -53,7 +61,7 @@ R2 under `site/models/<slug>/` and the pages read them through
 7. **Nano Banana Pro** -- two routes (Gemini key, 33 credits a Pro still off the catalog; fal, 1K/2K). Draws every element sheet. The reference-stack signature reads the wall's first six tiles.
 8. **FLUX.2 Pro** -- up to eight references in the studio, priced per megapixel (a reference edit costs more). Frame-picker shows the ten `IMAGE_SIZES`.
 9. **Seedream 4.0** -- generate and edit in one model, per-image price. The edit-loop divider reads the wall's first two tiles as before/after.
-10. **GPT Image 2** -- three named sizes at medium quality, up to sixteen references, text rendering. Type-frame cycles four sample lines.
+10. **GPT Image 2.5** (was GPT Image 2 until 2026-10-08) -- Flare and Sunburst, exact width x height at the ten frames, quality high, up to sixteen references. Ad-types shows six formats off one bottle photo; transparent output is the model's, not requested by the studio yet.
 11. **Ideogram 3** -- text-only (no references), balanced speed, posters and type. Poster-type offers three settings in the site's own faces.
 
 ## Across all pages

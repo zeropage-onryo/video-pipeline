@@ -21,7 +21,7 @@ import { Popover } from "@base-ui/react/popover";
 import { ChevronLeft, Copy, Download, History, Loader2, Redo2, Undo2, X } from "lucide-react";
 import { useCut } from "@/lib/cut/store";
 import { exportProject, listExports, renameProject, type ExportFormat } from "@/lib/cut/api";
-import { getJob, type Job } from "@/lib/studio-api";
+import { waitForJob, type Job } from "@/lib/studio-api";
 import { ASPECTS, aspectOf, timecode, type Aspect } from "@/lib/cut/timeline";
 
 function ago(iso: string | null | undefined): string {
@@ -270,14 +270,9 @@ function ExportDialog({ onClose }: { onClose: () => void }) {
         format,
         frame: format === "still" ? playhead : undefined,
       });
-      let j: Job = { id: res.job_id, kind: "cut", label: "export", status: "queued", progress: 0, detail: "" };
-      setJob(j);
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 1500));
-        j = await getJob(res.job_id);
-        setJob(j);
-        if (["done", "failed", "cancelled"].includes(j.status)) break;
-      }
+      setJob({ id: res.job_id, kind: "cut", label: "export", status: "queued", progress: 0, detail: "" });
+      // on the studio's job stream (lib/jobs.ts); polled only when it is down
+      const j = await waitForJob(res.job_id, setJob, 1500);
       if (j.status === "done") {
         setDone(j);
         setResult(j.mp4_url ?? null);

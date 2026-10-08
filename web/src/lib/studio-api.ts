@@ -637,8 +637,19 @@ export type Job = {
   detail: string;
   output?: string | null;
   error?: string | null;
-  ref_id?: number | null;
+  /** what the job made: a concept id for most kinds, a cut project's uuid
+   *  for an editor export (lib/job-feed.ts resultOf reads which) */
+  ref_id?: number | string | null;
+  started_at?: string | null;
   ended_at?: string | null;
+  cancellable?: boolean;
+  /** what it spent (2026-10-08, src/charge.metering via app/jobs.py):
+   *  credits debited so far -- or, when `charged` is false, what it would
+   *  have cost the operator's exempt account -- and what is held right now.
+   *  Absent on a job that spent nothing. */
+  credits?: number;
+  credits_held?: number;
+  charged?: boolean;
   /** a finished cut job (/api/cut/assemble) */
   mp4_url?: string | null;
   version?: number | null;
@@ -699,19 +710,86 @@ export const runGuideAction = (
 export const PROJECT_TOOLS = ["create_project", "save_as_project"];
 export const isProjectTool = (tool?: string) => !!tool && PROJECT_TOOLS.includes(tool);
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
+/** DELETE /api/jobs -- every finished job of yours, at once (the tray) */
+export const clearFinishedJobs = () => apiFetch<{ cleared: number }>("/jobs", { method: "DELETE" });
+
+/* THE JOB FEED (2026-10-08). The studio keeps ONE connection to
+   /api/jobs/stream (lib/jobs.ts), and while it is live every wait below
+   rides on it: a job's progress, its streamed words and its end arrive as
+   they happen, with no request per tick. When the stream is down or never
+   came up, the same waits poll exactly as they always did. lib/jobs.ts
+   plugs itself in here rather than this module importing it, so the fetch
+   layer stays free of the stream. */
+export type JobFeed = {
+  /** true while the stream is connected and has said hello */
+  live(): boolean;
+  /** every version of job `id` the stream holds or delivers; `lost` once if
+   *  it drops before the job ends. Returns the unsubscribe. */
+  watch(id: number, onJob: (job: Job) => void, lost: () => void): () => void;
+};
+let jobFeed: JobFeed | null = null;
+export const setJobFeed = (feed: JobFeed | null) => {
+  jobFeed = feed;
+};
+const JOB_ENDED = ["done", "failed", "cancelled"];
+
+/** Follow job `id` until it ends -- from the stream while it is live, else
+ *  by polling every `everyMs` (which may depend on what the job just said).
+ *  Resolves to the finished job, or null once `stopped()` says so. The one
+ *  wait every caller goes through. */
+export async function followJob(
+  id: number,
+  onTick?: (job: Job) => void,
+  opts: { everyMs?: number | ((job: Job) => number); stopped?: () => boolean } = {},
+): Promise<Job | null> {
+  const { everyMs = 1500, stopped } = opts;
+  if (jobFeed?.live()) {
+    const feed = jobFeed;
+    const fed = await new Promise<Job | null | "lost">((resolve) => {
+      let unwatch: (() => void) | null = null;
+      let stopCheck: ReturnType<typeof setInterval> | null = null;
+      let settled = false;
+      const finish = (value: Job | null | "lost") => {
+        if (settled) return;
+        settled = true;
+        if (stopCheck) clearInterval(stopCheck);
+        unwatch?.();
+        resolve(value);
+      };
+      // a Stop has to end the wait at once, whatever the server does
+      if (stopped) stopCheck = setInterval(() => stopped() && finish(null), 200);
+      unwatch = feed.watch(
+        id,
+        (job) => {
+          if (settled) return;
+          onTick?.(job);
+          if (JOB_ENDED.includes(job.status)) finish(job);
+        },
+        () => finish("lost"),
+      );
+      if (settled) unwatch();
+    });
+    if (fed !== "lost") return fed;
+  }
+  for (;;) {
+    if (stopped?.()) return null;
+    const job = await getJob(id);
+    if (stopped?.()) return null;
+    onTick?.(job);
+    if (JOB_ENDED.includes(job.status)) return job;
+    await new Promise((r) => setTimeout(r, typeof everyMs === "function" ? everyMs(job) : everyMs));
+  }
+}
+
 /* `everyMs` may depend on what the job just said: a Guide turn whose
-   answer is arriving is polled faster than one still thinking. */
+   answer is arriving is polled faster than one still thinking (only while
+   the stream is down -- on the stream every word arrives as it is said). */
 export async function waitForJob(
   id: number,
   onTick?: (job: Job) => void,
   everyMs: number | ((job: Job) => number) = 1500,
-) {
-  for (;;) {
-    const job = await getJob(id);
-    onTick?.(job);
-    if (["done", "failed", "cancelled"].includes(job.status)) return job;
-    await new Promise((r) => setTimeout(r, typeof everyMs === "function" ? everyMs(job) : everyMs));
-  }
+): Promise<Job> {
+  return (await followJob(id, onTick, { everyMs })) as Job;
 }
 
 /* ── presets (the camera chips) ── */
@@ -781,14 +859,9 @@ export const announceBalanceChange = () => window.dispatchEvent(new Event(BALANC
  *  is terminal, gives up quietly on a lost connection (announcing once, so
  *  the pill is re-read anyway), and outlives the component that asked. */
 export function announceBalanceWhenDone(jobId: number, every = 2500): void {
-  const tick = () =>
-    getJob(jobId)
-      .then((job) => {
-        if (job.status === "queued" || job.status === "running") setTimeout(tick, every);
-        else announceBalanceChange();
-      })
-      .catch(() => announceBalanceChange());
-  setTimeout(tick, every);
+  followJob(jobId, undefined, { everyMs: every })
+    .then(() => announceBalanceChange())
+    .catch(() => announceBalanceChange());
 }
 
 /* ── projects (2026-09-28) ──
@@ -904,6 +977,10 @@ export function recallActiveProject(): number | null {
    Banana still saved as a one-shot concept. Not mutation_header-guarded
    (the Create route beside it is not either). `aspect` is optional and
    allowlisted server-side. */
+/* GET /api/image-models: what a still can be drawn on, with what one
+   costs -- the composer's picker, and the pill's step card price line */
+export type ImageModels = { items: { id: string; label: string; note: string; credits: number }[]; default: string };
+export const getImageModels = () => apiFetch<ImageModels>("/image-models");
 export const runImage = (form: FormData) =>
   apiForm<{ job_id: number; image_refs: number; video_refs: number }>("/generate/run", form);
 

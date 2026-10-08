@@ -1057,7 +1057,12 @@ def write_scene(idea_id: int, prompt: str, seconds: int = 10, refs=None,
         "prompt": prompt, "seconds": seconds, "refs": picked,
         "written_by": "chat",
     }
-    ungrounded = preprod.reference_gate({**concept, "shots": [shot]})
+    # `refs` set explicitly: get_concept surfaces the OLD shot's refs at the
+    # top level, and the gate reads that first -- so on a captured idea
+    # (no shot yet, top-level refs == []) every write was refused as
+    # ungrounded whatever photos were passed. Found populating the
+    # reviewer account on 2026-10-08; the tests ran with the rule off.
+    ungrounded = preprod.reference_gate({**concept, "refs": picked, "shots": [shot]})
     if ungrounded:
         raise ValueError(
             f"{ungrounded} -- attach at least one of your element photos "
