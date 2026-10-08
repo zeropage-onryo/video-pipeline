@@ -378,3 +378,83 @@ def test_a_solo_render_lands_on_the_assets_wall_with_no_project(tmp_db, monkeypa
     # and the card says which project a scene sits in, or none
     cards = {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}
     assert cards[solo]["project_id"] is None and cards[filed]["project_id"] == project["id"]
+
+
+
+# guards: a render no scene carries, filed under a project when it was made
+# (the MCP's project_id, 2026-10-08), is labelled with that project on the
+# wall -- and only when the project is this account's
+def test_a_render_filed_under_a_project_is_labelled_on_the_wall(tmp_db, monkeypatch):
+    from src import render_assets
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    # routes act as account None in tests (conftest's dependency override);
+    # a second account would make own_table hand these rows to it, so "not
+    # this account's project" is a project id this account does not hold
+    project = projects.create("Made in chat", "", tmp_db, account_id=None)
+    render_assets.record(generation_id=21, tool="fal", model="flux2-pro", media_kind="image",
+                         prompt="p", media_url="https://r2/filed.png",
+                         metadata={"project_id": project["id"]}, dsn=tmp_db, account_id=None)
+    render_assets.record(generation_id=22, tool="fal", model="flux2-pro", media_kind="image",
+                         prompt="p", media_url="https://r2/stray.png",
+                         metadata={"project_id": 999999}, dsn=tmp_db, account_id=None)
+    wall = {i["url"]: i for i in
+            client.get("/api/media?kind=all&scope=generated").json()["items"]}
+    assert wall["https://r2/filed.png"]["project_id"] == project["id"]
+    assert wall["https://r2/filed.png"]["project_title"] == "Made in chat"
+    assert wall["https://r2/stray.png"]["project_id"] is None
+    assert wall["https://r2/stray.png"]["project_title"] is None
+
+
+# guards: append_turns -- a conversation had elsewhere (the MCP's save_chat,
+# 2026-10-08) is filed in order, a re-send from its start saves only what is
+# new, and the rules refuse rather than guess
+def test_turns_from_elsewhere_are_filed_once_and_in_order(tmp_db):
+    project = projects.create("Kept", "", tmp_db, account_id=None)
+    pid = project["id"]
+    first = [{"role": "user", "content": "a can on ice"},
+             {"role": "assistant", "content": "Here are two takes."},
+             {"role": "user", "content": "   "}]
+    done = projects.append_turns(pid, first, tmp_db, account_id=None, via="mcp")
+    assert done == {"saved": 2, "already_saved": 0, "empty": 1, "last_id": done["last_id"]}
+    resent = first[:2] + [{"role": "user", "content": "the second one"},
+                          {"role": "assistant", "content": "Rendering it."}]
+    again = projects.append_turns(pid, resent, tmp_db, account_id=None, via="mcp")
+    assert again["saved"] == 2 and again["already_saved"] == 2
+    assert projects.append_turns(pid, resent, tmp_db, account_id=None)["saved"] == 0
+    items = projects.messages(pid, tmp_db, account_id=None)["items"]
+    assert [m["content"] for m in items] == ["a can on ice", "Here are two takes.",
+                                             "the second one", "Rendering it."]
+    assert all(m["tool_calls"] == {"via": "mcp"} for m in items)
+    # a studio turn in between breaks the tail: a re-send then repeats (documented)
+    projects.append_message(pid, "assistant", "from the studio", tmp_db, account_id=None)
+    assert projects.append_turns(pid, resent, tmp_db, account_id=None)["saved"] == 4
+
+
+def test_append_turns_refuses_what_it_cannot_file(tmp_db):
+    project = projects.create("Strict", "", tmp_db, account_id=None)
+    for turns, match in [([{"role": "system", "content": "x"}], "each turn"),
+                         (["just text"], "each turn"),
+                         ([{"role": "user", "content": "x"}] * 101, "at most 100"),
+                         ([{"role": "user", "content": "x" * 15000}] * 14,
+                          "characters per call")]:
+        with pytest.raises(ValueError, match=match):
+            projects.append_turns(project["id"], turns, tmp_db, account_id=None)
+    with pytest.raises(ValueError, match="no project"):
+        projects.append_turns(999999, [{"role": "user", "content": "x"}], tmp_db,
+                              account_id=None)
+    assert projects.messages(project["id"], tmp_db, account_id=None)["items"] == []
+
+
+# guards: what the workspace's assistant loads -- turns saved from Claude
+# come back through the studio's own route, in order, with their marker
+def test_the_studio_reads_back_turns_saved_from_claude(tmp_db):
+    project = projects.create("Read back", "", tmp_db, account_id=None)
+    projects.append_turns(project["id"], [{"role": "user", "content": "colder"},
+                                          {"role": "assistant", "content": "Done."}],
+                          tmp_db, account_id=None, via="mcp")
+    res = client.get(f"/api/projects/{project['id']}/messages")
+    assert res.status_code == 200, res.text
+    items = res.json()["items"]
+    assert [(m["role"], m["content"], m["tool_calls"]) for m in items] == [
+        ("user", "colder", {"via": "mcp"}), ("assistant", "Done.", {"via": "mcp"})]

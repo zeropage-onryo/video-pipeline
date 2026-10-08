@@ -1217,6 +1217,19 @@ def _assets_all(account_id: Optional[int] = None, scope: str = "all") -> list:
     return items
 
 
+def _project_of(meta: dict, linked: dict, filed_titles: dict) -> tuple:
+    """(project id, title) for one render on the wall: its scene's
+    project, else the project it was filed under when made -- if that
+    project is still this account's -- else (None, None)."""
+    scene = linked.get(meta.get("concept_id"))
+    if scene:
+        return scene.get("id"), scene.get("title")
+    pid = meta.get("project_id")
+    if pid in filed_titles:
+        return pid, filed_titles[pid]
+    return None, None
+
+
 def _generated_assets(account_id: Optional[int]) -> list:
     from src import media
     items = []
@@ -1229,7 +1242,7 @@ def _generated_assets(account_id: Optional[int]) -> list:
             "type": kind,
         }
         for key in ("ratio", "duration", "references", "source", "framing",
-                    "prompt_image"):
+                    "prompt_image", "project_id"):
             if rendered["metadata"].get(key) is not None:
                 meta[key] = rendered["metadata"][key]
         for key in ("project", "concept_id", "shot_n"):
@@ -1335,6 +1348,14 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
     linked = projects.for_concepts(
         [(a.get("meta") or {}).get("concept_id") for a in assets
          if a["category"] == "generated"], account_id=account_id)
+    # ...and a render no scene carries, filed under a project when it was
+    # made (the MCP's project_id, 2026-10-08): titled in one more query,
+    # only when there is one, and only for this account's projects
+    filed = [(a.get("meta") or {}).get("project_id") for a in assets
+             if a["category"] == "generated"
+             and not linked.get((a.get("meta") or {}).get("concept_id"))]
+    filed_titles = (projects.titles(filed, account_id=account_id)
+                    if any(filed) else {})
     for asset in assets:
         generated = asset["category"] == "generated"
         media = asset.get("media") or [
@@ -1388,8 +1409,8 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
                     # the project its scene is filed under, or None: a
                     # video made outside any project lands here and on no
                     # board (2026-10-07, Mike's call)
-                    "project_id": (linked.get(meta.get("concept_id")) or {}).get("id"),
-                    "project_title": (linked.get(meta.get("concept_id")) or {}).get("title"),
+                    "project_id": _project_of(meta, linked, filed_titles)[0],
+                    "project_title": _project_of(meta, linked, filed_titles)[1],
                     "prompt": asset.get("text") or "",
                     "folder": asset.get("folder"),
                     "starred": bool(asset.get("starred")),

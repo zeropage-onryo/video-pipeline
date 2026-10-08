@@ -2,8 +2,9 @@
 
 Planned 2026-10-07 from a read of `main` at `0072b0d` (Mike's ask: "wrap up a plan
 for 2 and 4" -- item 2 was "meter the unmetered spend", item 4 "credits
-everywhere"). Built 2026-10-08, **except 1b, which Mike deferred** ("skip 1b for
-now"; BACKLOG #24 keeps the two options). The "As built" section at the end says
+everywhere"). Built 2026-10-08, **except 1b**: Mike first deferred it, then
+decided the same day against any allowance -- the cost of model text goes into
+the plan prices (BACKLOG #24). The "As built" section at the end says
 what landed and where it differs from the plan.
 
 ## What was already true
@@ -35,13 +36,16 @@ So the money that leaked was **model text, not renders**.
 **Fix:** every one asks the same `_create_gate` that `/scenes/run` asks. Each
 stays free per click; you just need a plan or a balance to use them.
 
-### 1b. A trial account can think forever -- DEFERRED
+### 1b. A trial account can think forever -- NOT BUILT, by decision
 
 `create_refusal` passes whenever `available > 0`, and a new sign-up gets 100
 trial credits, so it may run unlimited Creates and Guide turns until it spends
-those credits on a still, which it never has to do. Two ways to close it are in
-BACKLOG #24 (a daily "included thinking" allowance per plan, recommended; or
-charging credits per model call). Not built: Mike's call, 2026-10-08.
+those credits on a still, which it never has to do. The plan offered a daily
+"included thinking" allowance per plan or charging credits per model call.
+**Mike, 2026-10-08: neither -- "we will add it into the price."** BACKLOG #24
+keeps the measurements and the reasoning. (The plan's claim that its suggested
+allowances stayed "under 20% of each plan's price" was wrong: maxed every day
+they would have cost about 2x the price.)
 
 ### 1c. Calls that were not even metered
 

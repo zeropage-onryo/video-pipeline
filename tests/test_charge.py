@@ -124,6 +124,48 @@ def test_a_failed_render_releases_the_hold(studio, monkeypatch):
     assert _entries(studio, "release")
 
 
+def test_a_chosen_length_and_resolution_are_held_sent_and_banked(studio, tmp_path, monkeypatch):
+    """The MCP's generate_video (2026-10-07) names the length and the
+    resolution: the hold is at THAT price, the submit carries both, the
+    row is labelled with its door, and bank=True files the clip on the
+    Assets wall -- which the canvas's own call (bank off) never does."""
+    import json
+
+    from src import render_assets
+    monkeypatch.setattr(fal, "RENDER_DIR", tmp_path / "renders")
+    ledger.grant(studio["account_id"], 5000, "purchase", dsn=studio["dsn"])
+    banked = []
+    monkeypatch.setattr(render_assets, "record_best_effort",
+                        lambda **kw: banked.append(kw) or {"id": 55})
+    usd = fal.estimate_cost(1, model="ltx2.3", duration=10, resolution="1440p")
+    assert usd != fal.estimate_cost(1, model="ltx2.3")
+
+    result = fal.generate_from_prompt(PROMPT, db_path=studio["dsn"],
+                                      account_id=studio["account_id"], model="ltx2.3",
+                                      duration=10, resolution="1440p", source="mcp",
+                                      bank=True, project_id=3)
+    assert result["ok"] is True, result
+    assert result["asset_id"] == 55
+    (body,) = studio["submits"]
+    assert body["duration"] == 10 and body["resolution"] == "1440p"
+    assert ledger.available(studio["account_id"], studio["dsn"]) == \
+        5000 - ledger.charge_credits(usd)
+    assert banked[0]["media_kind"] == "video" and banked[0]["model"] == "ltx2.3"
+    with db.connect(studio["dsn"]) as conn:
+        params = json.loads(conn.execute(
+            "SELECT params_json FROM generations WHERE id = %s",
+            (result["generation_id"],)).fetchone()["params_json"])
+    assert params["source"] == "mcp" and params["duration"] == 10
+    assert params["resolution"] == "1440p" and params["project_id"] == 3
+    assert banked[0]["metadata"]["project_id"] == 3
+
+    banked.clear()
+    studio["submits"].clear()
+    plain = fal.generate_from_prompt(PROMPT, db_path=studio["dsn"],
+                                     account_id=studio["account_id"])
+    assert plain["ok"] is True and "asset_id" not in plain and banked == []
+
+
 def test_the_settle_never_exceeds_what_was_held(studio):
     """A provider that bills above the estimate is our estimator's error."""
     ledger.grant(studio["account_id"], 1000, "purchase", dsn=studio["dsn"])
