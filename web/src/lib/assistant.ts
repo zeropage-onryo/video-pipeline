@@ -3,8 +3,8 @@
    POST /api/creative-guide the composer's Guide mode posts; this file is
    what the floating pill needs on top of studio-api.ts's Guide helpers:
 
-   - the persona (a name, an emoji, one of three tones), kept per account
-     in localStorage until an `assistants` table exists;
+   - the persona (the mascot it wears, named for its creature, and one of
+     three tones), kept per account in localStorage and src/assistant_store.py;
    - the seven steps and which one a page sits on;
    - the bridge to the Studio composer. The pill floats over every page
      and the composer's state lives inside studio/page.tsx, so the two
@@ -14,6 +14,7 @@
 import { apiFetch } from "@/lib/api";
 import { GUARDED_HEADERS, type GuideReply } from "@/lib/studio-api";
 import type { Made } from "@/lib/composer";
+import { decodeMascot, encodeMascot, nameOf } from "@/lib/mascot";
 
 export const STAGES = ["brief", "story", "cast", "references", "shots", "stills", "clips"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -64,8 +65,19 @@ export const TONES: { id: Tone; label: string }[] = [
   { id: "friendly", label: "Friendly" },
   { id: "hype", label: "Hype" },
 ];
-export const AVATARS = ["🦊", "🤖", "🎬", "👾", "🐺"];
+/* `avatar` is the mascot's code (lib/mascot.ts) and `name` is its creature's
+   name, which never changes: the name follows the creature. A persona saved
+   before the mascot (an emoji or a film glyph, a name the person typed) is
+   read as the default, Nimbus, keeping its tone. */
 export type Persona = { name: string; avatar: string; tone: Tone };
+export function asMascotPersona(p: { avatar?: string | null; tone?: string | null }): Persona {
+  const mascot = decodeMascot(p.avatar);
+  return {
+    name: nameOf(mascot),
+    avatar: encodeMascot(mascot),
+    tone: TONES.some((t) => t.id === p.tone) ? (p.tone as Tone) : "friendly",
+  };
+}
 
 const personaKey = (account: string) => `zpf.assistant.${account || "default"}`;
 export function loadPersona(account: string): Persona | null {
@@ -74,7 +86,7 @@ export function loadPersona(account: string): Persona | null {
     if (!raw) return null;
     const p = JSON.parse(raw) as Partial<Persona>;
     if (!p.name || !p.avatar) return null;
-    return { name: p.name, avatar: p.avatar, tone: TONES.some((t) => t.id === p.tone) ? (p.tone as Tone) : "direct" };
+    return asMascotPersona(p);
   } catch {
     return null;
   }
@@ -85,22 +97,6 @@ export function savePersona(account: string, p: Persona) {
   } catch {
     /* private window: the pill asks again next visit */
   }
-}
-/* The server keeps letters, digits, spaces, ' and - (assistant_brain.clean_name);
-   trimming the same way here means the pill says the name the model was given. */
-export const cleanName = (s: string) =>
-  s.replace(/[^A-Za-z0-9 '\-]/g, "").replace(/\s+/g, " ").trim().slice(0, 24);
-/* the first grapheme of whatever was typed -- one emoji, flags and ZWJ families included */
-export function firstEmoji(s: string): string {
-  const t = s.trim();
-  if (!t) return "";
-  try {
-    const seg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-    for (const { segment } of seg.segment(t)) return segment;
-  } catch {
-    /* no Segmenter: fall through */
-  }
-  return Array.from(t)[0] ?? "";
 }
 
 /* ── what a turn comes back with, on top of GuideReply ── */
