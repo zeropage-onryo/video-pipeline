@@ -292,6 +292,15 @@ def test_a_make_call_ends_the_turn_as_a_proposal_with_a_clean_prompt(monkeypatch
     assert reply["proposal"] == {"tool": "make_image", "args": {"prompt": "a wet steel counter",
                                                                "aspect": "4:5"},
                                  "label": guide_tools.WRITE_LABELS["make_image"]}
+    # the line above the composer's Approve is what will be drawn, never the
+    # stock "I can ...: {json}. Confirm on the card" a board write carries
+    assert reply["message"] == "a wet steel counter"
+
+
+def test_a_board_write_keeps_its_confirm_line(monkeypatch):
+    proposal = _Resp(calls=[("add_spark", {"brand": "zeropage", "spark": "a wet seat"})])
+    reply, _ = _turn(monkeypatch, [proposal], lambda n, a: None)
+    assert reply["message"].startswith("I can bank this spark") and "Confirm" in reply["message"]
 
 
 @pytest.mark.parametrize("args, clean", [

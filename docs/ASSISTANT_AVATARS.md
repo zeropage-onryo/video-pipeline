@@ -131,10 +131,16 @@ Also fixed on the way: the setup card ("Meet your assistant") was 850px tall ins
 capped at `100vh - 110px`. On a laptop screen its "Say hi" button fell off the bottom. It
 scrolls inside the card now.
 
+**The credit card (same day, a third follow-up).** The pill proposes nothing that spends (a
+spark, a reference, a keep, a project; #166 checked). The one thing the Guide can spend credits
+on is a still from the composer, which used to run on the send. It is now a step card shaped
+on Runway Agent's "Ask before generating media" (Mike: "similar to Runway's in their chat"). It
+shows the prompt and the frame, then "Approve" with the model and its price under it ("Nano
+Banana · 10 credits"). The composer's Ask first / Auto pill switches between waiting and
+drawing at once. A scene still writes at once, since it costs nothing. See CLAUDE.md, "THE
+BRAIN IS THE COMPOSER".
+
 ## Still not built
 
-1. **The credit card everywhere.** It only shows on the Queue. Any proposal that spends should
-   show "N cr · you have M" in the card (see `docs/tasks/task-metering-and-credits.md`, which
-   waits on Mike's call between a daily allowance and per-turn credits).
-2. **Rive**, if the glyphs ever need layered expressions. One state machine per glyph, under
+1. **Rive**, if the glyphs ever need layered expressions. One state machine per glyph, under
    100KB. CSS is enough for now.

@@ -1977,9 +1977,18 @@ is yours, in Resolve, by hand.
   talking and making. Two write tools, `guide_tools.MAKE_TOOLS` (`make_image`,
   `make_video`), are published only to a maker turn (`session(maker=True)`); the turn
   ends on the call as a proposal, as every write does, and the STUDIO runs it -- the page
-  posts the brain's prompt to `/api/generate/run` (image, with the picked `image_model`)
-  or `/api/scenes/run` (video) at once, no confirm card, since the send was the ask and
-  nothing a make does spends more than a still. `/creative-guide/act` and `guide_tools.run`
+  posts the brain's prompt to `/api/scenes/run` (video) at once, since the send was the
+  ask and writing a scene costs nothing, and to `/api/generate/run` (image, with the
+  picked `image_model`) as a **step card** (2026-10-08, Mike: "similar to Runway's in
+  their chat", i.e. Runway Agent's "Ask before generating media"): a still spends credits,
+  so the brain's answer for a make is the prompt it wrote (never the stock "I can ...:
+  {json}" line a board write carries) and the card shows it with the frame, then
+  **Approve** with the model and what a still costs under it ("Nano Banana · 10 credits",
+  "not charged" when exempt). The settings line's **Ask first / Auto** pill
+  (`lib/composer.ts GENERATE_MODES`, per browser, Ask by default) is Runway's toggle: Auto
+  draws on the send and the card is only the record. The click draws the still into that
+  same turn; the card stays as the step's record (Generating / Done, or "Approve again"
+  after a failure) and survives a reload with the thread. `/creative-guide/act` and `guide_tools.run`
   refuse the make tools. `prompts/creative_guide_make.txt` is the rule the brain follows:
   make ONLY on an ask in this turn in so many words or a confirmed offer, talk on "let's
   bounce ideas", and write the prompt as the work; `creative_guide.OUTPUT_NOTES` tells it
