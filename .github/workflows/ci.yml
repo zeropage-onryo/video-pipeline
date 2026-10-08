@@ -127,13 +127,28 @@ jobs:
   # (the legacy /ui Queue's queue.js, for one).
   web:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web/ dependencies
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
+      # Type-check the way Vercel's build does, so a type error fails the
+      # PR instead of every production build of main. Added 2026-10-08:
+      # #186 merged green here and broke `next build` on Vercel ("Failed
+      # to type check") until #188. `next typegen` writes the route types
+      # and next-env.d.ts that tsc needs, without a full build.
+      - name: Type-check web/
+        working-directory: web
+        run: npm run typecheck
 
       - name: Test web/ with node:test
         working-directory: web
