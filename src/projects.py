@@ -97,6 +97,8 @@ MESSAGE_ROLES = ("user", "assistant")
 MESSAGE_MAX = 20000          # characters of one turn (creative_guide.Message)
 MESSAGES_PAGE = 40           # turns loaded when a workspace opens
 TOOL_CALLS_MAX = 60_000      # bytes of extras kept beside one turn
+SAVE_TURNS_MAX = 100         # turns one append_turns call takes
+SAVE_CHARS_MAX = 200_000     # characters one append_turns call takes
 
 
 def init(dsn: Optional[str] = None) -> None:
@@ -229,6 +231,59 @@ def for_concepts(concept_ids, dsn: Optional[str] = None, *,
             "AND p.account_id IS NOT DISTINCT FROM %s",
             (ids, account_id, account_id)).fetchall()
     return {int(r["concept_id"]): {"id": int(r["id"]), "title": r["title"]} for r in rows}
+
+
+def titles(project_ids, dsn: Optional[str] = None, *,
+           account_id: int) -> dict[int, str]:
+    """{project_id: title} for this account's projects among `project_ids`
+    -- one query, for a wall that names the project a render was filed
+    under. Someone else's id is simply absent."""
+    ids = sorted({int(i) for i in (project_ids or []) if i})
+    if not ids:
+        return {}
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, title FROM projects WHERE id = ANY(%s) "
+            "AND account_id IS NOT DISTINCT FROM %s", (ids, account_id)).fetchall()
+    return {int(r["id"]): r["title"] for r in rows}
+
+
+def scene_refs(dsn: Optional[str] = None, *, account_id: int,
+               project_id: Optional[int] = None) -> list[dict[str, Any]]:
+    """Every reference photo on the scenes filed under one project -- or
+    under any of this account's projects when `project_id` is None --
+    oldest scene first, each photo once: [{ref, concept_ids, project_ids}].
+
+    The refs are the strings stored on the shots (`shot["refs"]`), so a
+    caller can hand one straight back as a reference (2026-10-08: the MCP
+    reopens a project and reuses what it was grounded on). A scene outside
+    every project is not read."""
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, project_id, shots_json FROM shoot_concepts "
+            "WHERE account_id IS NOT DISTINCT FROM %s AND project_id IS NOT NULL "
+            + ("AND project_id = %s " if project_id is not None else "")
+            + "ORDER BY created_at, id",
+            (account_id, *([int(project_id)] if project_id is not None else []))).fetchall()
+    found: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        try:
+            shots = json.loads(r["shots_json"] or "[]")
+        except (TypeError, ValueError):
+            shots = []
+        for shot in shots if isinstance(shots, list) else []:
+            if not isinstance(shot, dict):
+                continue
+            for ref in shot.get("refs") or []:
+                if not isinstance(ref, str) or not ref.strip():
+                    continue
+                entry = found.setdefault(ref, {"ref": ref, "concept_ids": [],
+                                               "project_ids": []})
+                if int(r["id"]) not in entry["concept_ids"]:
+                    entry["concept_ids"].append(int(r["id"]))
+                if int(r["project_id"]) not in entry["project_ids"]:
+                    entry["project_ids"].append(int(r["project_id"]))
+    return list(found.values())
 
 
 def update(project_id: int, dsn: Optional[str] = None, *, account_id: int,
@@ -417,6 +472,58 @@ def copy_messages(project_id: int, turns, dsn: Optional[str] = None, *,
 
 
 # -- memory -------------------------------------------------------------------
+
+def append_turns(project_id: int, turns, dsn: Optional[str] = None, *,
+                 account_id: int, via: Optional[str] = None) -> dict[str, Any]:
+    """A conversation had somewhere else -- Claude, through the MCP
+    (2026-10-08, Mike's ask) -- filed into the project's history in order,
+    so it is there when the project is reopened, here or in the studio,
+    where the project's assistant reads it back.
+
+    Unlike `copy_messages` this is called again and again on ONE running
+    conversation, so it de-duplicates: the longest run of `turns` that the
+    history already ENDS with is skipped. Re-sending a conversation from
+    its first turn saves only what is new; a turn written in the studio
+    in between breaks the run, and the re-sent turns are then saved again
+    -- the rule is the tail, kept simple enough to predict.
+
+    Refuses rather than skips a turn that is not {role: user|assistant,
+    content}, a batch over SAVE_TURNS_MAX, and a project that is not this
+    account's. A turn with no words is skipped. `via` is stored with each
+    turn's extras (the studio ignores a key it does not draw)."""
+    clean: list[tuple[str, str]] = []
+    empty = 0
+    for t in list(turns or []):
+        if not isinstance(t, dict) or t.get("role") not in MESSAGE_ROLES:
+            raise ValueError(f"each turn is {{role: {' | '.join(MESSAGE_ROLES)}, content}}")
+        content = str(t.get("content") or "")[:MESSAGE_MAX]
+        if content.strip():
+            clean.append((t["role"], content))
+        else:
+            empty += 1
+    if len(clean) > SAVE_TURNS_MAX:
+        raise ValueError(f"at most {SAVE_TURNS_MAX} turns per call, got {len(clean)}")
+    # the listed server is a public door (2026-10-08): one call writes a
+    # bounded amount, whatever the per-turn cap would allow in total
+    if sum(len(c) for _, c in clean) > SAVE_CHARS_MAX:
+        raise ValueError(f"at most {SAVE_CHARS_MAX:,} characters per call -- "
+                         "save the conversation in parts")
+    if get(project_id, dsn, account_id=account_id) is None:
+        raise ValueError(f"no project {project_id}")
+    history = [(m["role"], m["content"]) for m in
+               messages(project_id, dsn, account_id=account_id, limit=200)["items"]]
+    overlap = next((k for k in range(min(len(history), len(clean)), 0, -1)
+                    if history[-k:] == clean[:k]), 0)
+    extras = {"via": via} if via else None
+    saved = []
+    for role, content in clean[overlap:]:
+        row = append_message(project_id, role, content, dsn, account_id=account_id,
+                             tool_calls=extras)
+        if row:
+            saved.append(row["id"])
+    return {"saved": len(saved), "already_saved": overlap, "empty": empty,
+            "last_id": saved[-1] if saved else None}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -825,3 +825,29 @@ def test_an_unknown_image_model_is_refused_before_any_call(tmp_db, approved, key
     result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http, model="dall-e")
     assert result["ok"] is False and "image model" in result["error"]
     assert http.calls == []
+
+
+
+def test_a_still_filed_under_a_project_says_so_on_its_row_and_the_wall(
+        tmp_db, approved, keys, fake_download, monkeypatch):
+    """The MCP's project_id (2026-10-08): a still no scene carries is
+    filed under the project it was made for -- on the generations row's
+    params and the Assets wall's metadata -- and one made without it is
+    filed under nothing."""
+    from src import render_assets
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    http = FakeHttp(result={"images": [{"url": "https://v3.fal.media/i.png"}]})
+    result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
+                                            model="seedream4.5", project_id=7)
+    assert result["ok"] is True, result["error"]
+    plain = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
+                                           model="seedream4.5")
+    assert plain["ok"] is True, plain["error"]
+    with generative.connect(tmp_db) as conn:
+        rows = [json.loads(r["params_json"]) for r in conn.execute(
+            "SELECT params_json FROM generations ORDER BY id").fetchall()]
+    assert rows[0]["project_id"] == 7 and "project_id" not in rows[1]
+    wall = {a["id"]: a["metadata"] for a in render_assets.list_all(tmp_db, account_id=None)}
+    assert wall[result["asset_id"]]["project_id"] == 7
+    assert "project_id" not in wall[plain["asset_id"]]

@@ -17,6 +17,14 @@ the night a direction -- and every one of them was trapped behind being
 sat at the machine. Generating was never the bottleneck. Deciding was.
 So the deciding is what this exposes.
 
+TWO SURFACES SINCE 2026-10-07 (Mike's call). `python -m src.mcp_server`
+-- what Claude Desktop launches -- serves the STUDIO surface: no board at
+all, only images, video and effects on fal, each one quoted first and
+spent only after the person says yes in chat (`approval_gate`). The
+BOARD surface (`--surface board`) is what the Guide, the HTTP mount and
+the research agent get, and the next paragraph is about it -- written
+before `imagine_reference` and `approve`, the board tools that spend.
+
 WHAT IT DELIBERATELY WILL NOT DO. Nothing here spends money. No render,
 no keyframe, no enhance, no Runway, no Nano, no model call of any kind.
 Approving in the Queue stays the ONE spend gate: on the machine, in
@@ -41,6 +49,14 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Literal, Optional
+
+# typing_extensions', NOT typing's: pydantic (which the SDK builds every
+# tool's schema with) refuses `typing.TypedDict` on Python < 3.12, and the
+# Fly image is 3.11 -- so `save_chat`'s argument type took the whole server
+# down there (2026-10-08: /mcp unmounted after #165) while CI (3.12) and
+# this Mac (3.13) passed. tests/test_mcp_server.py builds every surface
+# under 3.11's rule.
+from typing_extensions import TypedDict
 
 from . import accounts, autonomy, db, imagesearch, preprod, refbin, scout
 
@@ -117,9 +133,41 @@ TITLES = {
     "write_scene": "Save a scene prompt onto an idea",
     "quote": "Price the keyframes and the clip",
     "approve": "Approve a priced render (spends credits)",
+    "image_models": "List the image models",
+    "video_models": "List the video models",
+    "effects": "List the effects",
+    "renders": "List your recent renders",
+    "prompt_craft": "Get the studio's prompt guides",
+    "generate_image": "Render an image (quoted first, spends credits)",
+    "generate_video": "Render a video clip (quoted first, spends credits)",
+    "apply_effect": "Apply an effect (quoted first, spends credits)",
+    "projects": "List your projects",
+    "project": "Open one project",
+    "project_chat": "Read a project's chat history",
+    "create_project": "Create a project",
+    "save_chat": "Save this chat into a project",
 }
 
 _CAP = f"Returns at most `limit` rows (default {LIST_LIMIT}, maximum 100)"
+# The chat approval every spending tool on the studio surface asks for,
+# and the ids a render or an effect is pointed at -- said once, the same
+# way in every description that needs them.
+_APPROVAL = (
+    "Two calls: the first (no `approve_usd`) spends nothing and returns the "
+    "quote -- exactly what will run and its price in dollars. Show the person "
+    "and wait for a yes; only then call again with the SAME arguments and "
+    "`approve_usd` set to the quoted price. A price above `approve_usd` is "
+    "refused, never charged."
+)
+_REFERENCE_IDS = (
+    "References are ids, never URLs: `gen:<id>` (an image from `renders` or "
+    "a project), a photo `ref` exactly as `elements` or `project` lists it, "
+    "or `candidate:<id>` (an id `images_for` returned)."
+)
+_PROJECT_FILING = (
+    "`project_id` (from `projects`) files the result under that project, so "
+    "it is there when the project is opened again."
+)
 
 DESCRIPTIONS = {
     "board": (
@@ -199,7 +247,8 @@ DESCRIPTIONS = {
         "description of the light and surfaces wanted (e.g. \"cold fluorescent "
         "on wet tile, overhead\"). Returns up to `limit` (default 6, maximum 12) "
         "candidates as ids with what each shows and its credit -- never URLs. "
-        "Pass an id to `reference` to bank it. Read-only."
+        "Pass an id to `reference` to bank it behind a direction, or as "
+        "`candidate:<id>` to use it as a render reference. Read-only."
     ),
     "stats": (
         "Your board in numbers: pick rate and shoot rate (ideas picked and "
@@ -222,15 +271,17 @@ DESCRIPTIONS = {
     ),
     "job": (
         "The status of a background job by id -- one this connector started "
-        "(`research`, `generate`) or one you started in the studio: status, "
+        "(a render, an effect, an approval, a research pass) or one you "
+        "started in the studio: status, "
         "label, progress detail and the result or error when it finished. "
         "Jobs live in memory, so a server restart forgets them. Read-only."
     ),
     "elements": (
         "Your elements: the characters, props and places whose photos you "
-        "uploaded in the studio, each with its photo refs. A scene is "
-        "rendered against those photographs, so `write_scene` takes refs "
-        "from this list and nothing else. Read-only."
+        "uploaded in the studio, each with its photo refs. Pass a photo's "
+        "`ref` wherever a tool asks for one of your photos (a scene's refs, "
+        "or a reference for a render or an effect); refs from this list are "
+        "the only ones taken. Read-only."
     ),
     "write_scene": (
         "Save a scene prompt you wrote onto one of your ideas, so it can be "
@@ -258,6 +309,118 @@ DESCRIPTIONS = {
         "released if the render fails. Starts a background job; poll it with "
         "`job`. Refused when the idea is not picked, has no reference photos, "
         "the quote is stale, or the balance is short."
+    ),
+    "image_models": (
+        "The image models `generate_image` can name: id, label, what each is "
+        "good at, how many reference images it takes (`max_references`; 0 "
+        "means it draws from the prompt alone) and its price per image in "
+        "dollars at 1:1, plus the aspect ratios every model takes. The quote "
+        "prices your exact aspect and references. Read-only; spends nothing."
+    ),
+    "video_models": (
+        "The video models `generate_video` can name: id, the lengths in "
+        "seconds and the resolutions each takes, and its price per second at "
+        "each resolution. Read-only; spends nothing."
+    ),
+    "effects": (
+        "The effects `apply_effect` can run -- image edits, one-click video "
+        "templates on a still, named camera moves on a still, and clip "
+        "finishing (upscale, smoother motion, added sound) -- with what each "
+        "takes (an image or a clip, how many, whether it needs a prompt), its "
+        "options and how it is priced. `category` narrows the list "
+        "(image_edit, video_effect, camera, finish); long option lists are "
+        "sampled, so pass `effect` for one effect's full lists. Read-only; "
+        "spends nothing."
+    ),
+    "renders": (
+        "Your recent renders, newest first, each as the `gen:<id>` that names "
+        "it as a reference or an effect source, with its model and the start "
+        "of its prompt. `kind` is image or video (omit for both). Returns at "
+        "most `limit` rows (default 20, maximum 100). Read-only."
+    ),
+    "prompt_craft": (
+        "The studio's own prompt-writing guides, for you to apply: nothing is "
+        "written for you. `step` is refine (polish a video prompt for one "
+        "model, with the studio's technique notes -- pass `model` from "
+        "`video_models` or `image_models`, or a `tool` name), enhance (tighten "
+        "a prompt without losing what it locks), still (a first-frame image "
+        "prompt from a video shot) or beats (the moments a camera move passes "
+        "through; `count` of them). Returns the instruction with your prompt "
+        "filled in. Read-only."
+    ),
+    "generate_image": (
+        "SPENDS CREDITS. Render one image from a prompt on a model you choose "
+        f"(`image_models`; omit `model` for the default) and file it on your "
+        f"Assets wall. {_APPROVAL} An unknown model, an aspect ratio it does not "
+        "take or more references than it accepts is refused, never swapped. "
+        f"{_REFERENCE_IDS} {_PROJECT_FILING} After the yes it runs in the "
+        "background: poll `job`; the result carries `media_url` and `asset_id` "
+        "(`gen:<asset_id>` names it from then on)."
+    ),
+    "generate_video": (
+        "SPENDS CREDITS. Render one clip on a video model you choose "
+        "(`video_models`; omit `model` for the default) and file it on your "
+        f"Assets wall. {_APPROVAL} `seconds` and `frame` (the resolution) must "
+        "be ones the model takes, or the call is refused with the legal set. "
+        "`reference` is ONE start frame for image-to-video, by id (same ids as "
+        "a render reference); omit it for text-to-video. "
+        f"{_REFERENCE_IDS} {_PROJECT_FILING} After the yes it runs in the "
+        "background: poll `job`; the result carries `media_url` and `asset_id`."
+    ),
+    "apply_effect": (
+        "SPENDS CREDITS. Apply one effect from `effects` to sources named by "
+        "id: for an image effect, images by the reference ids below; for a "
+        "clip effect, a video `gen:<id>` from `renders` (it is measured before "
+        "it is priced). `options` takes the names and values `effects` lists, "
+        "e.g. {\"effect_scene\": \"bullet_time_360\"}; anything else is refused "
+        "with the legal set. `prompt` is required, optional or refused per "
+        f"effect. {_APPROVAL} {_REFERENCE_IDS} {_PROJECT_FILING} After the yes "
+        "it runs in the background: poll `job`; the result carries `media_url` "
+        "and `asset_id`."
+    ),
+    "projects": (
+        "Your projects, most recently touched first: id, name, the start of "
+        "its brief, whether it carries a look, and how many scenes it holds "
+        "(and how many were picked and rendered). `include_archived` adds the "
+        f"archived ones. {_CAP}. Read-only."
+    ),
+    "project": (
+        "One project in full, by its id from `projects`: its brief and look, "
+        "what it learned from earlier picks and passes, its scenes (status, "
+        "the start of each scene prompt, its still or clip), every reference "
+        "image those scenes used (each with its `ref`, what it shows and the "
+        "page it came from; a render or an effect takes a `ref` as a "
+        "reference), the renders made for it (`gen:<id>`), and the latest "
+        "turns of its chat. Up to 50 scenes and 60 references, newest scenes "
+        "first; `chat_turns` sets how many turns (default 12, maximum 40); "
+        "page further back with `project_chat`. Read-only."
+    ),
+    "project_chat": (
+        "A project's chat history: each turn's role, words and time, oldest "
+        "first within the page. Returns the newest `limit` turns (default 40, "
+        "maximum 200, and fewer when the turns are long); pass `before` (the "
+        "oldest turn id you already hold) to page further back; `has_more` "
+        "says whether older turns exist. Read-only."
+    ),
+    "create_project": (
+        "Start a new project: a name, an optional brief (who it is for, what "
+        "it must always have and never show) and an optional look (the style "
+        "every prompt in it is held to). It appears on your projects board in "
+        "the studio. `save_chat` keeps a conversation with it, and a tool that "
+        "takes `project_id` (a render, an effect) files its result under it. "
+        "Spends nothing."
+    ),
+    "save_chat": (
+        "Save turns of this conversation into one of your projects' chat "
+        "history (`project_id` from `projects`), so they are there when the "
+        "project is reopened -- here, or in the studio, where the project's "
+        "assistant picks the conversation up. `turns` are the person's "
+        "messages and your replies, in order, each {role: user or assistant, "
+        "content}; up to 100 turns and 200,000 characters per call. Turns the "
+        "history already ends with are "
+        "skipped, so re-sending the conversation from its start saves only "
+        "what is new. Save when the person wants this conversation kept with "
+        "the project. Spends nothing."
     ),
 }
 
@@ -288,6 +451,19 @@ HINTS = {
     "write_scene":       {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
     "quote":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "approve":           {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "image_models":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "video_models":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "effects":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "renders":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "prompt_craft":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "generate_image":    {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "generate_video":    {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "apply_effect":      {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "projects":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "project":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "project_chat":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "create_project":    {"read": False, "destructive": False, "idempotent": False, "open_world": False},
+    "save_chat":         {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
 }
 
 # THE LISTED SET (2026-10-07, Mike's call). What a signed-in stranger is
@@ -297,9 +473,45 @@ HINTS = {
 # table (db.SHARED_TABLES) -- stays on the operator's own server, where one
 # person's directions are not listed to another. `build_server(listed=True)`
 # registers exactly these; the static-token door and stdio keep everything.
+# The project tools joined it on 2026-10-08 (Mike's call): a person's
+# projects, their chat and save_chat are that person's own rows (OWNED
+# tables, `_account` -> CALLER_ACCOUNT), so they are safe to offer a
+# stranger, and `create_project` / `save_chat` spend nothing.
 LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
-                "archive", "stats", "elements", "write_scene", "quote",
-                "approve", "job")
+                "archive", "stats", "projects", "project", "project_chat",
+                "create_project", "save_chat", "elements", "write_scene",
+                "quote", "approve", "job")
+
+# THE STUDIO SURFACE (2026-10-07, Mike's call). What `python -m
+# src.mcp_server` serves by default -- what Claude Desktop launches: work
+# with Claude on images, video and effects, and NOTHING on the board (no
+# capture, pick, archive, spark, scene). The three spending tools are
+# always on here, because they are the point of it; each is quoted first
+# and runs only after the person's yes in chat (`approval_gate`), which is
+# the gate -- not the engine flag. `build_server(surface="studio")`.
+STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_chat",
+                "elements", "images_for", "image_models", "video_models",
+                "effects", "renders", "prompt_craft", "generate_image",
+                "generate_video", "apply_effect", "job")
+SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
+SURFACES = ("board", "studio")
+STUDIO_INSTRUCTIONS = (
+    "Your studio: make images and video and apply effects with the studio's "
+    "models, on the studio's credits. Nothing here touches the idea board. "
+    "EVERY image, clip and effect is two calls: the first (no approve_usd) "
+    "spends nothing and returns a quote -- show the person what will run and "
+    "its dollar price, and WAIT for a yes; only then call again with the same "
+    "arguments and approve_usd = the quoted price. Never approve on the "
+    "person's behalf. Work can be filed into a project: `projects` lists them, "
+    "`project` reopens one (its brief, look, scenes, the reference images it "
+    "used and its chat), `create_project` starts one, `project_id` on a "
+    "render files it there, and `save_chat` keeps this conversation with the "
+    "project when the person wants it kept. References and sources are ids (gen:<id> from "
+    "renders, a photo ref from elements or a project, candidate:<id> from "
+    "images_for), never URLs. "
+    "Renders run in the background: poll `job`. prompt_craft holds the "
+    "studio's prompt-writing guides."
+)
 
 # Words a directory user does not have. The test screens every published
 # description and title for them (case-insensitive).
@@ -909,6 +1121,676 @@ def quote_render(idea_id: int, provider: Optional[str] = None, model: Optional[s
     }
 
 
+# --- the studio surface: images, video and effects, quoted in chat ----------
+#
+# 2026-10-07, Mike's call: the MCP Claude Desktop launches is for making
+# things WITH Claude -- images, clips, effects -- and every one of them is
+# quoted first and spent only after a yes in chat. The functions below are
+# that surface's; `build_server(surface="studio")` registers them and
+# nothing from the board. They spend through the studio's own doors
+# (fal.generate_image_from_prompt, fal.generate_from_prompt, effects.run),
+# so the credit hold, the cap, the generations row and the Assets wall
+# behave exactly as they do from the composer and the Queue.
+
+REFERENCE_IDS = ("gen:<id> (an image on your Assets wall -- see `renders`, or the "
+                 "asset_id a render returned), a photo `ref` exactly as `elements` "
+                 "or `project` lists it, or candidate:<id> (an image `images_for` "
+                 "found)")
+
+
+def _fetchable(raw: str, account_id: Optional[int]) -> Optional[str]:
+    """A stored reference -> a URL fal's servers can fetch, or None. The
+    stored string first (a public URL passes, a local file is uploaded),
+    then the read-time mint (`fetch_url`) for a name whose bytes live only
+    in the bucket."""
+    from . import asset_shelf, fal
+    for minted in (False, True):
+        try:
+            value = asset_shelf.fetch_url(raw, account_id) if minted else raw
+        except Exception:
+            continue
+        url = fal.as_image_url(value, resolve_photo=asset_shelf.resolve_photo,
+                               account_id=account_id)
+        if url:
+            return url
+    return None
+
+
+def resolve_references(refs, *, limit: int, who: str, dsn: Optional[str] = None,
+                       account_id: Optional[int] = None) -> list[str]:
+    """Reference IDS -> URLs a renderer can fetch, or ValueError.
+
+    By id and never by URL, the rule `find_images` and `write_scene`
+    already keep: an agent that is handed a URL field fabricates URLs.
+    Three kinds are issued by this studio -- a render on the Assets wall,
+    an element's photo (the `ref` `elements` lists, checked against
+    `_allowed_refs` exactly as `write_scene` checks it), a search
+    candidate -- and anything else is refused with the grammar. The
+    model's own limit is enforced HERE, before any spend: past it the
+    call is refused rather than the extras silently dropped, and a model
+    that takes none refuses any. A reference that cannot be made fetchable
+    (R2 off, a photo that is nowhere) is refused for the same reason: a
+    render must not be paid for against a frame it never saw."""
+    from . import render_assets
+    refs = list(dict.fromkeys(str(r).strip() for r in (refs or []) if str(r).strip()))
+    if not refs:
+        return []
+    if limit <= 0:
+        raise ValueError(f"{who} takes no reference images")
+    if len(refs) > limit:
+        raise ValueError(f"{who} takes at most {limit} reference image"
+                         f"{'s' if limit != 1 else ''}, got {len(refs)}")
+    allowed = None
+    urls = []
+    for ref in refs:
+        kind, _, rest = ref.partition(":")
+        if kind == "gen" and rest.isdigit():
+            row = render_assets.get(int(rest), dsn, account_id=account_id)
+            if not row or row.get("deleted_at"):
+                raise ValueError(f"no render {rest} on this account -- ids come from `renders`")
+            if row.get("media_kind") != "image":
+                raise ValueError(f"{ref} is a {row.get('media_kind')}; a reference "
+                                 "must be an image")
+            raw = row["media_url"]
+        elif kind == "candidate" and rest:
+            cand = imagesearch.get(rest, dsn=dsn)
+            if cand is None or not cand.get("image_url"):
+                raise ValueError(f"no candidate {rest!r} -- ids come from `images_for`")
+            raw = cand["image_url"]
+        else:
+            if allowed is None:
+                allowed = _allowed_refs(dsn, account_id)
+                # ...and every photo a project's scenes were grounded on
+                # (2026-10-08): reopening a project reuses what it used
+                for row in _project_refs(dsn, account_id):
+                    allowed.setdefault(row["ref"], row["ref"])
+            if ref not in allowed:
+                raise ValueError(f"{ref!r} is not a reference id. Use one of: "
+                                 f"{REFERENCE_IDS}. URLs are never taken")
+            raw = allowed[ref]
+        url = _fetchable(raw, account_id)
+        if not url:
+            raise ValueError(f"{ref} cannot be made fetchable for the renderer "
+                             "(its bytes are not in the studio's bucket)")
+        urls.append(url)
+    return urls
+
+
+def _project_refs(dsn, account_id, project_id: Optional[int] = None) -> list[dict]:
+    """The refs on the account's project scenes, or [] when they cannot be
+    read -- a reference check fails CLOSED (the ref is refused as unknown),
+    never open."""
+    from . import projects
+    try:
+        return projects.scene_refs(dsn, account_id=account_id, project_id=project_id)
+    except Exception:
+        return []
+
+
+def approval_gate(usd: float, approve_usd, *, what: str) -> Optional[dict]:
+    """The chat approval every spending tool on the studio surface goes
+    through (2026-10-07, Mike: images, video and effects all quote first).
+
+    approve_usd 0 -> the quote, nothing spent (returned for the caller to
+    show the person). A price above what was approved -> refused, so an
+    agent that changes the model, length or option after the yes is
+    stopped rather than charged. Otherwise None: go ahead."""
+    approved = round(float(approve_usd or 0), 4)
+    if approved <= 0:
+        return {"ok": False, "needs_approval": True,
+                "note": (f"Nothing was spent. {what} would cost about ${usd}. Show "
+                         "the person what it is and the price; if they say yes, "
+                         "call again with the SAME arguments and "
+                         f"approve_usd={usd}.")}
+    if usd > approved:
+        raise ValueError(f"this is priced at ${usd}, above the ${approved} that was "
+                         "approved -- get a new approval for this price")
+    return None
+
+
+CRAFT_STEPS = ("refine", "enhance", "still", "beats")
+CraftStep = Literal[CRAFT_STEPS]
+RenderKind = Literal["image", "video"]
+
+
+def get_prompt_craft(step: str, prompt: str, model: str = "", tool: str = "",
+                     count: int = 2, dsn: Optional[str] = None,
+                     account_id: Optional[int] = None) -> dict[str, Any]:
+    """The studio's own prompt writers, handed to the CALLER to run.
+
+    Each Gemini step in the studio is an instruction plus an input. This
+    returns that instruction with the input filled in and runs no model,
+    so Claude does the writing and then passes the result to
+    `generate_image` / `generate_video`:
+
+    - refine: polish a video prompt for one tool against the technique
+      shelf (`ai_prompting`, the same retrieval `structure_prompt` uses,
+      minus the CRAG grading call -- judge the references yourself)
+    - enhance: the studio's identity-preserving prompt tightener
+    - still: a motion-free first-frame prompt from a video shot
+    - beats: the distinct moments a shot's move passes through
+
+    Read-only; the only outside call is the embedding for the shelf lookup.
+    """
+    from . import fal, promptgen, rag, shootgen, workflows
+    step = (step or "").strip().lower()
+    if step not in CRAFT_STEPS:
+        raise ValueError(f"step must be one of {list(CRAFT_STEPS)}, got {step!r}")
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ValueError("a prompt to work on is required")
+    if step == "enhance":
+        return {"step": step, "instruction": workflows._enhance_system_text(),
+                "input": prompt,
+                "how": "Apply the instruction to `input`; the result is the new prompt."}
+    if step == "still":
+        return {"step": step,
+                "instruction": shootgen.STILL_RUBRIC + "\n\nVIDEO SHOT:\n" + prompt,
+                "how": ("The rubric ends on a different tool's flags (--ar, --style); "
+                        "drop them. Send the one-sentence frame to generate_image and "
+                        "pick the shape with its `aspect` argument.")}
+    if step == "beats":
+        return {"step": step,
+                "instruction": shootgen.BEAT_RUBRIC.format(count=max(2, int(count))) +
+                               "\n\nVIDEO SHOT:\n" + prompt,
+                "how": "Each beat becomes its own generate_image prompt."}
+    model = (model or "").strip()
+    label = (tool or "").strip()
+    if model:
+        if model in fal.VIDEO_MODELS:
+            label = fal.model_spec(model)["platform"]
+        elif model in fal.IMAGE_MODELS:
+            label = fal.IMAGE_MODELS[model]["label"]
+        else:
+            raise ValueError(f"unknown model {model!r}; see video_models / image_models")
+    if not label:
+        raise ValueError("refine needs `model` (a video_models id) or `tool`")
+    found = rag.retrieve_references(
+        f"{label} prompting technique for photorealistic AI video generation",
+        domain=promptgen.REFINE_DOMAIN,
+        prefer_project=accounts.slug_of(_account(account_id, dsn)))
+    refs = rag.format_references(found.get("references") or []) if found.get("ok") else ""
+    return {"step": step, "tool": label,
+            "instruction": promptgen.build_refine_prompt(prompt, label, refs),
+            "references_found": len((found.get("references") or [])),
+            "lookup_error": None if found.get("ok") else found.get("error"),
+            "how": ("Rewrite per the instruction. Keep every (0-3s)-style window and "
+                    "every identity lock / avoid-list line; if the rewrite is much "
+                    "shorter than the original or has a placeholder, keep the original.")}
+
+
+def list_image_models() -> dict[str, Any]:
+    """The still models `generate_image` can name -- a PROJECTION of
+    fal.IMAGE_MODELS (the rows the composer's picker and
+    GET /api/image-models read), so this menu cannot drift from what the
+    generator accepts. Spends nothing."""
+    from . import fal
+    return {"default": fal.DEFAULT_IMAGE_MODEL, "available": fal.has_key(),
+            "aspects": list(fal.IMAGE_SIZES),
+            "models": [{**row, "max_references": fal.image_max_refs(row["id"])}
+                       for row in fal.image_options()]}
+
+
+def run_image(prompt: str, model: str = "", aspect: str = "",
+              references: Optional[list] = None, approve_usd: float = 0.0,
+              dsn: Optional[str] = None,
+              account_id: Optional[int] = None,
+              dry_run: bool = False,
+              project_id: Optional[int] = None) -> dict[str, Any]:
+    """One still on ONE chosen model, through fal.generate_image_from_prompt:
+    the composer's own door, so the credit hold, the cap, the generations
+    row and the Assets wall behave exactly as they do from Studio.
+
+    Quoted first (2026-10-07): with approve_usd at 0 it returns the price
+    and spends nothing; it renders only when approve_usd covers it. The
+    model, the aspect and the reference count are checked HERE and
+    refused with the legal set, never clamped -- an agent that asked for
+    one model and got another would file the wrong model's output as a
+    comparison. A failed render comes back as ok=False with fal's reason
+    (its hold already released), not as an exception: an agent that sees
+    a tool error retries the identical call.
+    """
+    from . import fal
+    prompt = " ".join((prompt or "").split())
+    if not prompt:
+        raise ValueError("an empty prompt renders nothing")
+    model = (model or "").strip() or fal.DEFAULT_IMAGE_MODEL
+    spec = fal.IMAGE_MODELS.get(model)
+    if spec is None:
+        raise ValueError(f"model must be one of {list(fal.IMAGE_MODEL_NAMES)}, got {model!r}")
+    aspect = (aspect or "").strip()
+    if aspect and aspect not in fal.IMAGE_SIZES:
+        raise ValueError(f"aspect must be one of {list(fal.IMAGE_SIZES)}, got {aspect!r}")
+    named = list(dict.fromkeys(str(r).strip() for r in references or [] if str(r).strip()))
+    urls = resolve_references(named, limit=fal.image_max_refs(model), who=spec["label"],
+                              dsn=dsn, account_id=account_id)
+    usd = fal.image_usd(model, aspect or None, references=len(urls))
+    quote = {"model": model, "label": spec["label"], "aspect": aspect or None,
+             "references": named, "usd": usd,
+             **_filed_under(project_id, dsn, account_id)}
+    gate = approval_gate(usd, approve_usd, what=f"This {spec['label']} image")
+    if gate is not None:
+        return {**gate, "quote": quote}
+    if dry_run:      # every refusal above, none of the spend: the job's pre-flight
+        return {"ok": True, "dry_run": True, "quote": quote}
+    res = fal.generate_image_from_prompt(
+        prompt, model=model, aspect=aspect or None, reference_urls=urls or None,
+        approved=True, account_id=account_id, source="mcp", bank=True,
+        project_id=project_id,
+        **({"db_path": dsn} if dsn is not None else {}))
+    return {**res, "quote": quote}
+
+
+def list_video_models() -> dict[str, Any]:
+    """The fal video models `generate_video` can name -- providers.
+    models_for("fal"), the SAME projection the Queue's picker reads: id,
+    platform, the legal lengths and resolutions, the per-second rate by
+    resolution. Spends nothing."""
+    from . import fal, providers
+    return {"default": fal.DEFAULT_MODEL, "available": fal.has_key(),
+            "models": providers.models_for("fal")}
+
+
+def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
+              frame: str = "", reference: str = "", approve_usd: float = 0.0,
+              dsn: Optional[str] = None,
+              account_id: Optional[int] = None,
+              dry_run: bool = False,
+              project_id: Optional[int] = None) -> dict[str, Any]:
+    """One clip on ONE chosen fal model, behind a chat approval.
+
+    Priced first by providers.check_render_choice -- the Queue's own
+    check, which REFUSES a length or resolution the model does not take
+    rather than clamping it. It renders only when approve_usd covers that
+    price, so an agent that changes the model or length after the person
+    approved a number is refused, not charged.
+
+    The render is fal.generate_from_prompt: the hold before the submit,
+    the daily cap, the restart-survivable receipt, the generations row
+    and the Assets wall. A signed-in caller (CALLER_ACCOUNT) is refused:
+    the listed server never registers this tool, and the Queue's signed
+    quote is that caller's door.
+    """
+    from . import fal, providers
+    if CALLER_ACCOUNT.get() is not None:
+        raise Refused("video renders from this connector are the operator's key "
+                      "only -- render it from the Queue")
+    prompt = " ".join((prompt or "").split())
+    if not prompt:
+        raise ValueError("an empty prompt renders nothing")
+    reference = (reference or "").strip()
+    (start_frame,) = resolve_references(
+        [reference] if reference else [], limit=1, who="a clip's start frame",
+        dsn=dsn, account_id=account_id) or (None,)
+    choice = providers.check_render_choice(
+        "fal", (model or "").strip() or None, seconds, (frame or "").strip() or None)
+    usd = round(float(choice["estimate_usd"]), 4)
+    quote = {"model": choice["model"], "seconds": choice["duration"],
+             "frame": choice["frame"], "usd": usd,
+             "from_image": bool(start_frame),
+             **({"reference": reference} if reference else {}),
+             **_filed_under(project_id, dsn, account_id)}
+    gate = approval_gate(usd, approve_usd, what="This clip")
+    if gate is not None:
+        return {**gate, "quote": quote}
+    if dry_run:      # every refusal above, none of the spend: the job's pre-flight
+        return {"ok": True, "dry_run": True, "quote": quote}
+    res = fal.generate_from_prompt(
+        prompt, reference_image=start_frame, model=choice["model"],
+        duration=choice["duration"], resolution=choice["frame"],
+        approved=True, account_id=account_id, source="mcp", bank=True,
+        project_id=project_id,
+        **({"db_path": dsn} if dsn is not None else {}))
+    return {**res, "quote": quote}
+
+
+def list_effects(effect: str = "", category: str = "") -> dict[str, Any]:
+    """The effects `apply_effect` can name -- a projection of
+    effects.EFFECTS, so it cannot list one run_effect would refuse.
+    Spends nothing."""
+    from . import effects, fal
+    return {"available": fal.has_key(), "categories": list(effects.CATEGORIES),
+            "effects": effects.catalogue(effect=effect, category=category)}
+
+
+def _video_sources(refs: list[str], dsn, account_id) -> tuple[list[str], dict]:
+    """`gen:<id>` clips on the Assets wall -> (fetchable URLs, probe of the
+    first). Video sources are this studio's own renders only: a clip has
+    no element or search id, and URLs are never taken."""
+    from . import effects, render_assets
+    urls, probe = [], None
+    for ref in refs:
+        kind, _, rest = ref.partition(":")
+        if kind != "gen" or not rest.isdigit():
+            raise ValueError(f"{ref!r}: a clip source is gen:<asset id> -- a video on "
+                             "the Assets wall (see `renders`). URLs are never taken")
+        row = render_assets.get(int(rest), dsn, account_id=account_id)
+        if not row or row.get("deleted_at"):
+            raise ValueError(f"no render {rest} on this account -- ids come from `renders`")
+        if row.get("media_kind") != "video":
+            raise ValueError(f"{ref} is a {row.get('media_kind')}; this effect takes a clip")
+        local = row.get("output_path") or ""
+        if probe is None:
+            target = local if local and Path(local).is_file() else row["media_url"]
+            probe = effects.probe_video(target)
+        url = effects.fetchable_video(row["media_url"], local, account_id=account_id)
+        if not url:
+            raise ValueError(f"{ref} cannot be made fetchable for the renderer (its "
+                             "file is not in the studio's bucket)")
+        urls.append(url)
+    return urls, probe
+
+
+def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
+               options: Optional[dict] = None, approve_usd: float = 0.0,
+               dsn: Optional[str] = None, account_id: Optional[int] = None,
+               dry_run: bool = False,
+               project_id: Optional[int] = None) -> dict[str, Any]:
+    """Apply ONE effect (`effects` lists them) to sources named by id,
+    behind the same chat approval as a clip: quoted with approve_usd 0,
+    run only when approve_usd covers the price. Every check -- the effect,
+    its options, the number and kind of sources, the prompt rule, the
+    clip's measured length -- runs before the quote, so the price shown is
+    the price of exactly the call that will run."""
+    from . import effects
+    row = effects.spec(effect)
+    effect = effect.strip()
+    opts = effects.check_options(effect, options)
+    prompt = effects.check_prompt(effect, prompt)
+    named = list(dict.fromkeys(str(r).strip() for r in sources or [] if str(r).strip()))
+    effects.check_sources(effect, len(named), opts)
+    probe = None
+    if row["takes"] == "video":
+        urls, probe = _video_sources(named, dsn, account_id)
+    else:
+        urls = resolve_references(named, limit=row["sources"][1], who=row["label"],
+                                  dsn=dsn, account_id=account_id)
+    usd = effects.quote_usd(effect, opts, probe)
+    quote = {"effect": effect, "label": row["label"], "options": opts,
+             "sources": named, "output": row["output"], "usd": usd,
+             **({"source_clip": probe} if probe else {}),
+             **_filed_under(project_id, dsn, account_id)}
+    gate = approval_gate(usd, approve_usd, what=f"This {row['label']} pass")
+    if gate is not None:
+        return {**gate, "quote": quote}
+    if dry_run:
+        return {"ok": True, "dry_run": True, "quote": quote}
+    res = effects.run(effect, urls, prompt, opts, usd=usd, sources=named, probe=probe,
+                      account_id=account_id, db_path=dsn, source="mcp",
+                      project_id=project_id)
+    return {**res, "quote": quote}
+
+
+def list_renders(kind: Optional[str] = None, limit: int = 20, dsn: Optional[str] = None,
+                 account_id: Optional[int] = None) -> dict[str, Any]:
+    """This account's recent renders on the Assets wall, newest first, as
+    the `gen:<id>` a reference or an effect source names. Read-only."""
+    from . import media, render_assets
+    kind = (kind or "").strip()
+    if kind and kind not in ("image", "video"):
+        raise ValueError("kind is image, video or empty for both")
+    cap = max(1, min(int(limit or 20), 100))
+    account_id = _account(account_id, dsn)
+    out = []
+    for r in render_assets.list_all(dsn, account_id=account_id):
+        if kind and r.get("media_kind") != kind:
+            continue
+        url = r.get("media_url") or ""
+        try:                      # what a viewer can open, minted on read
+            url = media.url_for(url, account_id) if url else url
+        except Exception:
+            pass
+        out.append({"id": f"gen:{r['id']}", "kind": r.get("media_kind"),
+                    "model": r.get("model"), "provider": r.get("provider"),
+                    "prompt": (r.get("prompt") or "")[:160],
+                    "media_url": url,
+                    "created_at": str(r.get("created_at") or "")})
+        if len(out) >= cap:
+            break
+    return {"count": len(out), "renders": out,
+            "note": "" if out else "no renders yet -- generate_image makes the first"}
+
+
+# --- projects: make one, reopen one (2026-10-08) -----------------------------
+#
+# Mike's ask: make projects from Claude, revisit the ones made in the
+# studio, and pull the reference images and the chat a project already
+# has. All of it reads and writes `src/projects.py` -- the SAME rows the
+# studio's projects board and workspace draw -- so a project started here
+# is on the board, and one started there opens here with its history.
+
+CHAT_PREVIEW = 12        # turns `project` carries; `project_chat` pages the rest
+CHAT_PREVIEW_MAX = 40
+CHAT_EXCERPT = 1500      # characters of one turn in the preview
+PROJECT_REFS_MAX = 60    # reference images listed on `project`
+PROJECT_RENDERS_MAX = 50
+PROJECT_MEMORY = 20      # newest lessons shown
+PROJECT_SCENES_MAX = 50  # newest scenes shown on `project`
+CHAT_PAGE_CHARS = 200_000  # words one `project_chat` page carries at most
+
+
+def _project_or_refuse(project_id, dsn, account_id) -> dict:
+    """The caller's project, or ValueError -- someone else's id reads
+    exactly like one that does not exist."""
+    from . import projects
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"project_id must be a number from `projects`, got {project_id!r}")
+    found = projects.get(pid, dsn, account_id=account_id)
+    if not found:
+        raise ValueError(f"no project {pid} -- ids come from `projects`")
+    return found
+
+
+def _filed_under(project_id, dsn, account_id) -> dict:
+    """The quote's `project` entry, checked before any price is shown, or
+    nothing when no project was named."""
+    if project_id in (None, "", 0):
+        return {}
+    found = _project_or_refuse(project_id, dsn, account_id)
+    return {"project": {"id": found["id"], "title": found["title"]}}
+
+
+def _view(url: Optional[str], account_id) -> Optional[str]:
+    """A stored media string as something a person can open, minted on read."""
+    from . import media
+    if not url:
+        return None
+    try:
+        return media.url_for(str(url), account_id)
+    except Exception:
+        return str(url)
+
+
+def _turn(message: dict, excerpt: Optional[int] = None) -> dict[str, Any]:
+    content = message.get("content") or ""
+    out = {"id": message["id"], "role": message["role"],
+           "at": message.get("created_at"),
+           "content": content if excerpt is None else content[:excerpt]}
+    if excerpt is not None and len(content) > excerpt:
+        out["truncated"] = True
+    extras = dict(message.get("tool_calls") or {}) if isinstance(
+        message.get("tool_calls"), dict) else {}
+    if extras.get("via"):
+        out["via"] = extras.pop("via")           # saved from here, not the studio
+    if extras:
+        out["carried"] = sorted(extras)          # what the studio drew beside it
+    return out
+
+
+def list_project_cards(include_archived: bool = False, limit: int = LIST_LIMIT,
+                       dsn: Optional[str] = None,
+                       account_id: Optional[int] = None) -> dict[str, Any]:
+    """The account's projects, newest-touched first -- the projects board."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    cap = max(1, min(int(limit or LIST_LIMIT), 100))
+    rows = projects.list_projects(dsn, account_id=account_id,
+                                  include_archived=bool(include_archived))
+    cards = [{"id": p["id"], "title": p["title"],
+              "brief": " ".join((p.get("brief") or "").split())[:200],
+              "has_look": bool((p.get("look") or "").strip()),
+              "scenes": int(p.get("concepts") or 0),
+              "picked": int(p.get("picked") or 0),
+              "rendered": int(p.get("rendered") or 0),
+              "archived": bool(p.get("archived")),
+              "updated_at": p.get("updated_at"),
+              "cover": _view(p.get("cover"), account_id)}
+             for p in rows[:cap]]
+    return {"count": len(cards), "projects": cards,
+            **_truncation(rows, cap, "raise `limit`"),
+            **({} if cards else {"note": "no projects yet -- `create_project` starts one"})}
+
+
+def get_project(project_id: int, chat_turns: int = CHAT_PREVIEW,
+                dsn: Optional[str] = None,
+                account_id: Optional[int] = None) -> dict[str, Any]:
+    """One project as a person reopening it needs it: the brief and look,
+    what it learned, its scenes, the reference images they used (as refs
+    the render tools take back), its renders and the latest chat."""
+    from . import asset_shelf, projects, render_assets
+    account_id = _account(account_id, dsn)
+    project = _project_or_refuse(project_id, dsn, account_id)
+    pid = project["id"]
+
+    concepts = preprod.list_concepts(limit=200, dsn=dsn, account_id=account_id,
+                                     project_id=pid)
+    scenes = []
+    for c in concepts[:PROJECT_SCENES_MAX]:
+        shot = (c.get("shots") or [{}])[0] or {}
+        scenes.append({**_card(c),
+                       "prompt": (shot.get("prompt") or "")[:400],
+                       "still": _view(shot.get("reference_image"), account_id),
+                       "clip": _view(shot.get("media_url"), account_id)})
+
+    refs = _project_refs(dsn, account_id, pid)
+    sources = scout.sources_for_refs(
+        [r["ref"].split("?", 1)[0].rsplit("/", 1)[-1] for r in refs], dsn=dsn)
+    references = []
+    for r in refs[:PROJECT_REFS_MAX]:
+        parsed = asset_shelf.parse_ref(r["ref"]) or {}
+        src = sources.get(r["ref"].split("?", 1)[0].rsplit("/", 1)[-1]) or {}
+        page = src.get("source_url") or ""
+        references.append({
+            "ref": r["ref"], "kind": parsed.get("kind") or "",
+            "label": src.get("title") or parsed.get("filename")
+            or r["ref"].rsplit("/", 1)[-1],
+            "url": _view(r["ref"], account_id),
+            "page": page if page.startswith(("http://", "https://")) else None,
+            "scenes": r["concept_ids"]})
+
+    in_scenes = {c["id"] for c in concepts}
+    renders = []
+    for row in render_assets.list_all(dsn, account_id=account_id):
+        meta = row.get("metadata") or {}
+        if row.get("concept_id") not in in_scenes and meta.get("project_id") != pid:
+            continue
+        renders.append({"id": f"gen:{row['id']}", "kind": row.get("media_kind"),
+                        "model": row.get("model"),
+                        "prompt": (row.get("prompt") or "")[:160],
+                        "scene": row.get("concept_id"),
+                        "media_url": _view(row.get("media_url"), account_id)})
+        if len(renders) >= PROJECT_RENDERS_MAX:
+            break
+
+    turns = max(0, min(int(chat_turns if chat_turns is not None else CHAT_PREVIEW),
+                       CHAT_PREVIEW_MAX))
+    chat = (projects.messages(pid, dsn, account_id=account_id, limit=turns)
+            if turns else {"items": [], "has_more": bool(
+                projects.messages(pid, dsn, account_id=account_id, limit=1)["items"])})
+
+    return {"id": pid, "title": project["title"],
+            "brief": project.get("brief") or "",
+            "look": project.get("look") or "",
+            "archived": bool(project.get("archived")),
+            "created_at": project.get("created_at"),
+            "updated_at": project.get("updated_at"),
+            "learned": (project.get("memory") or [])[-PROJECT_MEMORY:],
+            "scenes": scenes,
+            "scenes_truncated": len(concepts) > PROJECT_SCENES_MAX,
+            "references": references,
+            "references_truncated": len(refs) > PROJECT_REFS_MAX,
+            "renders": renders,
+            "chat": [_turn(m, CHAT_EXCERPT) for m in chat["items"]],
+            "chat_has_more": bool(chat["has_more"]),
+            "next": ("a reference's `ref` or a render's `gen:<id>` goes wherever "
+                     f"a tool takes a reference, and project_id={pid} files new "
+                     "work under this project where a tool takes it; "
+                     "`save_chat` keeps this conversation with it; "
+                     "`project_chat` pages back through its history")}
+
+
+def project_history(project_id: int, before: Optional[int] = None,
+                    limit: int = 40, dsn: Optional[str] = None,
+                    account_id: Optional[int] = None) -> dict[str, Any]:
+    """The project's chat, a page at a time, full turns."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    project = _project_or_refuse(project_id, dsn, account_id)
+    page = projects.messages(project["id"], dsn, account_id=account_id,
+                             limit=max(1, min(int(limit or 40), 200)),
+                             before=int(before) if before is not None else None)
+    # newest first until the page is full: a reply a client can still
+    # carry, the oldest turns of an over-long page left for the next one
+    kept, size = [], 0
+    for m in reversed(page["items"]):
+        size += len(m.get("content") or "")
+        if kept and size > CHAT_PAGE_CHARS:
+            break
+        kept.append(m)
+    items = [_turn(m) for m in reversed(kept)]
+    more = bool(page["has_more"]) or len(kept) < len(page["items"])
+    return {"project_id": project["id"], "title": project["title"],
+            "count": len(items), "turns": items, "has_more": more,
+            **({"next_before": items[0]["id"]} if more and items else {}),
+            **({} if items else {"note": "no chat in this project yet"})}
+
+
+class ChatTurn(TypedDict):
+    """One turn `save_chat` files: who said it and what was said."""
+    role: Literal["user", "assistant"]
+    content: str
+
+
+def save_project_chat(project_id: int, turns: Optional[list] = None,
+                      dsn: Optional[str] = None,
+                      account_id: Optional[int] = None) -> dict[str, Any]:
+    """This conversation into the project's history (2026-10-08, Mike's
+    ask), marked `via: mcp`, de-duplicated against the history's tail by
+    `projects.append_turns`. Spends nothing; a person's own project only."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    project = _project_or_refuse(project_id, dsn, account_id)
+    if not turns:
+        raise ValueError("no turns to save -- pass the conversation as "
+                         "[{role: user|assistant, content}]")
+    done = projects.append_turns(project["id"], [dict(t) for t in turns], dsn,
+                                 account_id=account_id, via="mcp")
+    return {"project_id": project["id"], "title": project["title"], **done,
+            "note": ("saved; reopening the project here or in the studio shows it"
+                     if done["saved"] else "nothing new to save -- the history "
+                     "already ends with these turns")}
+
+
+def make_project(title: str, brief: str = "", look: str = "",
+                 dsn: Optional[str] = None,
+                 account_id: Optional[int] = None) -> dict[str, Any]:
+    """A new project on the account's projects board. Spends nothing."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    title = " ".join((title or "").split())
+    if not title:
+        raise ValueError("a project needs a name")
+    if len((look or "").strip()) > projects.LOOK_MAX:
+        raise ValueError(f"the look is at most {projects.LOOK_MAX} characters")
+    made = projects.create(title, brief, dsn, account_id=account_id, look=look)
+    return {"id": made["id"], "title": made["title"], "brief": made.get("brief") or "",
+            "look": made.get("look") or "",
+            "next": (f"project_id={made['id']} files work under it where a tool "
+                     "takes one; `save_chat` keeps this conversation with it")}
+
+
 # --- the night's direction -------------------------------------------------
 
 def bank_spark(
@@ -1467,8 +2349,19 @@ ENGINE_TOOLS = (run_research, run_graph)
 def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                  start_job=None, job_status=None, account_id: Optional[int] = None,
                  engine: Optional[bool] = None, listed: bool = False,
-                 approve_render=None, approve_keyframes=None):
+                 approve_render=None, approve_keyframes=None,
+                 surface: str = "board"):
     """Wrap the functions above as an MCP server.
+
+    `surface` (2026-10-07, Mike's call) picks WHICH server. "board" is
+    every tool, as the Guide, the HTTP mount and the research agent have
+    always had it. "studio" is what Claude Desktop launches: STUDIO_TOOLS
+    only -- nothing is captured, picked, archived, banked or written to a
+    concept -- the models, the elements and renders a reference can name,
+    a prompt helper, and the three spending doors (image, video, effect),
+    each quoted in chat and run only after a yes. On "studio" those doors
+    are always registered: they are the whole point of it, and every one
+    is gated by the approval, not by the engine flag.
 
     `listed=True` registers LISTED_TOOLS only -- the set a stranger reaches
     through the directory listing -- and never the engine tools, whatever
@@ -1542,13 +2435,22 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                                idempotent_hint=hints["idempotent"],
                                open_world_hint=hints["open_world"])
 
+    if surface not in SURFACES:
+        raise ValueError(f"surface must be one of {SURFACES}, got {surface!r}")
+    studio = surface == "studio"
+    if studio and listed:
+        raise ValueError("the listed server is a board surface; the studio "
+                         "surface is never listed")
+
     def _reg(name: str):
         if listed and name not in LISTED_TOOLS:
             return lambda fn: fn          # not offered on the listed server
+        if studio and name not in STUDIO_TOOLS:
+            return lambda fn: fn          # the studio surface has no board
         return server.tool(name=name, title=TITLES[name],
                            description=DESCRIPTIONS[name], annotations=_ann(name))
 
-    server = MCPServer(name, instructions=INSTRUCTIONS)
+    server = MCPServer(name, instructions=STUDIO_INSTRUCTIONS if studio else INSTRUCTIONS)
 
     def _run(fn, *args, **kwargs):
         """Engine tools go through the job registry when one was
@@ -1641,7 +2543,8 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
     def stats() -> dict:
         return _t(pipeline_stats, dsn=dsn, account_id=account_id)
 
-    if (engine_enabled() if engine is None else engine) and not listed:
+    engine_on = engine_enabled() if engine is None else engine
+    if engine_on and not listed:
         @_reg("research")
         def research(brand: Brand = DEFAULT_BRAND, count: int = 4,
                      lanes: Optional[list[Lane]] = None) -> dict:
@@ -1667,9 +2570,99 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                         account_id=_account(account_id, dsn),
                         _label=f"graph {brand}")
 
+    @_reg("projects")
+    def projects_tool(include_archived: bool = False, limit: int = LIST_LIMIT) -> dict:
+        return _t(list_project_cards, include_archived=include_archived, limit=limit,
+                  dsn=dsn, account_id=account_id)
+
+    @_reg("project")
+    def project_tool(project_id: int, chat_turns: int = CHAT_PREVIEW) -> dict:
+        return _t(get_project, project_id, chat_turns=chat_turns, dsn=dsn,
+                  account_id=account_id)
+
+    @_reg("project_chat")
+    def project_chat(project_id: int, before: Optional[int] = None,
+                     limit: int = 40) -> dict:
+        return _t(project_history, project_id, before=before, limit=limit, dsn=dsn,
+                  account_id=account_id)
+
+    @_reg("create_project")
+    def create_project(title: str, brief: str = "", look: str = "") -> dict:
+        return _t(make_project, title, brief=brief, look=look, dsn=dsn,
+                  account_id=account_id)
+
+    @_reg("save_chat")
+    def save_chat(project_id: int, turns: list[ChatTurn]) -> dict:
+        return _t(save_project_chat, project_id, turns=turns, dsn=dsn,
+                  account_id=account_id)
+
     @_reg("elements")
     def elements() -> dict:
         return _t(list_elements, dsn=dsn, account_id=account_id)
+
+    @_reg("image_models")
+    def image_models() -> dict:
+        return _t(list_image_models)
+
+    @_reg("video_models")
+    def video_models() -> dict:
+        return _t(list_video_models)
+
+    @_reg("effects")
+    def effects(effect: str = "", category: str = "") -> dict:
+        return _t(list_effects, effect=effect, category=category)
+
+    @_reg("renders")
+    def renders(kind: Optional[RenderKind] = None, limit: int = 20) -> dict:
+        return _t(list_renders, kind=kind, limit=limit, dsn=dsn, account_id=account_id)
+
+    @_reg("prompt_craft")
+    def prompt_craft(step: CraftStep, prompt: str, model: str = "", tool: str = "",
+                     count: int = 2) -> dict:
+        return _t(get_prompt_craft, step, prompt, model=model, tool=tool,
+                  count=count, dsn=dsn, account_id=account_id)
+
+    # The three spending doors: always on the studio surface, behind the
+    # engine flag on the board (the operator's own key), never listed.
+    # Each answers a call with no approve_usd with the quote, inline and
+    # free; an approved call is checked once more here -- so a price or a
+    # bad id is refused now, not inside a job the agent has to poll for --
+    # and then runs as a job.
+    if (engine_on or studio) and not listed:
+        def _quoted(fn, label: str, **args):
+            args.update(dsn=dsn, account_id=_account(account_id, dsn))
+            if not args.get("approve_usd") or float(args["approve_usd"]) <= 0:
+                return _t(fn, **args)                 # a quote: instant, free
+            _t(fn, **args, dry_run=True)
+            return _run(fn, **args, _label=label)
+
+        @_reg("generate_image")
+        def generate_image(prompt: str, model: str = "", aspect: str = "",
+                           references: Optional[list[str]] = None,
+                           approve_usd: float = 0.0,
+                           project_id: Optional[int] = None) -> dict:
+            return _quoted(run_image, f"image {model or 'default'}", prompt=prompt,
+                           model=model, aspect=aspect, references=references,
+                           approve_usd=approve_usd, project_id=project_id)
+
+        @_reg("generate_video")
+        def generate_video(prompt: str, model: str = "", seconds: Optional[int] = None,
+                           frame: str = "", reference: str = "",
+                           approve_usd: float = 0.0,
+                           project_id: Optional[int] = None) -> dict:
+            return _quoted(run_video, f"video {model or 'default'}", prompt=prompt,
+                           model=model, seconds=seconds, frame=frame,
+                           reference=reference, approve_usd=approve_usd,
+                           project_id=project_id)
+
+        @_reg("apply_effect")
+        def apply_effect(effect: str, sources: Optional[list[str]] = None,
+                         prompt: str = "", options: Optional[dict] = None,
+                         approve_usd: float = 0.0,
+                         project_id: Optional[int] = None) -> dict:
+            return _quoted(run_effect, f"effect {effect}", effect=effect,
+                           sources=sources, prompt=prompt, options=options,
+                           approve_usd=approve_usd, project_id=project_id)
 
     @_reg("write_scene")
     def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,
@@ -1751,6 +2744,11 @@ def main(argv=None) -> int:
     parser.add_argument("--engine", action="store_true",
                         help=f"register the two tools that spend model credit "
                              f"(same as {ENGINE_ENV}=1)")
+    parser.add_argument("--surface", choices=SURFACES, default=None,
+                        help=f"studio (the default: images, video and effects, "
+                             f"quoted and approved in chat; no board) or board "
+                             f"(every tool -- what the research agent asks for). "
+                             f"{SURFACE_ENV} sets the default")
     args = parser.parse_args(argv)
 
     # .env is loaded HERE rather than at import: Claude Desktop launches
@@ -1770,6 +2768,15 @@ def main(argv=None) -> int:
     db.init_db(dsn)
     preprod.init(dsn)
     scout.init(dsn)
+    # ...and the ones `elements` and every reference check read (the
+    # characters / props tables) and `renders` lists. Without these a
+    # fresh database answered a photo ref with "Error executing tool"
+    # rather than "not one of your photos" (found running the studio
+    # surface over stdio, 2026-10-08).
+    from . import entities, projects, render_assets
+    entities.init(dsn)
+    render_assets.init(dsn)
+    projects.init(dsn)            # after preprod.init: it ALTERs shoot_concepts
 
     # The job registry, injected here for the same reason app/mcp_mount.py
     # injects it: a graph run takes minutes, and a tool call that blocks
@@ -1791,7 +2798,14 @@ def main(argv=None) -> int:
               "tools will run inline and may time out", file=sys.stderr)
         start_job = job_status = None
 
-    build_server(dsn=dsn, start_job=start_job, job_status=job_status).run("stdio")
+    # The STUDIO surface unless asked otherwise (2026-10-07, Mike's call):
+    # this is what Claude Desktop launches, and it is for making things,
+    # not for the board. A typo is the safe server, not a crash.
+    surface = args.surface or os.environ.get(SURFACE_ENV, "").strip() or "studio"
+    if surface not in SURFACES:
+        surface = "studio"
+    build_server(dsn=dsn, start_job=start_job, job_status=job_status,
+                 surface=surface).run("stdio")
     return 0
 
 

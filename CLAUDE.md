@@ -139,7 +139,17 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 # web app at /mcp when ZEROPAGE_MCP=1 AND ZEROPAGE_MCP_TOKEN is set (no
 # token = refused, never served open). Read/decide tools are always on;
 # ZEROPAGE_MCP_ENGINE=1 adds research + generate. See START_SERVER.md.
-venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
+venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
+# Since 2026-10-07 (Mike's call) the stdio default is the STUDIO surface:
+# generate_image / generate_video / apply_effect (src/effects.py: image edits,
+# Kling + PixVerse template effects, PixVerse camera moves, Topaz upscale/fps,
+# MMAudio sound), each quoted first and spent only after a yes in chat
+# (approve_usd), plus image_models / video_models / effects / elements /
+# renders / images_for / prompt_craft, and PROJECTS (projects / project /
+# project_chat / create_project / save_chat; project_id on a render files it there).
+# NO board tools. --surface board (or
+# ZEROPAGE_MCP_SURFACE=board) serves the full board; src/research_agent.py
+# asks for it by name. The Guide and the HTTP mount build the board surface.
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
 # THE MANUAL RENDER LANE — a clip that reaches a concept without an API render.
@@ -1544,8 +1554,11 @@ is yours, in Resolve, by hand.
   by door: the operator's static key reaches the full server exactly as
   before, a signed-in person reaches `build_server(listed=True)`, which
   registers `mcp_server.LISTED_TOOLS` only -- `board`, `idea`, `search`,
-  `capture`, `pick`, `shoot`, `archive`, `stats`, `elements`, `write_scene`,
-  `quote`, `approve`, `job`. Never the engine tools (whatever the flag says),
+  `capture`, `pick`, `shoot`, `archive`, `stats`, `projects`, `project`,
+  `project_chat`, `create_project`, `save_chat` (the project tools joined it
+  2026-10-08, Mike's call: a person's own rows, nothing spent), `elements`,
+  `write_scene`, `quote`, `approve`, `job` -- in `build_server`'s registration
+  order, which the mount's test compares. Never the engine tools (whatever the flag says),
   never the spark bank (`scout_findings` / `scout_bin` are SHARED tables and
   one person's directions must not be listed to another), never
   `images_for` / `reference` / `imagine_reference`. **Claude does the ideation
@@ -1590,6 +1603,60 @@ is yours, in Resolve, by hand.
   document is built off that same resource URI rather than `SITE_URL`, or the
   deployed document would publish a localhost resource and discovery would fail
   with nothing to read.
+  **THE STUDIO SURFACE (2026-10-07, Mike's calls).** What `python -m src.mcp_server`
+  serves by default -- what Claude Desktop launches -- is `build_server(surface="studio")`:
+  `mcp_server.STUDIO_TOOLS` only, for making things WITH Claude and never for the board
+  (nothing is captured, picked, archived, banked or written to a concept). Three spending
+  doors -- `generate_image` (fal.IMAGE_MODELS through `fal.generate_image_from_prompt`, the
+  composer's own door), `generate_video` (`fal.generate_from_prompt`, which gained the
+  caller's `duration` / `resolution` / `aspect_ratio`, a `source` label and `bank` for the
+  Assets wall) and `apply_effect` (`src/effects.py`) -- each go through
+  `mcp_server.approval_gate`: a call with no `approve_usd` returns the quote and spends
+  nothing, a price above `approve_usd` is refused, and only then does it run as a job with
+  the usual hold / cap / generations row / settle / Assets wall. On the studio surface they
+  are always on (the approval is the gate); on the board surface they sit behind the engine
+  flag; the listed server never has them. References are ids, never URLs, in ONE grammar
+  shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`
+  exactly as `elements` lists it (checked by `_allowed_refs`), or `candidate:<id>` from
+  `images_for`; a model's reference limit (`fal.image_max_refs`) is refused past, never
+  trimmed. **`src/effects.py`** is a dated table (checked 2026-10-07 against each fal
+  OpenAPI schema and model page): four image edits (Nano Banana edit, FLUX Kontext Pro,
+  Seedream 4 edit, Bria background removal), Kling (98 templates) and PixVerse v5 (154)
+  template effects, PixVerse 4.5 camera moves (20), Topaz upscale / frame rate and MMAudio
+  sound -- each row's input field, legal options (anything off-table is REFUSED, never
+  clamped) and price rule; a clip source is a `gen:` video measured by ffprobe before it is
+  priced, and one that cannot be measured is refused. Effects log under the image tool name
+  (`fal`), so they share the stills' cap. Left out because a price or input could not be
+  verified: lip sync, relight, RIFE/FILM, PixVerse 8s. **Projects reach it too (2026-10-08,
+  Mike's ask: make projects, revisit the ones made in the studio, pull their reference images
+  and chats).** `projects` lists the account's projects (`projects.list_projects`), `project`
+  reopens one -- brief, look, `learned` (its memory), its scenes, every reference photo those
+  scenes used (`projects.scene_refs`, each with the `ref` stored on the shot, its kind, label and
+  source page), its renders and the latest chat turns -- `project_chat` pages the history
+  (`projects.messages`, `before` = the oldest id held) and `create_project` makes one on the same
+  projects board the studio draws. **`save_chat` writes the conversation back** (same day, Mike's
+  ask): Claude passes the turns, `projects.append_turns` files them into `project_messages`
+  marked `via: mcp` (shown as `via` when read back; the studio's thread ignores the key and draws
+  them as ordinary turns, so the project's assistant picks the conversation up), at most 100 per
+  call, refusing a role other than user/assistant. It de-duplicates by the TAIL: the longest run
+  of the batch the history already ends with is skipped, so re-sending a conversation from its
+  start saves only what is new -- but a studio turn written in between breaks the run and a
+  re-send then repeats, a rule kept simple enough to predict. A project's scene refs join the reference grammar (`_project_refs`, read lazily, fails
+  CLOSED), and `project_id` on `generate_image` / `generate_video` / `apply_effect` files the
+  render under the project -- in the generations row's params and the Assets row's metadata,
+  NOT as a scene (that would be adding to the board) -- so `project` lists it on the next visit
+  and the Assets wall names the project (`api._project_of`, after the scene link). A project that
+  is not the caller's reads as "no project N" everywhere. All five project tools are on the
+  studio, board AND listed servers (the listed one since the same day, Mike's call; isolation is
+  tested through the real transport in `tests/test_mcp_mount.py`), and because the listed one is a
+  public door the writes and reads are bounded: `save_chat` takes at most 100 turns and 200,000
+  characters a call (`projects.SAVE_CHARS_MAX`), a `project_chat` page stops at 200,000
+  characters (`CHAT_PAGE_CHARS`, the rest left for the next page) and `project` shows the newest
+  50 scenes and 60 references. **The cost of the choice:** the
+  idea-agent skill drives BOARD tools, which Claude Desktop no longer has unless a second
+  server entry runs `--surface board`. The studio surface was ported onto main from the
+  stale `claude/remove-brands` branch on 2026-10-08; that branch's own `STILL_MODELS` image
+  table was not carried (main's `IMAGE_MODELS` is the one table).
   **"Connect to Claude" in the account menus (2026-10-08, Mike: "access the MCP
   from the studio page at the bottom near profile").** Both menus (the rail's
   profile row and the header avatar) share one `MenuTail` in `shell.tsx`, so
@@ -2485,8 +2552,9 @@ it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and t
 `research` / `generate` tools ask the same predicate. **Since 2026-10-08 every route that
 spends model text asks it too** (`api._create_gate`: the Guide, the brief draft, an element's
 describe, Direct / Polish, the canvas's Ground / Enhance / Run all, the scout, the evals, the
-cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`); a trial account can
-still think without limit until its credits go (BACKLOG #24, deferred). **The studio shows
+cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`). There is NO daily cap
+on model text, by Mike's call (2026-10-08): its cost goes into the plan prices, so a trial
+account can think without limit until its credits go (BACKLOG #24). **The studio shows
 credits, never dollars** (`tests/test_studio_shows_credits.py` guards it); a new open sign-up gets a one-time
 **100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
 everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.

@@ -932,3 +932,754 @@ def test_approve_runs_the_injected_bodies_and_translates_a_refusal(studio):
 def test_approve_is_absent_without_the_approve_bodies(tmp_db):
     names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db))}
     assert "quote" in names and "approve" not in names
+
+
+# ---------- the studio surface: generation only, everything approved (2026-10-07) ----------
+# Mike's call: the MCP Claude Desktop launches is for making images, video
+# and effects with Claude, never for adding to the board; and every one of
+# the three is quoted first and spent only after a yes in chat.
+
+BOARD_ONLY = {"board", "idea", "search", "capture", "pick", "shoot", "archive",
+              "add_spark", "write_scene", "quote", "tonight", "sparks", "images",
+              "reference", "imagine_reference", "stats", "research", "generate"}
+SPENDS = {"generate_image", "generate_video", "apply_effect"}
+
+
+def _job_status(i, account_id=None):
+    return None
+
+
+def test_the_studio_surface_has_no_board_tools(tmp_db, monkeypatch):
+    monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
+    server = mcp_server.build_server(dsn=tmp_db, surface="studio", job_status=_job_status)
+    names = {t.name for t in _tools(server)}
+    assert names == set(mcp_server.STUDIO_TOOLS)   # the spending doors need no engine flag
+    assert not names & BOARD_ONLY
+
+
+def test_the_studio_surface_ignores_the_engine_flag(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, surface="studio"))}
+    assert "research" not in names and "generate" not in names
+    assert SPENDS <= names
+
+
+def test_the_board_surface_keeps_every_tool(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, job_status=_job_status))}
+    assert set(mcp_server.STUDIO_TOOLS) <= names
+    assert (BOARD_ONLY - {"approve"}) <= names
+
+
+def test_the_board_spends_only_under_the_engine_flag(tmp_db, monkeypatch):
+    monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
+    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db))}
+    assert {"image_models", "video_models", "effects", "renders", "prompt_craft"} <= names
+    assert not names & SPENDS
+
+
+def test_the_listed_server_never_carries_the_studio_doors(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, listed=True))}
+    assert names <= set(mcp_server.LISTED_TOOLS)
+    assert not names & SPENDS
+
+
+@pytest.mark.parametrize("kwargs", [{"surface": "everything"},
+                                    {"surface": "studio", "listed": True}])
+def test_an_impossible_surface_is_refused(tmp_db, kwargs):
+    with pytest.raises(ValueError):
+        mcp_server.build_server(dsn=tmp_db, **kwargs)
+
+
+@pytest.mark.parametrize("argv, env, want", [
+    ([], None, "studio"),                              # what Claude Desktop gets
+    (["--surface", "board"], None, "board"),           # what the research agent asks for
+    ([], "board", "board"),
+    ([], "typo", "studio"),                            # a typo is the safe server
+])
+def test_main_serves_the_studio_surface_by_default(tmp_db, monkeypatch, argv, env, want):
+    captured = {}
+
+    class FakeServer:
+        def run(self, transport):
+            pass
+
+    monkeypatch.setattr(mcp_server, "build_server",
+                        lambda **kw: captured.update(kw) or FakeServer())
+    if env is None:
+        monkeypatch.delenv(mcp_server.SURFACE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(mcp_server.SURFACE_ENV, env)
+    mcp_server.main(["--db", str(tmp_db)] + argv)
+    assert captured["surface"] == want
+
+
+def test_the_research_agent_asks_for_the_board():
+    source = (Path(__file__).resolve().parent.parent / "src" / "research_agent.py").read_text()
+    assert '"--surface", "board"' in source
+
+
+def test_the_studio_instructions_carry_no_operator_vocabulary():
+    text = mcp_server.STUDIO_INSTRUCTIONS.lower()
+    for word in mcp_server.INTERNAL_WORDS:
+        assert word.lower() not in text, word
+    assert "approve_usd" in text
+
+
+# ---------- references by id ----------
+
+def _stub_sources(monkeypatch, assets=None, cands=None, photos=None, project_refs=None):
+    from src import asset_shelf, fal, imagesearch, projects, render_assets
+    monkeypatch.setattr(projects, "scene_refs",
+                        lambda dsn=None, account_id=None, project_id=None: [
+                            {"ref": r, "concept_ids": [1], "project_ids": [2]}
+                            for r in (project_refs or [])])
+    monkeypatch.setattr(render_assets, "get",
+                        lambda i, dsn=None, account_id=None: (assets or {}).get(i))
+    monkeypatch.setattr(imagesearch, "get", lambda c, dsn=None: (cands or {}).get(c))
+    monkeypatch.setattr(asset_shelf, "catalogue", lambda dsn=None, account_id=None: [
+        {"category": "character", "name": "Sam", "text": "",
+         "photos": list(photos if photos is not None else ["https://r2/s1.jpg", "https://r2/s2.jpg"])}])
+    monkeypatch.setattr(asset_shelf, "storable_ref", lambda url: "sam/" + url.rsplit("/", 1)[-1])
+    monkeypatch.setattr(asset_shelf, "fetch_url", lambda raw, acct=None: raw)
+    monkeypatch.setattr(fal, "as_image_url",
+                        lambda v, **kw: v if str(v).startswith("https://") else None)
+
+
+def test_references_resolve_by_id(monkeypatch):
+    _stub_sources(monkeypatch,
+                  assets={5: {"media_kind": "image", "media_url": "https://r2/a.png"}},
+                  cands={"c1": {"image_url": "https://r2/c.jpg", "source": "web"}})
+    refs = [p["ref"] for p in mcp_server.list_elements()["elements"][0]["photos"]]
+    assert refs == ["sam/s1.jpg", "sam/s2.jpg"]
+    out = mcp_server.resolve_references(["gen:5", refs[0], refs[1], "candidate:c1", "gen:5"],
+                                        limit=10, who="X")
+    assert out == ["https://r2/a.png", "https://r2/s1.jpg", "https://r2/s2.jpg",
+                   "https://r2/c.jpg"]
+
+
+@pytest.mark.parametrize("ref", [
+    "https://x/a.png", "file:///etc/passwd", "gen:99", "gen:6", "gen:7",
+    "sam/nobody.jpg", "element:character/sam", "candidate:nope", "junk",
+])
+def test_bad_references_are_refused(ref, monkeypatch):
+    _stub_sources(monkeypatch,
+                  assets={6: {"media_kind": "video", "media_url": "https://r2/v.mp4"},
+                          7: {"media_kind": "image", "media_url": "https://r2/d.png",
+                              "deleted_at": "x"}})
+    with pytest.raises(ValueError):
+        mcp_server.resolve_references([ref], limit=4, who="X")
+
+
+def test_reference_limits_are_enforced_before_spend(monkeypatch):
+    _stub_sources(monkeypatch)
+    with pytest.raises(ValueError, match="takes no reference"):
+        mcp_server.resolve_references(["sam/s1.jpg"], limit=0, who="FLUX 1.1 Pro")
+    with pytest.raises(ValueError, match="at most 1"):
+        mcp_server.resolve_references(["sam/s1.jpg", "sam/s2.jpg"], limit=1, who="X")
+    assert mcp_server.resolve_references([], limit=0, who="X") == []
+
+
+def test_an_unfetchable_reference_is_refused(monkeypatch):
+    _stub_sources(monkeypatch, assets={5: {"media_kind": "image", "media_url": "/local/a.png"}})
+    with pytest.raises(ValueError, match="fetchable"):
+        mcp_server.resolve_references(["gen:5"], limit=4, who="X")
+
+
+# ---------- images ----------
+
+def _stub_still(monkeypatch):
+    from src import fal
+    calls = []
+
+    def fake(prompt, **kw):
+        calls.append({"prompt": prompt, **kw})
+        return {"ok": True, "media_url": "https://x/y.jpg", "asset_id": 3}
+
+    monkeypatch.setattr(fal, "generate_image_from_prompt", fake)
+    return calls
+
+
+def test_image_models_projects_the_catalogue():
+    from src import fal
+    out = mcp_server.list_image_models()
+    assert [m["id"] for m in out["models"]] == list(fal.IMAGE_MODEL_NAMES)
+    assert out["default"] == fal.DEFAULT_IMAGE_MODEL and out["aspects"] == list(fal.IMAGE_SIZES)
+    limits = {m["id"]: m["max_references"] for m in out["models"]}
+    assert limits["flux-pro1.1"] == 0 and limits["gpt-image-2"] == 16
+
+
+def test_an_image_is_quoted_before_anything_is_spent(monkeypatch):
+    from src import fal
+    calls = _stub_still(monkeypatch)
+    out = mcp_server.run_image("a can", model="seedream4.5")
+    assert out["needs_approval"] is True and out["ok"] is False
+    assert out["quote"]["usd"] == fal.image_usd("seedream4.5")
+    assert f"approve_usd={out['quote']['usd']}" in out["note"]
+    with pytest.raises(ValueError, match="above the"):
+        mcp_server.run_image("a can", model="nano-banana-pro", approve_usd=0.08)
+    assert calls == []
+
+
+def test_an_approved_image_renders_the_chosen_model(monkeypatch):
+    calls = _stub_still(monkeypatch)
+    out = mcp_server.run_image("  a  can ", model="ideogram4.5", aspect="4:5", account_id=7,
+                               approve_usd=0.06)
+    (c,) = calls
+    assert c["prompt"] == "a can" and c["model"] == "ideogram4.5" and c["aspect"] == "4:5"
+    assert c["approved"] is True and c["account_id"] == 7
+    assert c["source"] == "mcp" and c["bank"] is True and c["reference_urls"] is None
+    assert out["ok"] and out["quote"]["usd"] == 0.06 and out["asset_id"] == 3
+
+
+def test_image_references_are_passed_and_priced(monkeypatch):
+    from src import fal
+    _stub_sources(monkeypatch)
+    calls = _stub_still(monkeypatch)
+    out = mcp_server.run_image("a can", model="flux2-pro", references=["sam/s1.jpg"],
+                               approve_usd=1)
+    assert calls[0]["reference_urls"] == ["https://r2/s1.jpg"]
+    assert out["quote"]["usd"] == fal.image_usd("flux2-pro", references=1) \
+        > fal.image_usd("flux2-pro")
+    with pytest.raises(ValueError, match="no reference"):
+        mcp_server.run_image("a can", model="flux-pro1.1", references=["sam/s1.jpg"])
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"prompt": "  "},
+    {"prompt": "a can", "model": "midjourney"},
+    {"prompt": "a can", "model": "flux2-pro", "aspect": "7:3"},
+])
+def test_run_image_refuses_instead_of_clamping(kwargs, monkeypatch):
+    calls = _stub_still(monkeypatch)
+    with pytest.raises(ValueError):
+        mcp_server.run_image(**kwargs, approve_usd=99)
+    assert calls == []
+
+
+# ---------- video ----------
+
+def _stub_render(monkeypatch):
+    from src import fal
+    calls = []
+
+    def fake(prompt, **kw):
+        calls.append({"prompt": prompt, **kw})
+        return {"ok": True, "media_url": "https://x/clip.mp4", "generation_id": 1}
+
+    monkeypatch.setattr(fal, "generate_from_prompt", fake)
+    return calls
+
+
+def test_video_models_projects_the_queues_menu():
+    from src import providers
+    out = mcp_server.list_video_models()
+    assert [m["id"] for m in out["models"]] == [m["id"] for m in providers.models_for("fal")]
+
+
+def test_a_clip_is_quoted_and_a_changed_length_is_caught(monkeypatch):
+    calls = _stub_render(monkeypatch)
+    out = mcp_server.run_video("a can on a table", model="ltx2.3", seconds=6)
+    assert out["needs_approval"] is True and out["quote"]["model"] == "ltx2.3"
+    short = out["quote"]["usd"]
+    assert short > 0 and f"approve_usd={short}" in out["note"]
+    with pytest.raises(ValueError, match="above the"):     # approved 6s, asked for 10s
+        mcp_server.run_video("a can", model="ltx2.3", seconds=10, approve_usd=short)
+    assert calls == []
+
+
+def test_an_approved_price_renders_the_chosen_model_and_length(monkeypatch):
+    calls = _stub_render(monkeypatch)
+    quote = mcp_server.run_video("a can", model="ltx2.3", seconds=6)["quote"]
+    monkeypatch.setattr(mcp_server, "resolve_references",
+                        lambda refs, **kw: ["https://x/still.png"] if refs else [])
+    out = mcp_server.run_video("a  can ", model="ltx2.3", seconds=6, reference="gen:12",
+                               approve_usd=quote["usd"], account_id=7)
+    assert out["ok"] and out["quote"]["from_image"] is True
+    (c,) = calls
+    assert c["model"] == "ltx2.3" and c["duration"] == 6 and c["prompt"] == "a can"
+    assert c["resolution"] == quote["frame"] and c["reference_image"] == "https://x/still.png"
+    assert c["approved"] is True and c["account_id"] == 7 and c["source"] == "mcp"
+    assert c["bank"] is True
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"prompt": "  "},
+    {"prompt": "a can", "model": "runway-gen4"},
+    {"prompt": "a can", "model": "ltx2.3", "seconds": 7},
+    {"prompt": "a can", "model": "ltx2.3", "frame": "144p"},
+    {"prompt": "a can", "reference": "https://x/a.png"},
+])
+def test_video_refuses_instead_of_clamping(kwargs, monkeypatch):
+    _stub_sources(monkeypatch)
+    calls = _stub_render(monkeypatch)
+    with pytest.raises(ValueError):
+        mcp_server.run_video(**kwargs, approve_usd=99)
+    assert calls == []
+
+
+def test_a_signed_in_caller_is_sent_to_the_queue(monkeypatch):
+    calls = _stub_render(monkeypatch)
+    token = mcp_server.CALLER_ACCOUNT.set(5)
+    try:
+        with pytest.raises(mcp_server.Refused, match="Queue"):
+            mcp_server.run_video("a can", model="ltx2.3", seconds=6, approve_usd=99)
+    finally:
+        mcp_server.CALLER_ACCOUNT.reset(token)
+    assert calls == []
+
+
+def test_the_tool_quotes_inline_and_runs_an_approval_as_a_job(tmp_db, monkeypatch):
+    """No approve_usd: the quote, no job. A bad approval: refused in the
+    request, before a job exists. A good one: a job id."""
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+    _stub_render(monkeypatch)
+    started = []
+
+    def start_job(kind, label, fn, account_id=None):
+        started.append(label)
+        return {"id": 41, "status": "running"}
+
+    server = mcp_server.build_server(dsn=tmp_db, surface="studio", start_job=start_job,
+                                     job_status=_job_status)
+    args = {"prompt": "a can", "model": "ltx2.3", "seconds": 6}
+    quote = _result(asyncio.run(server.call_tool("generate_video", args)))
+    assert quote["needs_approval"] is True and started == []
+    with pytest.raises(ToolError, match="above the"):
+        asyncio.run(server.call_tool("generate_video", {**args, "approve_usd": 0.01}))
+    assert started == []
+    out = _result(asyncio.run(server.call_tool(
+        "generate_video", {**args, "approve_usd": quote["quote"]["usd"]})))
+    assert out["job_id"] == 41 and started == ["video ltx2.3"]
+
+
+# ---------- effects ----------
+
+def _stub_effect(monkeypatch):
+    from src import effects
+    calls = []
+
+    def fake(effect, urls, prompt, opts, **kw):
+        calls.append({"effect": effect, "urls": urls, "prompt": prompt, "opts": opts, **kw})
+        return {"ok": True, "media_url": "https://x/fx.mp4", "asset_id": 9}
+
+    monkeypatch.setattr(effects, "run", fake)
+    return calls
+
+
+def test_effects_lists_the_catalogue_and_samples_long_enums():
+    from src import effects
+    out = mcp_server.list_effects()
+    assert [e["id"] for e in out["effects"]] == list(effects.EFFECT_NAMES)
+    kling = next(e for e in out["effects"] if e["id"] == "kling-effect")
+    scene = kling["options"]["effect_scene"]
+    assert scene["count"] == len(effects.KLING_EFFECTS) and len(scene["values"]) == effects.SAMPLE
+    full = mcp_server.list_effects(effect="kling-effect")["effects"][0]
+    assert full["options"]["effect_scene"]["values"] == list(effects.KLING_EFFECTS)
+    assert {e["category"] for e in mcp_server.list_effects(category="finish")["effects"]} == {"finish"}
+    with pytest.raises(ValueError):
+        mcp_server.list_effects(effect="explode-everything")
+
+
+def test_an_effect_is_quoted_then_run_at_the_approved_price(monkeypatch):
+    from src import effects
+    calls = _stub_effect(monkeypatch)
+    monkeypatch.setattr(mcp_server, "resolve_references",
+                        lambda refs, **kw: [f"https://r2/{r}.jpg" for r in refs])
+    args = dict(effect="kling-effect", sources=["gen:4"],
+                options={"effect_scene": "bullet_time_360", "duration": "10"})
+    q = mcp_server.run_effect(**args)
+    assert q["needs_approval"] and calls == []
+    assert q["quote"]["usd"] == round(0.056 * 10, 4)
+    assert q["quote"]["options"] == {"effect_scene": "bullet_time_360", "duration": "10"}
+    with pytest.raises(ValueError, match="above the"):
+        mcp_server.run_effect(**args, approve_usd=0.5)
+    out = mcp_server.run_effect(**args, approve_usd=q["quote"]["usd"])
+    assert out["ok"] and calls[0]["usd"] == q["quote"]["usd"]
+    assert calls[0]["urls"] == ["https://r2/gen:4.jpg"] and calls[0]["source"] == "mcp"
+    endpoint, body = effects.build_body("kling-effect", ["u"], "", calls[0]["opts"])
+    assert endpoint.endswith("/effects") and body["input_image_urls"] == ["u"]
+    assert body["effect_scene"] == "bullet_time_360" and body["duration"] == "10"
+
+
+@pytest.mark.parametrize("kwargs, match", [
+    ({"effect": "nope"}, "effect must be"),
+    ({"effect": "kling-effect", "sources": ["gen:1"]}, "needs `effect_scene`"),
+    ({"effect": "kling-effect", "sources": ["gen:1"],
+      "options": {"effect_scene": "made_up"}}, "not one of"),
+    ({"effect": "kling-effect", "sources": ["gen:1"],
+      "options": {"effect_scene": "heart_gesture"}}, "exactly 2"),
+    ({"effect": "pixverse-effect", "sources": ["gen:1"],
+      "options": {"effect": "Kiss", "duration": "8"}}, "not one of"),
+    ({"effect": "remove-background", "sources": ["gen:1"], "prompt": "make it pop"},
+     "takes no prompt"),
+    ({"effect": "flux-kontext-pro", "sources": ["gen:1"]}, "needs a prompt"),
+    ({"effect": "flux-kontext-pro", "sources": ["gen:1", "gen:2"], "prompt": "x"},
+     "exactly 1"),
+    ({"effect": "camera-move", "sources": ["gen:1"], "prompt": "x",
+      "options": {"camera_movement": "whip_pan", "speed": "fast"}}, "takes options"),
+    ({"effect": "upscale", "sources": ["gen:1"], "options": {"upscale_factor": 1}},
+     "without target_fps"),
+])
+def test_effect_refusals_happen_before_any_spend(monkeypatch, kwargs, match):
+    calls = _stub_effect(monkeypatch)
+    monkeypatch.setattr(mcp_server, "resolve_references", lambda refs, **kw: list(refs))
+    with pytest.raises(ValueError, match=match):
+        mcp_server.run_effect(**kwargs, approve_usd=100)
+    assert calls == []
+
+
+def test_a_finishing_pass_is_priced_off_the_measured_clip(monkeypatch):
+    from src import effects, render_assets
+    calls = _stub_effect(monkeypatch)
+    monkeypatch.setattr(render_assets, "get", lambda i, dsn=None, **kw: {
+        "id": i, "media_kind": "video", "media_url": "https://r2/c.mp4", "output_path": ""})
+    monkeypatch.setattr(effects, "probe_video",
+                        lambda t: {"seconds": 10.0, "width": 720, "height": 1280, "fps": 24.0})
+    q = mcp_server.run_effect("upscale", sources=["gen:3"])
+    # 1280 * 2 = 2560 tall out -> the >1080p band, $0.08/s, 24fps -> no doubling
+    assert q["quote"]["usd"] == 0.8 and q["quote"]["source_clip"]["seconds"] == 10.0
+    q60 = mcp_server.run_effect("upscale", sources=["gen:3"], options={"target_fps": 60})
+    assert q60["quote"]["usd"] == 1.6
+    snd = mcp_server.run_effect("add-sound", sources=["gen:3"], prompt="rain on tin")
+    assert snd["quote"]["usd"] == 0.01
+    _, body = effects.build_body("add-sound", ["u"], "rain on tin", {}, {"seconds": 10.0})
+    assert body["duration"] == 10 and body["video_url"] == "u"
+    assert calls == []
+
+
+def test_a_clip_source_must_be_a_render_on_the_wall(monkeypatch):
+    from src import render_assets
+    monkeypatch.setattr(render_assets, "get", lambda i, dsn=None, **kw: {
+        "id": i, "media_kind": "image", "media_url": "https://r2/a.png"})
+    for bad, match in [("https://x/y.mp4", "gen:<asset id>"),
+                       ("sam/s1.jpg", "gen:<asset id>"),
+                       ("gen:5", "takes a clip")]:
+        with pytest.raises(ValueError, match=match):
+            mcp_server.run_effect("upscale", sources=[bad])
+
+
+def test_add_sound_refuses_a_clip_past_thirty_seconds(monkeypatch):
+    from src import effects, render_assets
+    monkeypatch.setattr(render_assets, "get", lambda i, dsn=None, **kw: {
+        "id": i, "media_kind": "video", "media_url": "https://r2/c.mp4"})
+    monkeypatch.setattr(effects, "probe_video",
+                        lambda t: {"seconds": 31.0, "width": 720, "height": 1280, "fps": 24.0})
+    with pytest.raises(ValueError, match="up to 30s"):
+        mcp_server.run_effect("add-sound", sources=["gen:3"], prompt="wind")
+
+
+# ---------- renders and the prompt guides ----------
+
+def test_renders_lists_the_wall_as_ids(monkeypatch):
+    from src import media, render_assets
+    rows = [{"id": i, "media_kind": "video" if i % 2 else "image", "model": "m",
+             "provider": "P", "prompt": "x" * 300, "media_url": f"https://r2/{i}"}
+            for i in range(30, 0, -1)]
+    monkeypatch.setattr(render_assets, "list_all", lambda dsn=None, account_id=None: rows)
+    monkeypatch.setattr(media, "url_for", lambda url, account_id=None: url + "?minted")
+    out = mcp_server.list_renders(kind="image", limit=3, account_id=1)
+    assert [r["id"] for r in out["renders"]] == ["gen:30", "gen:28", "gen:26"]
+    assert out["renders"][0]["media_url"].endswith("?minted")
+    assert len(out["renders"][0]["prompt"]) == 160
+    assert len(mcp_server.list_renders(limit=1000, account_id=1)["renders"]) == 30
+    with pytest.raises(ValueError):
+        mcp_server.list_renders(kind="audio", account_id=1)
+
+
+def _shelf(monkeypatch, refs=None, ok=True):
+    from src import rag
+    monkeypatch.setattr(rag, "retrieve_references",
+                        lambda text, **kw: {"ok": ok, "references":
+                                            [{"source": "seedance.md", "chunk": c}
+                                             for c in refs or []],
+                                            "error": None if ok else "no key"})
+
+
+def test_refine_hands_back_the_studios_instruction_with_the_shelf(tmp_db, monkeypatch):
+    _shelf(monkeypatch, ["lead with the subject, then the camera"])
+    out = mcp_server.get_prompt_craft("refine", "(0-3s) a glove on a bench",
+                                      model="ltx2.3", dsn=tmp_db)
+    assert "(0-3s) a glove on a bench" in out["instruction"]
+    assert "lead with the subject" in out["instruction"] and out["references_found"] == 1
+
+
+def test_refine_survives_an_unreachable_shelf(tmp_db, monkeypatch):
+    _shelf(monkeypatch, ok=False)
+    out = mcp_server.get_prompt_craft("refine", "a glove on a bench", tool="LTX", dsn=tmp_db)
+    assert out["references_found"] == 0 and out["lookup_error"] == "no key"
+    assert "a glove on a bench" in out["instruction"]
+
+
+def test_the_other_steps_return_the_studios_rubrics(tmp_db):
+    assert mcp_server.get_prompt_craft("enhance", "x", dsn=tmp_db)["instruction"]
+    still = mcp_server.get_prompt_craft("still", "a push-in on a glove", dsn=tmp_db)
+    assert "STILL" in still["instruction"] and "a push-in on a glove" in still["instruction"]
+    beats = mcp_server.get_prompt_craft("beats", "tilt up", count=3, dsn=tmp_db)
+    assert "at most 3" in beats["instruction"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"step": "write", "prompt": "x"},
+    {"step": "refine", "prompt": ""},
+    {"step": "refine", "prompt": "x"},
+    {"step": "refine", "prompt": "x", "model": "runway-gen4"},
+])
+def test_prompt_craft_refuses_what_it_cannot_serve(kwargs, tmp_db, monkeypatch):
+    _shelf(monkeypatch)
+    with pytest.raises(ValueError):
+        mcp_server.get_prompt_craft(**kwargs, dsn=tmp_db)
+
+
+# ---------- projects from Claude (2026-10-08) ----------
+# Make a project here, reopen one made in the studio, and pull what it
+# already has: its scenes, the reference images they used, its renders and
+# its chat -- the same rows the studio's projects board draws.
+
+def _project_db(tmp_db, monkeypatch):
+    from src import projects, render_assets
+    projects.init(tmp_db)
+    render_assets.init(tmp_db)
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    return tmp_db
+
+
+def _scene_in(path, project_id, title, refs, **shot):
+    from src import projects
+    cid = preprod.save_concept(
+        {"title": title, "hook": "", "logline": "",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "desc": "d",
+                    "prompt": f"{title}: a woman lifts the lid", "refs": refs, **shot}]},
+        brand="zeropage", prompt_template="T", dsn=path, account_id=None)
+    if project_id is not None:
+        projects.tag_concepts([cid], project_id, path, account_id=None)
+    return cid
+
+
+def test_a_project_made_here_is_listed_and_reopened(tmp_db, monkeypatch):
+    path = _project_db(tmp_db, monkeypatch)
+    made = mcp_server.make_project("  Perfume   ad ", brief="gold, slow",
+                                   look="soft window light", dsn=path)
+    assert made["title"] == "Perfume ad" and "project_id=" in made["next"]
+    listed = mcp_server.list_project_cards(dsn=path)
+    assert [p["id"] for p in listed["projects"]] == [made["id"]]
+    card = listed["projects"][0]
+    assert card["has_look"] is True and card["brief"] == "gold, slow" and card["scenes"] == 0
+    opened = mcp_server.get_project(made["id"], dsn=path)
+    assert opened["look"] == "soft window light" and opened["brief"] == "gold, slow"
+    assert opened["scenes"] == opened["references"] == opened["renders"] == opened["chat"] == []
+    with pytest.raises(ValueError, match="needs a name"):
+        mcp_server.make_project("   ", dsn=path)
+    with pytest.raises(ValueError, match="no project"):
+        mcp_server.get_project(999999, dsn=path)
+
+
+def test_reopening_a_studio_project_brings_its_scenes_references_renders_and_chat(
+        tmp_db, monkeypatch):
+    from src import projects, render_assets
+    path = _project_db(tmp_db, monkeypatch)
+    project = projects.create("Ghost can", "an energy drink ad", path, account_id=None)
+    pid = project["id"]
+    first = _scene_in(path, pid, "first", ["/refs/aaa.jpg", "/characters/sam/photo/face.jpg"],
+                      reference_image="https://r2/still.png")
+    second = _scene_in(path, pid, "second", ["/refs/aaa.jpg", "/refs/bbb.jpg"],
+                       media_url="https://r2/clip.mp4")
+    _scene_in(path, None, "elsewhere", ["/refs/zzz.jpg"])
+    on_scene = render_assets.record(
+        generation_id=1, tool="fal", model="ltx2.3", media_kind="video", prompt="p",
+        media_url="https://r2/clip.mp4", concept_id=second, dsn=path, account_id=None)
+    filed = render_assets.record(
+        generation_id=2, tool="fal", model="flux2-pro", media_kind="image",
+        prompt="made in chat", media_url="https://r2/f.png",
+        metadata={"project_id": pid}, dsn=path, account_id=None)
+    render_assets.record(generation_id=3, tool="fal", model="flux2-pro", media_kind="image",
+                         prompt="no project", media_url="https://r2/other.png",
+                         dsn=path, account_id=None)
+    for i in range(15):
+        projects.append_message(pid, "user" if i % 2 == 0 else "assistant",
+                                f"turn {i:02d} " + ("x" * 2000 if i == 14 else ""),
+                                path, account_id=None,
+                                tool_calls={"brief": "b"} if i == 13 else None)
+    monkeypatch.setattr(mcp_server.scout, "sources_for_refs", lambda names, dsn=None: {
+        "bbb.jpg": {"source_url": "https://example.com/page", "title": "a can on ice"}})
+
+    out = mcp_server.get_project(pid, dsn=path)
+    assert {s["title"] for s in out["scenes"]} == {"first", "second"}
+    refs = {r["ref"]: r for r in out["references"]}
+    assert list(refs) == ["/refs/aaa.jpg", "/characters/sam/photo/face.jpg", "/refs/bbb.jpg"]
+    assert refs["/refs/aaa.jpg"]["scenes"] == [first, second]
+    assert refs["/refs/bbb.jpg"]["page"] == "https://example.com/page"
+    assert refs["/refs/bbb.jpg"]["label"] == "a can on ice"
+    assert refs["/characters/sam/photo/face.jpg"]["kind"] == "character"
+    assert {r["id"] for r in out["renders"]} == {f"gen:{on_scene['id']}", f"gen:{filed['id']}"}
+    assert len(out["chat"]) == mcp_server.CHAT_PREVIEW and out["chat_has_more"] is True
+    assert out["chat"][-1]["truncated"] is True
+    assert len(out["chat"][-1]["content"]) == mcp_server.CHAT_EXCERPT
+    assert out["chat"][-2]["carried"] == ["brief"]
+
+    page = mcp_server.project_history(pid, limit=10, dsn=path)
+    assert [t["content"][:7] for t in page["turns"]] == [f"turn {i:02d}" for i in range(5, 15)]
+    assert page["has_more"] is True and len(page["turns"][-1]["content"]) > 2000
+    older = mcp_server.project_history(pid, before=page["next_before"], limit=10, dsn=path)
+    assert [t["content"][:7] for t in older["turns"]] == [f"turn {i:02d}" for i in range(5)]
+    assert older["has_more"] is False
+
+
+def test_another_accounts_project_cannot_be_read_or_filed_into(pg):
+    from conftest import seed_two
+
+    from src import accounts, projects
+    preprod.init(pg)
+    scout.init(pg)
+    projects.init(pg)
+    seed_two("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        other = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+    mine = accounts.resolve_account(dsn=pg)
+    theirs = projects.create("Theirs", "", pg, account_id=other)
+    projects.append_message(theirs["id"], "user", "a secret", pg, account_id=other)
+    assert mcp_server.list_project_cards(dsn=pg, account_id=mine)["projects"] == []
+    for call in (lambda: mcp_server.get_project(theirs["id"], dsn=pg, account_id=mine),
+                 lambda: mcp_server.project_history(theirs["id"], dsn=pg, account_id=mine),
+                 lambda: mcp_server.run_image("a can", model="seedream4.5",
+                                              project_id=theirs["id"], dsn=pg,
+                                              account_id=mine)):
+        with pytest.raises(ValueError, match="no project"):
+            call()
+
+
+def test_a_projects_references_can_be_used_again(monkeypatch):
+    _stub_sources(monkeypatch, project_refs=["https://r2/old.jpg"])
+    assert mcp_server.resolve_references(["https://r2/old.jpg", "sam/s1.jpg"], limit=4,
+                                         who="X") == ["https://r2/old.jpg", "https://r2/s1.jpg"]
+    with pytest.raises(ValueError, match="not a reference id"):
+        mcp_server.resolve_references(["https://r2/never-used.jpg"], limit=4, who="X")
+
+
+def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypatch):
+    path = _project_db(tmp_db, monkeypatch)
+    project = mcp_server.make_project("Ad", dsn=path)
+    pid = project["id"]
+    stills, clips, fx = _stub_still(monkeypatch), _stub_render(monkeypatch), _stub_effect(monkeypatch)
+    quote = mcp_server.run_image("a can", model="seedream4.5", project_id=pid, dsn=path)
+    assert quote["quote"]["project"] == {"id": pid, "title": "Ad"}
+    mcp_server.run_image("a can", model="seedream4.5", project_id=pid, approve_usd=0.04, dsn=path)
+    assert stills[0]["project_id"] == pid
+    price = mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
+                                 dsn=path)["quote"]["usd"]
+    mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
+                         approve_usd=price, dsn=path)
+    assert clips[0]["project_id"] == pid
+    monkeypatch.setattr(mcp_server, "resolve_references", lambda refs, **kw: list(refs))
+    mcp_server.run_effect("remove-background", sources=["gen:1"], project_id=pid,
+                          approve_usd=1, dsn=path)
+    assert fx[0]["project_id"] == pid
+    with pytest.raises(ValueError, match="no project 999999"):
+        mcp_server.run_image("a can", model="seedream4.5", project_id=999999, dsn=path)
+    assert len(stills) == 1
+
+
+def test_the_project_tools_are_on_every_surface(tmp_db, monkeypatch):
+    """Studio, board and -- since 2026-10-08, Mike's call -- the listed
+    server: a person's projects are their own rows."""
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    tools = {"projects", "project", "project_chat", "create_project", "save_chat"}
+    for kwargs in ({"surface": "studio"}, {}, {"listed": True}):
+        names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, **kwargs))}
+        assert tools <= names, kwargs
+    assert tools <= set(mcp_server.LISTED_TOOLS)
+
+
+def test_save_chat_files_the_conversation_and_reopening_shows_it(tmp_db, monkeypatch):
+    path = _project_db(tmp_db, monkeypatch)
+    pid = mcp_server.make_project("Ghost can", dsn=path)["id"]
+    turns = [{"role": "user", "content": "make it colder"},
+             {"role": "assistant", "content": "Here is a colder still."}]
+    out = mcp_server.save_project_chat(pid, turns, dsn=path)
+    assert out["saved"] == 2 and out["title"] == "Ghost can" and "saved" in out["note"]
+    again = mcp_server.save_project_chat(pid, turns, dsn=path)
+    assert again["saved"] == 0 and "nothing new" in again["note"]
+    chat = mcp_server.get_project(pid, dsn=path)["chat"]
+    assert [(t["role"], t["content"], t["via"]) for t in chat] == [
+        ("user", "make it colder", "mcp"), ("assistant", "Here is a colder still.", "mcp")]
+    assert "carried" not in chat[0]
+    page = mcp_server.project_history(pid, dsn=path)
+    assert [t["via"] for t in page["turns"]] == ["mcp", "mcp"]
+    with pytest.raises(ValueError, match="no turns"):
+        mcp_server.save_project_chat(pid, [], dsn=path)
+    with pytest.raises(ValueError, match="no project"):
+        mcp_server.save_project_chat(999999, turns, dsn=path)
+
+
+def test_save_chat_through_the_tool_on_the_studio_and_listed_servers(tmp_db, monkeypatch):
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+    path = _project_db(tmp_db, monkeypatch)
+    pid = mcp_server.make_project("Tool", dsn=path)["id"]
+    server = mcp_server.build_server(dsn=path, surface="studio")
+    out = _result(asyncio.run(server.call_tool("save_chat", {
+        "project_id": pid, "turns": [{"role": "user", "content": "hello"}]})))
+    assert out["saved"] == 1
+    with pytest.raises(ToolError):
+        asyncio.run(server.call_tool("save_chat", {
+            "project_id": pid, "turns": [{"role": "system", "content": "x"}]}))
+    listed = mcp_server.build_server(dsn=path, listed=True)
+    out = _result(asyncio.run(listed.call_tool("save_chat", {
+        "project_id": pid, "turns": [{"role": "assistant", "content": "hi back"}]})))
+    assert out["saved"] == 1
+    assert [t["content"] for t in mcp_server.project_history(pid, dsn=path)["turns"]] == [
+        "hello", "hi back"]
+
+
+def test_another_accounts_project_takes_no_chat(pg):
+    from conftest import seed_two
+
+    from src import accounts, projects
+    preprod.init(pg)
+    scout.init(pg)
+    projects.init(pg)
+    seed_two("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        other = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+    mine = accounts.resolve_account(dsn=pg)
+    theirs = projects.create("Theirs", "", pg, account_id=other)
+    with pytest.raises(ValueError, match="no project"):
+        mcp_server.save_project_chat(theirs["id"], [{"role": "user", "content": "x"}],
+                                     dsn=pg, account_id=mine)
+    assert projects.messages(theirs["id"], pg, account_id=other)["items"] == []
+
+
+def test_a_long_chat_page_stops_before_it_is_too_big_to_carry(tmp_db, monkeypatch):
+    from src import projects
+    path = _project_db(tmp_db, monkeypatch)
+    pid = mcp_server.make_project("Long", dsn=path)["id"]
+    monkeypatch.setattr(mcp_server, "CHAT_PAGE_CHARS", 250)
+    for i in range(6):
+        projects.append_message(pid, "user", f"{i}" + "x" * 99, path, account_id=None)
+    page = mcp_server.project_history(pid, limit=6, dsn=path)
+    assert [t["content"][0] for t in page["turns"]] == ["4", "5"]
+    assert page["has_more"] is True
+    rest = mcp_server.project_history(pid, before=page["next_before"], limit=6, dsn=path)
+    assert [t["content"][0] for t in rest["turns"]] == ["2", "3"] and rest["has_more"]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"listed": True}, {"surface": "studio"}])
+def test_every_surface_builds_under_python_3_11s_rules(tmp_db, monkeypatch, kwargs):
+    """The Fly image runs Python 3.11, where pydantic refuses a
+    `typing.TypedDict` in a tool's arguments -- and a server that fails to
+    build leaves /mcp unmounted in production (2026-10-08, after #165) while
+    CI on 3.12 stays green. So every surface is built here with pydantic
+    answering as it does on 3.11, every optional tool registered."""
+    import pydantic._internal._generate_schema as schema
+    monkeypatch.setattr(schema, "_SUPPORTS_TYPEDDICT", False)
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(
+        dsn=tmp_db, job_status=lambda i, account_id=None: None,
+        approve_render=lambda *a: {}, approve_keyframes=lambda *a: {}, **kwargs)
+    names = {t.name for t in _tools(server)}
+    assert "save_chat" in names and "job" in names
