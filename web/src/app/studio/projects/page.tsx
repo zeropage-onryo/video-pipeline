@@ -77,6 +77,11 @@ export default function ProjectsBoard() {
         if (mine === seq.current) setError(e instanceof Error ? e.message : "Projects unavailable");
       });
   };
+  // an Undo pressed later re-reads the shelf showing when it is pressed
+  const latestLoad = useRef(() => load());
+  useEffect(() => {
+    latestLoad.current = () => load();
+  });
   useEffect(() => {
     if (!me) return; // the shell has not said who this is yet
     load();
@@ -94,7 +99,16 @@ export default function ProjectsBoard() {
     setBusy((b) => ({ ...b, [p.id]: true }));
     try {
       await archiveProject(p.id, !p.archived);
-      toast(p.archived ? `“${p.title}” is back on the board` : `“${p.title}” archived — nothing in it was deleted`);
+      toast(p.archived ? `“${p.title}” is back on the board` : `“${p.title}” archived — nothing in it was deleted`, "ok", {
+        action: {
+          label: "Undo",
+          run: () =>
+            archiveProject(p.id, p.archived).then(() => {
+              toast(p.archived ? `“${p.title}” archived — nothing in it was deleted` : `“${p.title}” is back on the board`);
+              latestLoad.current();
+            }),
+        },
+      });
       load();
     } catch (e) {
       toast(e instanceof Error ? e.message : "That did not go through", "err");

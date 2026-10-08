@@ -434,9 +434,9 @@ def test_image_models_is_a_projection_of_the_keys_on_file(client, monkeypatch):
     monkeypatch.setenv("FAL_KEY", "k")
     body = client.get("/api/image-models").json()
     assert [i["id"] for i in body["items"]] == ["nano", *fal.IMAGE_MODELS]
-    seedream = next(i for i in body["items"] if i["id"] == "seedream4")
+    seedream = next(i for i in body["items"] if i["id"] == "seedream4.5")
     assert seedream["provider"] == "fal" and seedream["references"] is True
-    assert seedream["credits"] == pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4")))
+    assert seedream["credits"] == pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4.5")))
 
 
 def test_the_composers_image_door_draws_on_the_picked_fal_model(client, studio, monkeypatch):
@@ -457,7 +457,7 @@ def test_the_composers_image_door_draws_on_the_picked_fal_model(client, studio, 
     monkeypatch.setattr(genai_mod, "Client", lambda api_key=None: object())
     _fund(studio)
     form = {"prompt": "a still", "output": "image", "brand": "zeropage",
-            "image_model": "seedream4", "aspect": "4:5"}
+            "image_model": "seedream4.5", "aspect": "4:5"}
     # no fal key: refused before the job, no enhance paid for
     monkeypatch.delenv("FAL_KEY", raising=False)
     res = client.post("/api/generate/run", data=form)
@@ -469,7 +469,7 @@ def test_the_composers_image_door_draws_on_the_picked_fal_model(client, studio, 
     assert res.status_code == 200, res.text
     job = _wait(client, res.json()["job_id"])
     assert job["status"] == "done", job
-    assert seen["prompt"] == "ENHANCED" and seen["model"] == "seedream4"
+    assert seen["prompt"] == "ENHANCED" and seen["model"] == "seedream4.5"
     assert seen["aspect"] == "4:5" and seen["approved"] is True
     assert seen["account_id"] == studio["account_id"]
-    assert "Seedream 4.0" in job["detail"]
+    assert "Seedream 4.5" in job["detail"]

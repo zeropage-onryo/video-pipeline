@@ -105,10 +105,21 @@ export type Asset = {
    is both -- the server's default, kept for the one caller that needs a
    generated id to resolve (the composer's ?attach= handoff). */
 export type AssetScope = "all" | "elements" | "generated";
+/* Elements deleted on a page whose DELETE is held behind the toast's Undo
+   (element-sheet.tsx useElementDelete, 2026-10-08): the server still has
+   them until the toast closes, so every listing read in that window leaves
+   them out here, in the one place the pages read elements from. */
+const heldDeletes = new Set<string>();
+export const holdElementDelete = (id: string, held: boolean) => {
+  if (held) heldDeletes.add(id);
+  else heldDeletes.delete(id);
+};
 export const getAssets = (q?: string, scope: AssetScope = "elements") => {
   const params = new URLSearchParams({ scope });
   if (q) params.set("q", q);
-  return apiFetch<{ items: Asset[] }>(`/assets?${params}`);
+  return apiFetch<{ items: Asset[] }>(`/assets?${params}`).then((r) =>
+    heldDeletes.size ? { ...r, items: r.items.filter((a) => !heldDeletes.has(a.id)) } : r,
+  );
 };
 
 export type AssetHit = { name: string; category: AssetCategory; thumb: string | null };
@@ -222,12 +233,16 @@ export const getMedia = (f: MediaFilter = {}) => {
   return apiFetch<MediaWall>(`/media?${params}`);
 };
 /** DELETE /api/assets/{characters|props|locations}/{id} — an element. */
-export const deleteAsset = (kind: "characters" | "props" | "locations", id: number) =>
-  apiFetch<{ deleted: number }>(`/assets/${kind}/${id}`, { method: "DELETE" });
+export const deleteAsset = (kind: "characters" | "props" | "locations", id: number, init?: RequestInit) =>
+  apiFetch<{ deleted: number }>(`/assets/${kind}/${id}`, { ...init, method: "DELETE" });
 /** DELETE /api/assets/generated/{id} — a SOFT delete: off the wall and
  *  the RAG shelf, the file and the row stay. */
 export const deleteGenerated = (id: number) =>
   apiFetch<{ deleted: number }>(`/assets/generated/${id}`, { method: "DELETE" });
+/** POST /api/assets/generated/{id}/restore — the Undo on deleteGenerated:
+ *  back on the wall and the shelf. 404 when it was not removed. */
+export const restoreGenerated = (id: number) =>
+  apiFetch<{ restored: number }>(`/assets/generated/${id}/restore`, { method: "POST", body: "{}" });
 /** PATCH /api/assets/generated/{id} — folder and/or star. A field left
  *  out is left alone; folder "" clears it. */
 export const organizeGenerated = (id: number, body: { folder?: string; starred?: boolean }) =>
@@ -459,8 +474,8 @@ export const queueQuote = (id: number, choice: RenderChoice) => {
 export const queueReject = (id: number) =>
   apiFetch<{ ok: boolean }>(`/queue/${id}/reject`, { method: "POST", body: "{}" });
 /** made by hand, outside the render lane — drops it off the pending list */
-export const queueShot = (id: number) =>
-  apiFetch<{ ok: boolean }>(`/queue/${id}/shot`, { method: "POST", body: JSON.stringify({ shot: true }) });
+export const queueShot = (id: number, shot = true) =>
+  apiFetch<{ ok: boolean }>(`/queue/${id}/shot`, { method: "POST", body: JSON.stringify({ shot }) });
 /* ── the manual import lane (operator-gated server-side; the `manual_lane`
    capability only says whether to draw the section): a clip rendered
    anywhere, dropped on its card and filed free ── */

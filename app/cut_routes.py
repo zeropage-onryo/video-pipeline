@@ -541,6 +541,18 @@ def cut_project_delete(project_id: str, account_id: int = Depends(auth.current_a
     return {"ok": True}
 
 
+@router.post("/projects/{project_id}/restore")
+def cut_project_restore(project_id: str, account_id: int = Depends(auth.current_account_id)):
+    """The Undo on a removed project (2026-10-08). 409 `taken` when its
+    scene's cut was opened again since -- that project is the same history."""
+    row, why = cut_store.restore_project(project_id, account_id=account_id)
+    if why == "taken":
+        return _error(409, "taken", "this scene's cut is already open as another project")
+    if row is None:
+        return _error(404, "not_found", f"no removed project {project_id}")
+    return {"project": _project_card(row, account_id)}
+
+
 class OpBody(BaseModel):
     base_id: int
     op: str = Field(min_length=1, max_length=40)

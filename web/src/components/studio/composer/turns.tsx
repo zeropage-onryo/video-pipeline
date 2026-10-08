@@ -20,6 +20,7 @@ import { sceneHref } from "@/lib/studio-api";
 import { cssAspect, isMake, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
+import { TypedText } from "@/components/studio/typed-text";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -202,6 +203,7 @@ export function ComposerStream({
   live,
   choices,
   working,
+  writing = "",
   handlers,
 }: {
   turns: Turn[];
@@ -211,6 +213,8 @@ export function ComposerStream({
   choices: string[];
   /** the Guide is answering: its detail line, drawn as a working row */
   working: string | null;
+  /** its answer so far, as the model writes it (the job's `partial`) */
+  writing?: string;
   handlers: Handlers;
 }) {
   const still = useReducedMotion();
@@ -298,6 +302,17 @@ export function ComposerStream({
           </motion.article>
         ))}
       </AnimatePresence>
+      {working !== null && writing.trim() ? (
+        // the answer being written, on the left where it will land; the turn
+        // that lands replaces it with the same words, so it is hidden from a
+        // screen reader (this stream is a live region and would read every
+        // few characters)
+        <div className="zc-reply zc-typing" aria-hidden>
+          <p>
+            <TypedText text={writing.trim()} caret="zc-caret" />
+          </p>
+        </div>
+      ) : null}
       {working !== null ? (
         <div className="zc-working" role="status">
           <span className="zc-live" aria-hidden /> {working || "Thinking…"}

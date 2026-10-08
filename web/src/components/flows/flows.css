@@ -1,17 +1,11 @@
 /* The Director canvas, in the ZPF tokens (the "ZPF Gen Space" design):
    red-edged cards on a dot grid, Inter body, JetBrains Mono labels. The
-   workspace fills the shell's stage under the bar. */
+   workspace fills the shell's stage under the bar. Its colours are the
+   studio palette (studio.css :root, 2026-10-08) -- this file used to carry
+   its own copy of it; only the node's two roles are its own. */
 .flows-workspace {
-  --void: #040405;
-  --line: rgb(255 255 255 / 0.08);
-  --line-hi: rgb(255 255 255 / 0.2);
-  --text: #f4f3f2;
-  --dim: #8e8c8a;
-  --dimmer: #55534f;
-  --signal: #e4002b;
-  --signal-soft: rgb(228 0 43 / 0.12);
   --node-bg: rgb(14 14 17 / 0.92);
-  --node-line: rgb(228 0 43 / 0.4);
+  --node-line: color-mix(in srgb, var(--signal) 40%, transparent);
   --mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
   --body: var(--font-inter), "Inter", -apple-system, sans-serif;
   position: absolute;
@@ -152,7 +146,7 @@
   color: var(--dim);
 }
 .flow-breadcrumb select option {
-  background: #141417;
+  background: var(--panel);
 }
 .flow-top-actions {
   margin-left: auto;
@@ -175,7 +169,7 @@
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: #5fd08a;
+  background: var(--ok);
 }
 .pill-btn {
   height: 34px;
@@ -203,7 +197,7 @@
   background: rgb(255 255 255 / 0.08);
 }
 .queue-btn.lit {
-  border-color: rgb(228 0 43 / 0.5);
+  border-color: color-mix(in srgb, var(--signal) 50%, transparent);
   background: var(--signal-soft);
 }
 .queue-btn.wide {
@@ -303,21 +297,21 @@
   width: 380px;
 }
 .flow-card.kind-video {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .flow-card.is-selected {
   box-shadow:
-    0 0 0 1px rgb(228 0 43 / 0.7),
+    0 0 0 1px color-mix(in srgb, var(--signal) 70%, transparent),
     0 30px 80px -40px rgb(0 0 0 / 0.9);
 }
 .flow-card.is-busy {
-  border-color: rgb(228 0 43 / 0.75);
+  border-color: color-mix(in srgb, var(--signal) 75%, transparent);
 }
 .flow-card.is-done {
   border-color: rgb(95 208 138 / 0.45);
 }
 .flow-card.is-failed {
-  border-color: rgb(228 0 43 / 0.9);
+  border-color: color-mix(in srgb, var(--signal) 90%, transparent);
 }
 .node-header {
   height: 44px;
@@ -439,7 +433,7 @@
   font-weight: 600;
   font-size: 12.5px;
   padding: 0 14px;
-  box-shadow: 0 6px 22px -12px rgb(228 0 43 / 0.9);
+  box-shadow: 0 6px 22px -12px color-mix(in srgb, var(--signal) 90%, transparent);
 }
 .flow-card .pri:hover {
   filter: brightness(1.1);
@@ -470,7 +464,7 @@
   overflow: hidden;
   border-radius: 10px;
   border: 1px solid rgb(255 255 255 / 0.06);
-  background: #0d0d0f;
+  background: var(--well);
   display: grid;
   place-items: center;
 }
@@ -590,7 +584,7 @@
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.06);
-  background: #0d0d0f;
+  background: var(--well);
 }
 .element-frames.wide .element-frame {
   aspect-ratio: 4 / 3;
@@ -655,7 +649,7 @@
   width: 11px;
   height: 11px;
   border-radius: 999px;
-  border: 2px solid #08080a;
+  border: 2px solid var(--void);
   background: var(--dim);
   transition:
     transform 180ms,
@@ -667,10 +661,10 @@
   background: var(--signal);
 }
 .flow-card .react-flow__handle.port-image {
-  background: #f4f3f2;
+  background: var(--text);
 }
 .flow-card .react-flow__handle.port-images {
-  background: rgb(228 0 43 / 0.85);
+  background: color-mix(in srgb, var(--signal) 85%, transparent);
 }
 .flow-card .react-flow__handle-left {
   left: -7px;
@@ -902,7 +896,7 @@
 }
 .template-list button:hover,
 .template-list button.selected {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .template-list img {
   width: 64px;
@@ -1123,7 +1117,7 @@
   height: 26px;
   border-radius: 7px;
   flex: none;
-  background: #141417 center/cover;
+  background: var(--panel) center/cover;
   border: 1px solid var(--line);
 }
 .gs-prompt .mention .mcat {
@@ -1218,7 +1212,7 @@
   width: min(440px, calc(100% - 48px));
   padding: 26px;
   border-radius: 20px;
-  border: 2px solid rgb(228 0 43 / 0.4);
+  border: 2px solid color-mix(in srgb, var(--signal) 40%, transparent);
   background: rgb(14 14 17 / 0.98);
   box-shadow: 0 50px 140px -50px rgb(0 0 0 / 0.95);
 }
@@ -1256,7 +1250,7 @@
 .flow-modal > div > button:hover,
 .flow-modal > div > a:hover {
   color: var(--text);
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .modal-close {
   position: absolute;

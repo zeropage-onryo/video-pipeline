@@ -1951,6 +1951,30 @@ is yours, in Resolve, by hand.
   `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
   `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
   still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
+- **The studio's chrome: one palette and a toast stack with Undo (2026-10-08, the front-end gap
+  list vs LTX / invideo, items 6, 17, 18, 20; its item 22, credits everywhere, landed as #166).**
+  **One palette**, on `:root` at
+  the top of `web/src/app/studio/studio.css` -- the signal (`--signal` #e4002b, `--signal-hi` for
+  red TEXT, `--signal-deep`, `--signal-soft`, `--signal-wash`), surfaces (`--void` .. `--slate`),
+  opaque edges (`--edge-lo/--edge/--edge-hi`), ink (`--text`, `--bone*`, `--dim*`), `--ok`/`--warn`.
+  `:root`, not `.zps`, because Base UI portals mount on `<body>` (which is why the credit pill
+  and `.cx-portal` had carried copies); only COLOURS live there -- the font tokens need next/font
+  variables that exist on the studio wrapper alone. `globals.css` maps the Tailwind
+  `noir-*`/`bone*`/`gate-*` colours onto it (noir-red IS the signal now; the cards' #e23b2e and
+  the pill's #d10024 are gone), `flows.css` and `.cx-portal` dropped their copies, and the
+  composer's `--zc-*` roles name palette tokens. A new colour goes in the palette, never a hex in
+  a rule. `.cx`'s `--cx-*` editor palette (track colours, Resolve-cool panels) is deliberately its
+  own. **The toast stack** (`shell.tsx`): up to 4, top-centre under the header (the bottom edge
+  is the pill's, the composer hint's and the job rail's), each on its own timer (held on hover),
+  dismissible, and `toast(text, kind, {action, onClose})`. Undo is the server's INVERSE route
+  where the change is soft -- archive (`archived:false`), Queue reject (un-archive, then re-pick
+  if it was picked), mark-shot (`shot:false`), project archive, and the two restore routes added
+  for it, `POST /api/assets/generated/{id}/restore` (`render_assets.restore`, back on the wall
+  AND the shelf) and `POST /api/cut/projects/{id}/restore` (409 `taken` when the scene's cut was
+  opened again since). An ELEMENT delete is a hard DELETE, so it is HELD instead
+  (`element-sheet.useElementDelete`): off the page now, `getAssets` leaves it out of any listing
+  read meanwhile, the DELETE goes when the toast closes or the page is left (`pagehide`,
+  keepalive), and Undo means nothing was ever sent.
 - **`src/projects.py`** + **`src/project_context.py`** — studio PROJECTS (2026-09-28, Mike's
   call, the day ANTIHERO was merged into Zero Page): one brief and one memory per piece of
   work (a client's ad, a short). `projects` is OWNED; `shoot_concepts.project_id` files a
@@ -2058,10 +2082,11 @@ is yours, in Resolve, by hand.
   and the conversation the brain reads says what each make produced. The draft's `mode`
   is stored and read by nothing.
   **Images come from fal too (same day, Mike's call).** `fal.IMAGE_MODELS` is six
-  models (FLUX 1.1 Pro, FLUX.2 Pro, Nano Banana Pro through fal, Seedream 4.0, GPT Image 2
+  models (FLUX 1.1 Pro, FLUX.2 Pro, Nano Banana Pro through fal, Seedream 4.5, GPT Image 2
   under the `openai/` namespace -- three named sizes priced each, `quality` sent as medium
   since fal's default is high at four times the price, up to 16 references -- and Ideogram
-  3), each with its text endpoint, an `edit` endpoint when it takes references
+  4.5; Seedream 4.0 and Ideogram 3 were replaced by their 4.5s on 2026-10-08, Mike's call,
+  Seedream's frames sent doubled because 4.5 refuses under ~3.7 MP), each with its text endpoint, an `edit` endpoint when it takes references
   (`image_urls`), how it wants the frame (`size`: wh / aspect / enum), a dated price and
   a source URL. `GET /api/image-models` is the composer's picker, a PROJECTION: Nano
   Banana on the Gemini key plus fal's table when `FAL_KEY` is set, with credits per still.

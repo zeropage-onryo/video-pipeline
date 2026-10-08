@@ -65,9 +65,10 @@ export const handleOf = (name: string) =>
 
 /** DELETE the element's row through its kind's route. The asset id the API
  *  lists is "<table>-<rowid>" (character-2, location-5, prop-12). */
-export function deleteElement(a: Asset) {
+/** `init` is for the held delete's page-leave send (keepalive) */
+export function deleteElement(a: Asset, init?: RequestInit) {
   const kind = elementKind(a);
   const rowId = Number(String(a.id).split("-").pop());
   if (!kind || !Number.isFinite(rowId)) return Promise.reject(new Error("not an element"));
-  return deleteAsset(CREATE_ROUTE[kind], rowId);
+  return deleteAsset(CREATE_ROUTE[kind], rowId, init);
 }

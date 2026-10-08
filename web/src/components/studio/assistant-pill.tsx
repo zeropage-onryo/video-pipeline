@@ -55,7 +55,8 @@ import {
   type GuideReply,
 } from "@/lib/studio-api";
 import { isMake } from "@/lib/composer";
-import { headline, typeAhead } from "@/lib/assistant-text";
+import { headline } from "@/lib/assistant-text";
+import { TypedText } from "@/components/studio/typed-text";
 import {
   AVATARS,
   asProjectConversation,
@@ -128,38 +129,6 @@ function usePhone(): boolean {
     },
     () => window.matchMedia(PHONE).matches,
     () => false,
-  );
-}
-
-/* The answer as it is written: catches up with what the job has said so
-   far a few characters a frame (lib/assistant-text.ts typeAhead), so a
-   poll's worth of words reads as typing rather than as a jump. Shown whole
-   under reduced motion. */
-function Typed({ text }: { text: string }) {
-  const reduce = useReducedMotion();
-  const [shown, setShown] = useState("");
-  // what is on screen, read by the frame loop (a state updater runs when
-  // React renders, too late to decide whether to ask for another frame)
-  const at = useRef("");
-  useEffect(() => {
-    if (reduce) return;
-    let raf = 0;
-    const tick = () => {
-      const next = typeAhead(at.current, text);
-      if (next !== at.current) {
-        at.current = next;
-        setShown(next);
-      }
-      if (next.length < text.length) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [text, reduce]);
-  return (
-    <>
-      {reduce ? text : shown}
-      <span className="zpa-caret" />
-    </>
   );
 }
 
@@ -674,7 +643,7 @@ export function AssistantPill() {
                   // it with the same words, so it is hidden from a screen
                   // reader, which hears the turn once
                   <p className="zpa-msg zpa-typing" aria-hidden>
-                    <Typed text={partial.trim()} />
+                    <TypedText text={partial.trim()} caret="zpa-caret" />
                   </p>
                 ) : null}
                 {busy ? (

@@ -25,7 +25,6 @@ import { ImageOff, Info, LayoutGrid, Plus, Trash2 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
   announceBalanceChange,
-  deleteAsset,
   drawSheet,
   getAssets,
   getCapabilities,
@@ -37,7 +36,7 @@ import { creditsText } from "@/lib/render-choice";
 import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
-import { ElementSheet } from "@/components/studio/element-sheet";
+import { ElementSheet, useElementDelete } from "@/components/studio/element-sheet";
 
 const ROUTE_KIND = { character: "characters", prop: "props", location: "locations" } as const;
 type RouteKind = ElementKind;
@@ -95,16 +94,14 @@ export default function ElementsPage() {
       .catch((e) => toast(e instanceof Error ? e.message : "Could not draw the sheet", "err"));
   };
 
+  // the card's own delete and the sheet's go through one held delete with
+  // an Undo (element-sheet.tsx): off the page now, sent when the toast closes
+  const removeElement = useElementDelete();
+  const hide = (a: Asset) => setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
   const remove = (a: Asset) => {
-    const route = routeOf(a);
-    if (!route) return;
-    deleteAsset(route[0], route[1])
-      .then(() => {
-        setConfirming(null);
-        setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
-        toast(`${a.name} deleted · photos stay on disk`);
-      })
-      .catch((e) => toast(e instanceof Error ? e.message : "Could not delete", "err"));
+    if (!routeOf(a)) return;
+    setConfirming(null);
+    removeElement(a, { hide: () => hide(a), restore: () => load() });
   };
 
   const load = () => {
@@ -171,8 +168,8 @@ export default function ElementsPage() {
                   its real light. The photos become the frames a shot is held to.
                 </li>
                 <li>
-                  <b>Name it in a prompt.</b> Type <code>@</code> in Studio or on the Director canvas and pick it. Studio
-                  attaches its frames as references; Director drops an element card wired into the chain.
+                  <b>Name it in a prompt.</b> Type <code>@</code> in Studio or on a scene&rsquo;s canvas in its project and pick
+                  it. Studio attaches its frames as references; the canvas drops an element card wired into the chain.
                 </li>
                 <li>
                   <b>Let the notes do work.</b> What you write becomes a searchable chunk on the RAG assets shelf, so the
@@ -313,9 +310,9 @@ export default function ElementsPage() {
           onClose={() => setOpen(null)}
           onDeleted={(a) => {
             setOpen(null);
-            setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
-            toast(`${a.name} deleted · photos stay on disk`);
+            hide(a);
           }}
+          onRestored={() => load()}
         />
       ) : null}
 

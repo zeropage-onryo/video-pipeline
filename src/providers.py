@@ -218,15 +218,20 @@ class Band:
 
 BANDS: dict[tuple[str, str], Band] = {
     ("fal", "ltx2.3"): Band("standard"),
+    # 2.5 sits with 2.3: Pro at 1080p ($0.17/s) is under 2.3 at 2160p
+    ("fal", "ltx2.5-fast"): Band("standard"),
+    ("fal", "ltx2.5"): Band("standard"),
     ("fal", "wan3"): Band("standard"),
     ("fal", "kling3-turbo-pro"): Band("creator"),
     ("fal", "seedance2-fast"): Band("creator"),
     ("fal", "seedance2"): Band("creator"),
+    ("fal", "seedance2.5"): Band("creator"),
     ("fal", "veo3.1"): Band("premium", max_seconds=8),
 }
 
 BAND_BY_FRAME: dict[tuple[str, str, str], Band] = {
     ("fal", "seedance2", "1080p"): Band("premium"),
+    ("fal", "seedance2.5", "1080p"): Band("premium"),
 }
 
 
