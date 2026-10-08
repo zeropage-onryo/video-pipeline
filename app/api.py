@@ -716,7 +716,24 @@ async def creative_guide_reply(request: Request,
         # a scene could actually be written from. It writes nothing.
         grounding = scene_chain.ground(idea, brand=brand, account_id=account_id,
                                        refs=ref_urls)
-        note = lambda text: jobs.progress(job, 0.5, text)   # noqa: E731
+
+        # What the assistant's face reads off the job while the turn runs
+        # (2026-10-08, docs/ASSISTANT_AVATARS.md): `detail` is the line under
+        # it, `steps` {done, of} fills its arc -- only while a tool can say
+        # how far along it is (the reference hunt); a note clears it, so the
+        # arc goes back to sweeping -- and `partial` is the answer's own
+        # words as the model writes them, for the card to type out.
+        def note(text):
+            if text:
+                jobs.update(job["id"], progress=0.5, detail=text, steps=None)
+
+        def on_step(done, of, text):
+            jobs.update(job["id"], progress=done / of if of else 0.5, detail=text,
+                        steps={"done": done, "of": of} if of else None)
+
+        def on_text(text):
+            jobs.update(job["id"], partial=text)
+
         if assistant is not None:
             from src import assistant_brain
             note("remembering what you like")
@@ -745,13 +762,13 @@ async def creative_guide_reply(request: Request,
             # find_references comes back as reply.sheet, which both
             # threads now draw.
             tools, run_tool = _guide_tools(account_id, local=True, brand=brand,
-                                           maker=output is not None)
+                                           maker=output is not None, on_step=on_step)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
                 brain=brain, assistant=assistant, links=links, output=output,
-                project=project)
+                project=project, on_text=on_text)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -759,7 +776,7 @@ async def creative_guide_reply(request: Request,
                 "billing": "personal_plan" if personal else "studio_credits",
                 "brain": None if personal else brain,
                 "output": output,
-                "detail": "ready"}
+                "detail": "ready", "steps": None, "partial": None}
 
     job = jobs.start("guide", "creative guide", _in_project(project, work),
                      account_id=account_id)
@@ -787,20 +804,21 @@ def _remember_turn(project_id: int, conversation, reply: dict, account_id: int) 
 
 
 def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
-                 maker: bool = False):
+                 maker: bool = False, on_step=None):
     """(specs, run_tool) for a Guide turn, or (None, None) when the
     `mcp` package is absent or the server cannot be opened. Never
     raises: a board that cannot be read costs the answer its tools,
     not the person their turn. `local` adds the assistant's own tools
     (find/keep references), which need no MCP at all; `maker` adds the
-    composer's make_image / make_video (guide_tools.MAKE_TOOLS)."""
+    composer's make_image / make_video (guide_tools.MAKE_TOOLS);
+    `on_step` hears the reference hunt's progress."""
     from src import guide_tools
 
     if not guide_tools.available() and not local:
         return None, None
     try:
         return guide_tools.session(account_id=account_id, local=local, brand=brand,
-                                   maker=maker)
+                                   maker=maker, on_step=on_step)
     except Exception as exc:
         print(f"  guide tools unavailable: {exc}", file=sys.stderr)
         return None, None

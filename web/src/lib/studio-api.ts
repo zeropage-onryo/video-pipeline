@@ -589,6 +589,11 @@ export type Job = {
   file_url?: string | null;
   otio_url?: string | null;
   srt_url?: string | null;
+  /** a Guide turn (2026-10-08): how far a tool that can say so has come
+   *  (the reference hunt), null while nothing can -- the face's arc */
+  steps?: { done: number; of: number } | null;
+  /** a Guide turn: the answer's own words as the model writes them */
+  partial?: string | null;
 };
 /** POST /api/scenes/run — multipart: idea, brand, count (1–4), refs
  *  (asset photo urls) and files (uploads), exactly what the Jinja
@@ -636,12 +641,18 @@ export const runGuideAction = (
 export const PROJECT_TOOLS = ["create_project", "save_as_project"];
 export const isProjectTool = (tool?: string) => !!tool && PROJECT_TOOLS.includes(tool);
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
-export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
+/* `everyMs` may depend on what the job just said: a Guide turn whose
+   answer is arriving is polled faster than one still thinking. */
+export async function waitForJob(
+  id: number,
+  onTick?: (job: Job) => void,
+  everyMs: number | ((job: Job) => number) = 1500,
+) {
   for (;;) {
     const job = await getJob(id);
     onTick?.(job);
     if (["done", "failed", "cancelled"].includes(job.status)) return job;
-    await new Promise((r) => setTimeout(r, everyMs));
+    await new Promise((r) => setTimeout(r, typeof everyMs === "function" ? everyMs(job) : everyMs));
   }
 }
 
