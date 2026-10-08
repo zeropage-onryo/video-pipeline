@@ -28,12 +28,15 @@ going any further; the desktop app will show you nothing useful.
 Claude Desktop → Settings → Developer → Edit Config. That opens
 `~/Library/Application Support/Claude/claude_desktop_config.json`.
 
-Paste the `zeropage` block from `ops/claude-desktop-mcp.json` into
-`mcpServers`. If the file already has other servers, add `zeropage`
-alongside them rather than replacing the object.
+Paste the two blocks from `ops/claude-desktop-mcp.json` into
+`mcpServers`: `zeropage` (the studio: images, video, effects, projects) and
+`zeropage-board` (the pre-production board, plus the same studio tools).
+If the file already has other servers, add them alongside rather than
+replacing the object. Leave out `zeropage-board` if you only want the
+studio.
 
 Quit Claude Desktop **completely** (⌘Q — closing the window is not
-enough) and reopen it. The studio's tools appear under the connector
+enough) and reopen it. Both servers' tools appear under the connector
 icon.
 
 ## Why stdio and not a tunnel
@@ -74,10 +77,9 @@ price is refused.
 | `generate_image` / `generate_video` / `apply_effect` | quoted, then (after your yes) run as a job; the result lands on the Assets wall, and in a project when given its `project_id` |
 | `job` | poll a running render |
 
-The board tools below are on the **board surface**, which Claude Desktop
-no longer gets by default. To have them too, add a second entry to the
-config with `"args": ["-m", "src.mcp_server", "--surface", "board",
-"--engine"]` (the research agent launches that one by itself).
+The board tools below are on the **board surface**: the `zeropage-board`
+entry in `ops/claude-desktop-mcp.json` (`--surface board --engine`), which
+the idea-agent skill needs. The research agent launches its own copy of it.
 
 Board surface, always on, free:
 
