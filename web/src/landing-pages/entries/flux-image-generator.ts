@@ -1,33 +1,91 @@
-// The FLUX.2 Pro page (2026-10-05). What the studio does today: the
-// composer draws on fal-ai/flux-2-pro at any of the ten ~1-megapixel
-// frames (src/fal.py IMAGE_SIZES, `size: "wh"`), and sends reference
-// photos to fal-ai/flux-2-pro/edit as image_urls (the studio sends up to
-// 8). Priced per megapixel: the first output megapixel at the base rate,
-// every further megapixel of input and output at the extra rate, so a
-// reference edit costs more than a text draw (fal.image_usd). The model's
-// own claims -- "studio-grade images", "zero-configuration quality",
-// "style transfer, and sequential editing workflows" -- are fal's page for
-// fal-ai/flux-2-pro, read 2026-10-05, quoted as Black Forest Labs'.
-// TODO(media): the wall's eight tiles are plates until FLUX stills from
-// the studio replace them.
+// The FLUX.2 Pro page (2026-10-05; media, copy and layout 2026-10-08).
+// What the studio does today: the composer draws on fal-ai/flux-2-pro at
+// any of the ten ~1-megapixel frames (src/fal.py IMAGE_SIZES, `size: "wh"`),
+// and sends reference photos to fal-ai/flux-2-pro/edit as image_urls (the
+// studio sends up to 8). Priced per megapixel: the first output megapixel
+// at the base rate, every further megapixel of input and output at the
+// extra rate, so a reference edit costs more than a text draw
+// (fal.image_usd). The model's own claims -- "studio-grade images",
+// "zero-configuration quality", "style transfer, and sequential editing
+// workflows" -- are fal's page for fal-ai/flux-2-pro, read 2026-10-05,
+// quoted as Black Forest Labs'.
+//
+// MEDIA: every still was drawn on FLUX.2 Pro (on Higgsfield, variant pro,
+// 2026-10-08). The wall is the prompt-adherence test: each tile carries the
+// prompt it was drawn from, word for word, and only the clauses the still
+// visibly honours are [[marked]] -- the first lemons draw came back with
+// two lemons and was re-rolled; the suit's "to his left" is unmarked
+// because the plant stands on his right. The frame picker's five stills
+// are one prompt drawn at 1:1, 3:4, 4:3, 9:16 and 16:9; the other five
+// frames show the nearest, cropped, and say so.
 import { EMERALD } from "../theme";
-import { COMMERCIAL_FAQ, IMAGE_MODELS_TITLE, STILL_FAQS, imageModel, imageModelCards, plateTiles } from "../shared";
-import type { MakePage } from "../pages";
+import { COMMERCIAL_FAQ, IMAGE_MODELS_TITLE, STILL_FAQS, imageModel, imageModelCards } from "../shared";
+import type { MakePage, MakeTile } from "../pages";
 
 const flux = imageModel("flux2-pro");
 const flux11 = imageModel("flux-pro1.1");
-const seedream = imageModel("seedream4");
+const seedream = imageModel("seedream4.5");
 
-const TILES = plateTiles([
-  ["Editorial portrait", "Still", "#ecfdf5", "#6ee7b7", "#047857"],
-  ["Product on stone", "Reference", "#f0fdfa", "#5eead4", "#115e59"],
-  ["Style transfer", "Edit", "#ecfeff", "#67e8f9", "#0e7490"],
-  ["Interior, morning", "Still", "#f7fee7", "#bef264", "#3f6212"],
-  ["Same jacket, new set", "Reference", "#d1fae5", "#34d399", "#064e3b"],
-  ["Wide 21:9", "Frame", "#ccfbf1", "#2dd4bf", "#134e4a"],
-  ["Night exterior", "Still", "#022c22", "#064e3b", "#6ee7b7"],
-  ["Macro texture", "Still", "#064e3b", "#047857", "#a7f3d0"],
-]);
+const DIR = "/models/flux-image-generator";
+
+const TILES: MakeTile[] = [
+  {
+    title: "Count it, place it",
+    tag: "3:4",
+    src: `${DIR}/lemons.jpg`,
+    aspect: "3:4",
+    prompt:
+      "Still life on a [[mint-green linen tablecloth]]: [[three whole lemons grouped together on the left]], [[a clear glass carafe of water in the centre]], [[a folded navy-blue napkin on the right]], and [[a single sprig of rosemary lying in front of the carafe]]. Soft window light from the right, gentle shadows, photorealistic, shot from a slightly high angle.",
+  },
+  {
+    title: "Find the red can",
+    tag: "3:4",
+    src: `${DIR}/glasshouse.jpg`,
+    aspect: "3:4",
+    prompt:
+      "Inside a [[Victorian glasshouse]]: [[rows of ferns on tiered wooden shelves]], a [[red metal watering can]] on the second shelf from the bottom, condensation beading on the glass roof, a [[three-legged wooden stool in the foreground]], soft overcast daylight, photorealistic.",
+  },
+  {
+    title: "Scale and geometry",
+    tag: "3:4",
+    src: `${DIR}/stairwell.jpg`,
+    aspect: "3:4",
+    prompt:
+      "Looking [[straight down a spiral brutalist concrete stairwell]] from the top floor, [[a single person in a bright yellow coat]] standing on the third landing down, [[moss growing in the corners of the steps]], cool daylight falling from a round skylight, strong geometric composition, photorealistic.",
+  },
+  {
+    title: "Macro, every droplet",
+    tag: "3:4",
+    src: `${DIR}/beetle.jpg`,
+    aspect: "3:4",
+    prompt:
+      "Macro photograph of an [[iridescent green jewel beetle]] resting on a [[dew-covered leaf]], [[water droplets on its shell]] catching the light, [[the leaf veins sharp]], background dissolving into soft green bokeh, photorealistic.",
+  },
+  {
+    title: "Colour by name",
+    tag: "3:4",
+    src: `${DIR}/convertible.jpg`,
+    aspect: "3:4",
+    prompt:
+      "A [[vintage emerald-green convertible]] parked on a coastal road beside [[white chalk cliffs]], a folded [[red-and-white striped beach umbrella in the back seat]], the sea behind, late afternoon sun, [[no badges, no text]], 35mm film photograph.",
+  },
+  {
+    title: "A portrait, composed",
+    tag: "3:4",
+    src: `${DIR}/suit.jpg`,
+    aspect: "3:4",
+    prompt:
+      "Editorial portrait of a man in a [[sage-green linen suit]] sitting on a [[simple wooden chair]] in an [[empty white gallery room]], one large [[monstera plant in a terracotta pot]] to his left, soft north light, [[centred symmetrical composition]], photorealistic.",
+  },
+];
+
+const FRAMES: MakeTile[] = [
+  { title: "The ridge road at 1:1", tag: "", src: `${DIR}/frame-1x1.jpg`, aspect: "1:1" },
+  { title: "The ridge road at 3:4", tag: "", src: `${DIR}/frame-3x4.jpg`, aspect: "3:4" },
+  { title: "The ridge road at 4:3", tag: "", src: `${DIR}/frame-4x3.jpg`, aspect: "4:3" },
+  { title: "The ridge road at 9:16", tag: "", src: `${DIR}/frame-9x16.jpg`, aspect: "9:16" },
+  { title: "The ridge road at 16:9", tag: "", src: `${DIR}/frame-16x9.jpg`, aspect: "16:9" },
+];
 
 export const FLUX: MakePage = {
   slug: "flux-image-generator",
@@ -35,32 +93,40 @@ export const FLUX: MakePage = {
   modelIds: ["flux2-pro"],
   title: "FLUX.2 Pro AI Image Generator",
   description:
-    "Draw a still on FLUX.2 Pro from one line and your reference photos, in any of ten frames from 1:1 to 21:9, then make it an element and shoot it. Credits per still shown before you send.",
-  h1: "FLUX Image Generator",
+    "Draw stills on Black Forest Labs' FLUX.2 Pro that follow the prompt to the object: counts, colours, positions. Any of ten frames from 1:1 to 21:9, up to eight reference photos, credits per still shown before you send.",
+  h1: "FLUX.2 Pro",
   menu: "FLUX Image Generator",
   subhead:
-    "Draw a still on FLUX.2 Pro from one line and your reference photos, in any of ten frames from 1:1 to 21:9, then make it an element and shoot it.",
+    "Write what is in the frame and where it sits, and FLUX.2 Pro draws exactly that: three lemons on the left, the red can on the shelf, the frame you picked to the pixel.",
   cta: {
     label: "Draw a still",
-    spark: "An editorial still on FLUX.2 Pro: [subject], window light, 4:5, shallow depth of field.",
-    secondary: { label: "See the frames", href: "#frames" },
+    spark: "An editorial still on FLUX.2 Pro: [subject] in [place], [what sits where], window light, 4:5.",
+    secondary: { label: "See the prompts", href: "#examples" },
     startLabel: "Start a still",
   },
   template: "spark",
   tone: "light",
   accent: EMERALD,
+  layout: {
+    hero: "cover",
+    order: ["wall", "signature", "features", "howTo", "models", "faq", "related", "final"],
+    features: "list",
+  },
+  heroMedia: [{ title: "Drawn on FLUX.2 Pro", tag: "2K · 16:9, one prompt, no retouching", src: `${DIR}/cover.jpg`, aspect: "16:9" }],
   signature: "frame-picker",
+  signatureFrames: FRAMES,
   wall: {
-    title: "Stills FLUX Draws",
+    title: "Prompt In, Picture Out",
     tiles: TILES,
     explore: { label: "See the features", href: "#features" },
+    layout: "prompts",
   },
   features: {
     title: "FLUX in the Studio",
     items: [
       {
         icon: "frame",
-        title: "Ten frames, one megapixel each",
+        title: "Ten frames, exact pixels",
         body: "1:1, 4:5, 5:4, 3:4, 4:3, 2:3, 3:2, 9:16, 16:9 or 21:9, picked in the composer and sent as exact pixel sizes. Every frame is under one megapixel, so every frame prices the same from text.",
       },
       {
@@ -70,8 +136,8 @@ export const FLUX: MakePage = {
       },
       {
         icon: "model",
-        title: "Zero-configuration quality",
-        body: "fal's words for FLUX.2 Pro: studio-grade images with no tuning steps or guidance parameters. The composer sends the prompt and the frame, nothing else to set.",
+        title: "It follows the prompt",
+        body: "Black Forest Labs pitches FLUX.2 Pro on studio-grade images with zero configuration: no steps, no guidance scale. Write counts, colours and positions in plain words; the stills on this page mark what each prompt asked for.",
       },
       {
         icon: "price",
@@ -128,7 +194,7 @@ export const FLUX: MakePage = {
     items: [
       {
         q: "What is the FLUX image generator?",
-        a: "FLUX.2 Pro is Black Forest Labs' production image model. In this studio you write one line, attach reference photos if you want, pick a frame, and the composer draws the still on it through fal. The still lands on your Assets wall and can become an element a scene is held to.",
+        a: "FLUX.2 Pro is Black Forest Labs' production image model, built to follow the prompt closely. In this studio you write one line, attach reference photos if you want, pick a frame, and the composer draws the still on it through fal. The still lands on your Assets wall and can become an element a scene is held to.",
       },
       {
         q: "Do my reference photos reach the model?",
@@ -143,16 +209,20 @@ export const FLUX: MakePage = {
         a: "FLUX 1.1 Pro is the older, text-only model in the picker: it takes no reference photos and draws from the prompt alone. FLUX.2 Pro takes references and edits.",
         link: { href: "/models", label: "See every model" },
       },
+      {
+        q: "Were the stills on this page made on FLUX.2 Pro?",
+        a: "Yes, every one, each from the prompt printed under it. The highlighted words are the ones the still visibly honours; where it did not (the suit's plant stands on his right, not his left), the words are left unmarked.",
+      },
       STILL_FAQS.cost,
       STILL_FAQS.where,
       STILL_FAQS.video,
       COMMERCIAL_FAQ,
     ],
   },
-  related: ["seedream-image-generator", "nano-banana-image-generator", "gpt-image-generator"],
+  related: ["nano-banana-image-generator", "seedream-image-generator", "ideogram-image-generator"],
   finalCta: {
     eyebrow: "Your first still",
-    title: "Draw your first still on FLUX.",
-    body: "One line, your photos, a frame, the credits on the picker.",
+    title: "Say what is in the frame. Get that.",
+    body: "One line, a frame, your photos if it should match them, the credits on the picker.",
   },
 };
