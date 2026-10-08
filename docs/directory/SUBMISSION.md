@@ -34,7 +34,7 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | C39 | no clientInfo gating | PASS | |
 | — | rate limit | **PASS after Phase 2** | 120/min per account, 1200/min operator key; 429 + Retry-After |
 | — | token: audience, expiry, issuer | PASS after Phase 2 | issuer check added |
-| — | cross-tenant isolation (board, idea, search, capture, pick, archive, shoot, job, stats) | PASS, tested through the real transport | |
+| — | cross-tenant isolation (board, idea, search, capture, pick, archive, shoot, job, stats, projects, project, project_chat, create_project, save_chat) | PASS, tested through the real transport | |
 | — | cross-tenant: sparks / images bank | **PASS** -- not on the listed server | Mike's call 2026-10-07; the operator's door keeps them |
 | — | spend without a quote + approval | **PASS on the listed server** | `quote` then `approve` (tokens, hold before submit); `imagine_reference` is not on the listed server |
 
@@ -96,8 +96,9 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 
 **Tools** — sync from the server; a signed-in reviewer sees the listed set,
 every tool with a title and hints. Read-only: board, idea, search, stats,
-elements, quote, job. Write: capture, pick, shoot, archive, write_scene,
-approve (destructive: it spends).
+projects, project, project_chat, elements, quote, job. Write: capture, pick,
+shoot, archive, create_project, save_chat, write_scene, approve
+(destructive: it spends).
 
 **Listing**
 
@@ -154,6 +155,7 @@ keyed) with our own keys. No personal health data. No sponsored content.
 2. Steps: sign in once at https://zeropage.studio with those credentials
    (workspace exists already); add the connector; approve the consent page;
    call `board`, `idea`, `search`, `capture`, `pick`, `archive`, `stats`,
+   `create_project`, `projects`, `project`, `save_chat`, `project_chat`,
    `elements`, `write_scene`, `quote`, `approve` (keyframes, then clip, with
    a balance that covers one small render), `job`.
 3. What it must NOT be able to do: read any other account's ideas (every
@@ -185,7 +187,9 @@ non-App connector)
 | tool | reads | stores | sends to a model | sends to a provider |
 |---|---|---|---|---|
 | board, idea, search, stats, elements, quote, job | the caller's rows | — | — | — |
+| projects, project, project_chat | the caller's projects: brief, look, scenes, the reference images they used, renders, chat history | — | — | — |
 | capture, pick, shoot, archive, write_scene | — | a row under the caller's account (the scene prompt and the photo refs chosen) | — | — |
+| create_project, save_chat | — | a project, or chat turns Claude passes (the conversation's text), under the caller's account; kept until the person deletes the project in the studio | — | — |
 | approve (keyframes) | — | the stills under the caller's renders; a ledger charge | the scene prompt and the attached photos, to the studio's image model | Google's image model (Nano Banana) |
 | approve (clip) | — | the clip under the caller's renders; a ledger charge | the shot prompt, its still and the attached photos, to the renderer | fal.ai (the model quoted) |
 
