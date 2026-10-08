@@ -31,6 +31,8 @@
 FROM node:22-bookworm-slim AS model-runtime
 RUN npm install --global @openai/codex@0.153.2
 
+# Keep in step with .github/workflows/ci.yml's python-version: CI tests the
+# Python this image runs (2026-10-08).
 FROM python:3.11-slim
 COPY --from=model-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=model-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
