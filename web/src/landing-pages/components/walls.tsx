@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
+import { clipSrc } from "../media";
 
 // The walls a page can have besides the bento and the showcase (2026-10-08,
 // Mike: "make sure every layout varies so neither one is identical"). Each
@@ -33,7 +34,7 @@ function Still({ tile, sizes, className = "" }: { tile: MakeTile; sizes: string;
     return (
       <video
         className={`absolute inset-0 h-full w-full object-cover ${className}`}
-        src={tile.video}
+        src={clipSrc(tile.video)}
         poster={tile.src}
         autoPlay
         muted

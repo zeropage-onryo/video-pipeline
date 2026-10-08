@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { EASE_OUT, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
+import { clipSrc } from "../media";
 
 // The showcase wall (2026-10-07, Mike's reference: ByteDance's "Creativity
 // Unleashed" grid on the Seedance 2.5 page). Three masonry columns of
@@ -137,7 +138,7 @@ function ShowcaseTile({
         {tile.video ? (
           <video
             className="absolute inset-0 size-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
-            src={tile.video}
+            src={clipSrc(tile.video)}
             poster={tile.src}
             muted
             loop

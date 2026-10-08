@@ -7,6 +7,7 @@ import { SectionTitle } from "./section-title";
 import { reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
+import { clipSrc } from "../media";
 
 // The video pages' clips (2026-10-08). Every clip on these pages was
 // rendered with its sound (Mike: "use the sound on the page"), and a
@@ -88,7 +89,7 @@ export function ClipPlayer({
       <video
         ref={ref}
         className="absolute inset-0 h-full w-full object-cover"
-        src={tile.video}
+        src={clipSrc(tile.video)}
         poster={tile.src}
         muted
         loop

@@ -37,9 +37,10 @@ Gates before a commit: `npx tsc --noEmit`, `npx eslint src`, a look at 375 / 768
 Higgsfield, LTX 2.5 on Runway, Kling / Wan / Veo on Higgsfield), with the
 provenance in each entry's header; Seedream and Ideogram moved to 4.5 in
 `src/fal.py`, LTX 2.5 joined the catalog. Spend: 96 Higgsfield credits for
-stills, about 254 for clips; 270 Runway credits. Open: the MP4s are
-gitignored (`*.mp4`), so the clips do not ship until they are committed past
-the rule or moved to R2; GPT Image 2 is untouched.
+stills, about 254 for clips; 270 Runway credits. The MP4s are gitignored
+(`*.mp4`), so all 29 page clips (these 16 and Seedance's 13) were uploaded to
+R2 under `site/models/<slug>/` and the pages read them through
+`web/src/landing-pages/media.ts`. Open: GPT Image 2 is untouched.
 
 ## Known per page, going in
 

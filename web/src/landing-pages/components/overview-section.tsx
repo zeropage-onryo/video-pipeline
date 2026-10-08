@@ -7,6 +7,7 @@ import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } fr
 import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakeOverviewBlock, MakePage, MakeTile } from "../pages";
+import { clipSrc } from "../media";
 
 // The overview (2026-10-07, Mike's call): the shape of ByteDance's own
 // Seedance 2.5 page -- a run of headline claims, each one line of serif,
@@ -97,7 +98,7 @@ function useOnScreenPlay(ref: React.RefObject<HTMLElement | null>, still: boolea
 
 function Fill({ tile, alt, plate }: { tile?: MakeTile; alt: string; plate: string }) {
   if (tile?.video)
-    return <video className="absolute inset-0 size-full object-cover" src={tile.video} poster={tile.src} muted loop playsInline preload="none" />;
+    return <video className="absolute inset-0 size-full object-cover" src={clipSrc(tile.video)} poster={tile.src} muted loop playsInline preload="none" />;
   if (tile?.src)
     return <Image src={tile.src} alt={alt} fill sizes="(min-width: 768px) 50vw, 100vw" quality={70} className="object-cover" />;
   return <div aria-hidden className="absolute inset-0" style={{ background: plate }} />;

@@ -86,9 +86,12 @@ JPEGs under `web/public/models/<slug>/` at a 1000-1600 px long edge. Clips
 are H.264 MP4s with fast-start and a poster JPEG of the same name, and they
 keep their sound (Mike: "use the sound on the page"): every clip plays muted
 with its own sound toggle (`components/clips.tsx`), and turning one on turns
-the others off. **MP4s are gitignored (`*.mp4`)**, so a fresh checkout has
-the posters and not the clips; they ship only once they are committed past
-the ignore rule or moved to R2.
+the others off. **MP4s are gitignored (`*.mp4`), so clips are served from
+R2** (2026-10-08): `media.ts` turns an entry's `/models/<slug>/<name>.mp4`
+into the bucket's `site/models/<slug>/<name>.mp4`, and every component that
+draws a clip goes through it. Adding a clip is uploading it to that key
+(`video/mp4`, fast-start) and naming the public path on the entry; the
+poster JPEG stays under `web/public/models/<slug>/`.
 
 Every claim on a page must be something the studio does today. The CTA
 carries the entry's `cta.spark` into the composer as `?spark=` through

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
+import { clipSrc } from "../media";
 
 // The wall right under the hero, in the shape of InVideo's model wall
 // (2026-10-01, Mike's reference): one line of heavy condensed uppercase, a
@@ -185,7 +186,7 @@ export function Tile({
         tile.video ? (
           <video
             className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
-            src={tile.video}
+            src={clipSrc(tile.video)}
             poster={tile.src}
             muted
             loop
