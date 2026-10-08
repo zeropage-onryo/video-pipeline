@@ -139,7 +139,15 @@ venv/bin/python -m src.rag_eval <cases.json> [--k 5]   # hit@k + MRR over labele
 # web app at /mcp when ZEROPAGE_MCP=1 AND ZEROPAGE_MCP_TOKEN is set (no
 # token = refused, never served open). Read/decide tools are always on;
 # ZEROPAGE_MCP_ENGINE=1 adds research + generate. See START_SERVER.md.
-venv/bin/python -m src.mcp_server --engine   # stdio; Claude Desktop launches this itself
+venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
+# Since 2026-10-07 (Mike's call) the stdio default is the STUDIO surface:
+# generate_image / generate_video / apply_effect (src/effects.py: image edits,
+# Kling + PixVerse template effects, PixVerse camera moves, Topaz upscale/fps,
+# MMAudio sound), each quoted first and spent only after a yes in chat
+# (approve_usd), plus image_models / video_models / effects / elements /
+# renders / images_for / prompt_craft. NO board tools. --surface board (or
+# ZEROPAGE_MCP_SURFACE=board) serves the full board; src/research_agent.py
+# asks for it by name. The Guide and the HTTP mount build the board surface.
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
 
 # THE MANUAL RENDER LANE — a clip that reaches a concept without an API render.
@@ -1590,6 +1598,35 @@ is yours, in Resolve, by hand.
   document is built off that same resource URI rather than `SITE_URL`, or the
   deployed document would publish a localhost resource and discovery would fail
   with nothing to read.
+  **THE STUDIO SURFACE (2026-10-07, Mike's calls).** What `python -m src.mcp_server`
+  serves by default -- what Claude Desktop launches -- is `build_server(surface="studio")`:
+  `mcp_server.STUDIO_TOOLS` only, for making things WITH Claude and never for the board
+  (nothing is captured, picked, archived, banked or written to a concept). Three spending
+  doors -- `generate_image` (fal.IMAGE_MODELS through `fal.generate_image_from_prompt`, the
+  composer's own door), `generate_video` (`fal.generate_from_prompt`, which gained the
+  caller's `duration` / `resolution` / `aspect_ratio`, a `source` label and `bank` for the
+  Assets wall) and `apply_effect` (`src/effects.py`) -- each go through
+  `mcp_server.approval_gate`: a call with no `approve_usd` returns the quote and spends
+  nothing, a price above `approve_usd` is refused, and only then does it run as a job with
+  the usual hold / cap / generations row / settle / Assets wall. On the studio surface they
+  are always on (the approval is the gate); on the board surface they sit behind the engine
+  flag; the listed server never has them. References are ids, never URLs, in ONE grammar
+  shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`
+  exactly as `elements` lists it (checked by `_allowed_refs`), or `candidate:<id>` from
+  `images_for`; a model's reference limit (`fal.image_max_refs`) is refused past, never
+  trimmed. **`src/effects.py`** is a dated table (checked 2026-10-07 against each fal
+  OpenAPI schema and model page): four image edits (Nano Banana edit, FLUX Kontext Pro,
+  Seedream 4 edit, Bria background removal), Kling (98 templates) and PixVerse v5 (154)
+  template effects, PixVerse 4.5 camera moves (20), Topaz upscale / frame rate and MMAudio
+  sound -- each row's input field, legal options (anything off-table is REFUSED, never
+  clamped) and price rule; a clip source is a `gen:` video measured by ffprobe before it is
+  priced, and one that cannot be measured is refused. Effects log under the image tool name
+  (`fal`), so they share the stills' cap. Left out because a price or input could not be
+  verified: lip sync, relight, RIFE/FILM, PixVerse 8s. **The cost of the choice:** the
+  idea-agent skill drives BOARD tools, which Claude Desktop no longer has unless a second
+  server entry runs `--surface board`. The studio surface was ported onto main from the
+  stale `claude/remove-brands` branch on 2026-10-08; that branch's own `STILL_MODELS` image
+  table was not carried (main's `IMAGE_MODELS` is the one table).
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.
