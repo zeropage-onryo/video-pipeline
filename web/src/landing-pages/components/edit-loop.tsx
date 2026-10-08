@@ -142,7 +142,7 @@ export function EditLoop({ page }: { page: MakePage }) {
 
 function Layer({ tile, fallback }: { tile?: MakeTile; fallback: string }) {
   if (!tile?.src) return <div aria-hidden className="absolute inset-0" style={{ background: tile?.plate ?? fallback }} />;
-  return <Image src={tile.src} alt={tile.title} fill sizes="(min-width: 768px) 560px, 100vw" quality={78} draggable={false} className="object-cover" />;
+  return <Image src={tile.src} alt={tile.title} fill sizes="(min-width: 768px) 560px, 100vw" quality={75} draggable={false} className="object-cover" />;
 }
 
 // x in [0,1] -> "NN%" of the wrapper's travel, in one direction
