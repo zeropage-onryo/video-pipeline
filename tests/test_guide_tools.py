@@ -283,6 +283,19 @@ def test_make_tools_are_published_only_to_a_maker_turn(monkeypatch):
         run_tool("make_image", {"prompt": "a can"})
 
 
+def test_the_pill_is_handed_the_still_and_never_the_scene(monkeypatch):
+    """The assistant pill (2026-10-08) draws a still behind the same Approve
+    card the composer shows; a scene stays the composer's."""
+    monkeypatch.setattr(guide_tools, "available", lambda: False)
+    specs, _ = guide_tools.session(local=True, maker=True, makes=("make_image",))
+    names = {s["name"] for s in specs}
+    assert "make_image" in names and "make_video" not in names
+    from src import creative_guide
+    assert creative_guide.MAKES_FOR["still"] == ("make_image",)
+    assert creative_guide.MAKES_FOR["image"] is None and creative_guide.MAKES_FOR["video"] is None
+    assert "make_image" in creative_guide.OUTPUT_NOTES["still"]
+
+
 def test_a_make_call_ends_the_turn_as_a_proposal_with_a_clean_prompt(monkeypatch):
     calls = []
     proposal = _Resp(calls=[("make_image", {"prompt": "  a wet   steel counter ", "aspect": "4:5",

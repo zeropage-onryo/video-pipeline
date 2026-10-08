@@ -1,0 +1,148 @@
+/* A still's step card (still-step.tsx), shared by the Studio composer and
+   the assistant pill. Prefixed ss- and unscoped, so it draws the same in
+   either; it reads the studio tokens (.zps: --edge-lo, --text, --bone-2,
+   --signal, --mono, --body, --t) with literal fallbacks. */
+.ss {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--edge-lo, #262626);
+  border-radius: 16px;
+  background: #101010;
+  transition: border-color var(--t, 160ms);
+}
+.ss[data-state="waiting"] {
+  border-color: rgb(228 0 43 / 0.45);
+}
+.ss-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bone-2, #a3a3a3);
+}
+.ss-head svg {
+  width: 14px;
+  height: 14px;
+}
+.ss-head b {
+  font-weight: 500;
+  color: var(--text, #f4f3f2);
+}
+.ss-head em {
+  margin-left: auto;
+  font-style: normal;
+  letter-spacing: 0.06em;
+}
+.ss[data-state="waiting"] .ss-head em {
+  color: #ff4d6a;
+}
+.ss[data-state="done"] .ss-head em {
+  color: #3ddc84;
+}
+.ss > p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #d9d9d9;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+.ss > p.open {
+  display: block;
+}
+.ss-more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--bone-2, #a3a3a3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ss-image {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--edge-lo, #262626);
+}
+.ss-go {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 4px;
+}
+.ss-go button {
+  height: 40px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--signal, #e4002b);
+  color: #fff;
+  font-family: var(--body, inherit);
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    filter var(--t, 160ms),
+    background var(--t, 160ms);
+}
+.ss-go button:hover {
+  filter: brightness(1.12);
+}
+.ss-go button:disabled {
+  background: #6e1a1f;
+  color: rgb(255 255 255 / 0.55);
+  cursor: default;
+  filter: none;
+}
+.ss-ok {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text, #f4f3f2);
+}
+.ss-ok svg {
+  width: 16px;
+  height: 16px;
+  color: #3ddc84;
+}
+.ss-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--signal, #e4002b);
+  animation: ss-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ss-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-live {
+    animation: none;
+  }
+}
+.ss-go small {
+  padding-left: 4px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--bone-2, #a3a3a3);
+}

@@ -715,7 +715,9 @@ async def creative_guide_reply(request: Request,
     # told which one a "make it" means (creative_guide.OUTPUT_NOTES). A
     # proposal naming one comes back unrun, as every write does, and the
     # composer's own send runs it against /generate/run or /scenes/run.
-    # Absent (the pill, older callers), the turn is what it was.
+    # The pill sends `still` (2026-10-08): make_image only, drawn behind the
+    # same step card and Approve. Absent (older callers), the turn is what
+    # it was.
     output = (form.get("output") or "").strip().lower()
     output = output if output in creative_guide.OUTPUT_NOTES else None
     # The Guide talks inside the same project a Create would write into
@@ -796,7 +798,9 @@ async def creative_guide_reply(request: Request,
             # find_references comes back as reply.sheet, which both
             # threads now draw.
             tools, run_tool = _guide_tools(account_id, local=True, brand=brand,
-                                           maker=output is not None, on_step=on_step)
+                                           maker=output is not None,
+                                           makes=creative_guide.MAKES_FOR.get(output or ""),
+                                           on_step=on_step)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
@@ -838,7 +842,7 @@ def _remember_turn(project_id: int, conversation, reply: dict, account_id: int) 
 
 
 def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
-                 maker: bool = False, on_step=None):
+                 maker: bool = False, makes=None, on_step=None):
     """(specs, run_tool) for a Guide turn, or (None, None) when the
     `mcp` package is absent or the server cannot be opened. Never
     raises: a board that cannot be read costs the answer its tools,
@@ -852,7 +856,7 @@ def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
         return None, None
     try:
         return guide_tools.session(account_id=account_id, local=local, brand=brand,
-                                   maker=maker, on_step=on_step)
+                                   maker=maker, makes=makes, on_step=on_step)
     except Exception as exc:
         print(f"  guide tools unavailable: {exc}", file=sys.stderr)
         return None, None
