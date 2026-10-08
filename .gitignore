@@ -115,3 +115,6 @@ data/model_sessions/
 # Claude Code mods (.claude/skills/zp-*): the engine lays its own types and tsconfig beside a loaded mod
 .claude/skills/zp-*/.claude-plugin/types/
 .claude/skills/zp-*/tsconfig.json
+# the wipe scripts' row backups (ops/wipe_concepts.py): every deleted concept's
+# prompt and references, which must never reach a public repo
+data/backups/
