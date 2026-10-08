@@ -5,7 +5,7 @@ import { Volume2, VolumeX } from "lucide-react";
 import { motion } from "motion/react";
 import { SectionTitle } from "./section-title";
 import { reveal } from "@/lib/motion";
-import { useRevealGroup, useStill } from "@/lib/motion-hooks";
+import { useNearView, useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
 import { clipSrc } from "../media";
 
@@ -16,13 +16,15 @@ import { clipSrc } from "../media";
 // event), so a page of four clips never plays four soundtracks at once.
 // A clip plays only while it is on screen (the landing page's rule), and
 // reduced motion leaves every clip on its poster until it is pressed.
+// A clip's poster and video load only once it is within a screen of view
+// (`useNearView`); a clip at the top of the page passes `eager`.
 
 const SOUND_EVENT = "zp-clip-sound";
 
-function useOnScreen(ref: React.RefObject<HTMLVideoElement | null>, still: boolean) {
+function useOnScreen(ref: React.RefObject<HTMLVideoElement | null>, still: boolean, near: boolean) {
   useEffect(() => {
     const v = ref.current;
-    if (!v || still) return;
+    if (!v || still || !near) return;
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) v.play().catch(() => {});
@@ -32,7 +34,7 @@ function useOnScreen(ref: React.RefObject<HTMLVideoElement | null>, still: boole
     );
     io.observe(v);
     return () => io.disconnect();
-  }, [ref, still]);
+  }, [ref, still, near]);
 }
 
 /** One clip filling its box, with a sound toggle. */
@@ -43,6 +45,7 @@ export function ClipPlayer({
   label,
   onTime,
   videoRef,
+  eager = false,
 }: {
   tile: MakeTile;
   className?: string;
@@ -52,13 +55,17 @@ export function ClipPlayer({
   label?: { on: string; off: string };
   onTime?: (t: number, v: HTMLVideoElement) => void;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
+  /** Load at once (a hero clip); otherwise it waits until it is near view. */
+  eager?: boolean;
 }) {
   const still = useStill();
   const own = useRef<HTMLVideoElement>(null);
   const ref = videoRef ?? own;
+  const box = useRef<HTMLDivElement>(null);
+  const near = useNearView(box, { eager });
   const id = useId();
   const [muted, setMuted] = useState(true);
-  useOnScreen(ref, still);
+  useOnScreen(ref, still, near);
 
   useEffect(() => {
     const off = (e: Event) => {
@@ -85,16 +92,16 @@ export function ClipPlayer({
   };
 
   return (
-    <div className={`absolute inset-0 ${className}`}>
+    <div ref={box} className={`absolute inset-0 ${className}`}>
       <video
         ref={ref}
         className="absolute inset-0 h-full w-full object-cover"
-        src={clipSrc(tile.video)}
-        poster={tile.src}
+        src={near ? clipSrc(tile.video) : undefined}
+        poster={near ? tile.src : undefined}
         muted
         loop
         playsInline
-        preload="metadata"
+        preload={near ? "metadata" : "none"}
         aria-label={tile.title}
         onTimeUpdate={onTime ? (e) => onTime(e.currentTarget.currentTime, e.currentTarget) : undefined}
       />

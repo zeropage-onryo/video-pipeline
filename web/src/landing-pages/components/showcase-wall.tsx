@@ -9,7 +9,7 @@ import { SectionTitle } from "./section-title";
 import { CreateCtaButton } from "./create-cta-button";
 import { Button } from "@/components/ui/button";
 import { EASE_OUT, reveal } from "@/lib/motion";
-import { useRevealGroup, useStill } from "@/lib/motion-hooks";
+import { useNearView, useRevealGroup, useStill } from "@/lib/motion-hooks";
 import type { MakePage, MakeTile } from "../pages";
 import { clipSrc } from "../media";
 
@@ -106,12 +106,14 @@ function ShowcaseTile({
   const media = useRef<HTMLButtonElement>(null);
   const { w, h } = ratio(tile.aspect);
   const panelId = `showcase-prompt-${index}`;
+  // the poster and the clip load only once the tile is within a screen of view
+  const near = useNearView(media);
 
   // a clip plays only while on screen (the landing page's rule)
   useEffect(() => {
     const el = media.current;
     const video = el?.querySelector("video");
-    if (!el || !video || still) return;
+    if (!el || !video || still || !near) return;
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) video.play().catch(() => {});
@@ -121,7 +123,7 @@ function ShowcaseTile({
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [still]);
+  }, [still, near]);
 
   return (
     <motion.div {...reveal(index, { still, show, y: 24, duration: 0.55, base: 0.06 })} className="flex flex-col">
@@ -138,8 +140,8 @@ function ShowcaseTile({
         {tile.video ? (
           <video
             className="absolute inset-0 size-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
-            src={clipSrc(tile.video)}
-            poster={tile.src}
+            src={near ? clipSrc(tile.video) : undefined}
+            poster={near ? tile.src : undefined}
             muted
             loop
             playsInline
