@@ -42,6 +42,7 @@ from __future__ import annotations
 import hmac
 import re
 import secrets as _secrets
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -50,6 +51,8 @@ from urllib.parse import quote, urlsplit
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+
+from src import accounts, mcp_connections
 
 from . import auth
 
@@ -196,8 +199,35 @@ def consent_page(request: Request, authorization_id: str = ""):
         if target:
             return RedirectResponse(target, status_code=303)
         return _problem(request, "The authorization server gave no way back to the app.", 502)
-    return _page(request, authorization_id=authorization_id, csrf=grant["csrf"],
-                 **describe(body))
+    shown = describe(body)
+    # what the person is about to approve, kept beside the grant so the
+    # POST can record WHICH client was allowed (the "Connected to Claude"
+    # line in the studio's account menus) -- the POST gets only a decision
+    request.session[GRANT_KEY] = {**grant, "client_name": shown["client_name"],
+                                  "redirect_host": _host(body.get("redirect_uri"))}
+    return _page(request, authorization_id=authorization_id, csrf=grant["csrf"], **shown)
+
+
+def _remember(grant: dict) -> None:
+    """An approved connection, recorded for the studio's account menus
+    (src/mcp_connections.py). The account is the person's OLDEST
+    membership -- the rule `mcp_auth.account_for_token` resolves every MCP
+    call by, so the panel and the board agree about whose connection it
+    is. Best-effort: the person has already said yes and Supabase has
+    already answered, so a failed write here must never stand between
+    them and the app they are connecting."""
+    try:
+        user_id = (auth.verify_token(grant.get("token") or "") or {}).get("sub")
+        if not user_id:
+            return
+        member_of = accounts.memberships(str(user_id))
+        if not member_of:
+            return      # no workspace: the MCP refuses this person anyway
+        mcp_connections.record_approval(
+            min(int(a["id"]) for a in member_of), str(user_id),
+            str(grant.get("client_name") or ""), str(grant.get("redirect_host") or ""))
+    except Exception as exc:  # noqa: BLE001 -- bookkeeping, never the decision
+        print(f"[oauth-consent] could not record the connection: {exc}", file=sys.stderr)
 
 
 @router.post(CONSENT_PATH)
@@ -226,4 +256,6 @@ def consent_decision(request: Request, authorization_id: str = Form(""),
     target = _safe_redirect(body.get("redirect_url"))
     if not target:
         return _problem(request, "The authorization server gave no way back to the app.", 502)
+    if action == "approve":
+        _remember(grant)
     return RedirectResponse(target, status_code=303)

@@ -206,6 +206,61 @@ def test_allow_approves_as_the_person_and_follows_supabases_redirect(gotrue):
     assert gotrue.decisions == [(AUTHZ, "approve", "ana@example.com")]
 
 
+def _connections(dsn):
+    from src import db
+    with db.connect(dsn) as conn:
+        return conn.execute("SELECT account_id, user_id, client_name, redirect_host, "
+                            "approved_at FROM mcp_connections WHERE account_id IS NOT NULL "
+                            "ORDER BY id").fetchall()
+
+
+def test_allow_records_the_connection_the_page_showed(clean_slate, gotrue, monkeypatch):
+    """The studio's "Connected to Claude" line: an approve writes the
+    client and the redirect host the person saw, under their tenant."""
+    from src import mcp_connections
+    mcp_connections.init(clean_slate)
+    monkeypatch.delenv("ZEROPAGE_OPEN_SIGNUP", raising=False)   # Ana gets a workspace
+    _arrive_and_sign_in()
+    csrf = _csrf(_get().text)
+    response = client.post("/oauth/consent", data={"authorization_id": AUTHZ,
+                                                   "decision": "approve", "csrf": csrf},
+                           follow_redirects=False)
+    assert response.status_code == 303, response.text[:400]
+    (row,) = _connections(clean_slate)
+    tenant = min(a["id"] for a in accounts.memberships("uid-ana", dsn=clean_slate))
+    assert (row["account_id"], row["user_id"]) == (tenant, "uid-ana")
+    assert (row["client_name"], row["redirect_host"]) == ("Claude", "claude.ai")
+    assert row["approved_at"] is not None
+
+
+def test_deny_records_nothing(clean_slate, gotrue, monkeypatch):
+    from src import mcp_connections
+    mcp_connections.init(clean_slate)
+    monkeypatch.delenv("ZEROPAGE_OPEN_SIGNUP", raising=False)   # Ana gets a workspace
+    _arrive_and_sign_in()
+    csrf = _csrf(_get().text)
+    client.post("/oauth/consent", data={"authorization_id": AUTHZ,
+                                        "decision": "deny", "csrf": csrf},
+                follow_redirects=False)
+    assert _connections(clean_slate) == []
+
+
+def test_a_failed_record_never_stands_between_the_person_and_the_app(gotrue, monkeypatch):
+    from src import mcp_connections
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(mcp_connections, "record_approval", broken)
+    _arrive_and_sign_in()
+    csrf = _csrf(_get().text)
+    response = client.post("/oauth/consent", data={"authorization_id": AUTHZ,
+                                                   "decision": "approve", "csrf": csrf},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"{CLAIMS_CALLBACK}?code=c0de&state=s"
+
+
 def test_deny_denies(gotrue):
     _arrive_and_sign_in()
     csrf = _csrf(_get().text)

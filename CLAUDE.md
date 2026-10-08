@@ -1590,6 +1590,32 @@ is yours, in Resolve, by hand.
   document is built off that same resource URI rather than `SITE_URL`, or the
   deployed document would publish a localhost resource and discovery would fail
   with nothing to read.
+  **"Connect to Claude" in the account menus (2026-10-08, Mike: "access the MCP
+  from the studio page at the bottom near profile").** Both menus (the rail's
+  profile row and the header avatar) share one `MenuTail` in `shell.tsx`, so
+  they cannot drift; the item opens `components/studio/connect-claude.tsx`.
+  NOTHING ON OUR SIDE CONNECTS ANYBODY: a connector is added from claude.ai,
+  which starts the OAuth flow, and the consent page is where the person says
+  yes. The panel is the address to paste (`/api/me`'s `mcp_url` =
+  `mcp_auth.connector_url()`, i.e. `resource_url()` when the mount is on AND
+  Supabase is configured, else null and the panel says the connector is off),
+  three steps, and a button to `claude.ai/customize/connectors`. claude.ai has
+  no documented deep link that pre-fills a custom connector (checked
+  2026-10-08), so it is copy and paste; once listed, set
+  `ZEROPAGE_CLAUDE_DIRECTORY_URL` (only `https://claude.ai/...` is published)
+  and the steps collapse to one button at the listing. **Connected** comes
+  from `src/mcp_connections.py` (OWNED `mcp_connections`, one row per account
+  × person × client, Mike's call over two columns on `accounts`): the consent
+  page records `client_name` + redirect host on Allow (the GET parks them in
+  the grant; a failed write never blocks the redirect), and `mcp_mount.guarded`
+  stamps `last_used_at` on the LISTED door only -- at most once per account ×
+  person per 10 minutes (`UseStamps`, in-process; a failed write is logged,
+  never the call's error), and never for the operator's static key. A use with no
+  approval on file writes a client-less row (a working token proves a
+  connection). `GET /api/mcp/connection` answers for the caller's tenant and
+  person only. Disconnect is claude.ai's -- Supabase's grant list needs the
+  person's own token, which this app never keeps -- so the panel says where to
+  remove it and nothing here deletes a row.
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.

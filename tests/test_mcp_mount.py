@@ -177,6 +177,67 @@ def test_a_signed_in_caller_acts_as_their_own_account():
     assert mcp_server.CALLER_ACCOUNT.get() is None
 
 
+# ---------- the last-used stamp (the studio's Connect to Claude panel) ----------
+
+def _person_token(sub="uid-ana"):
+    # the guard reads `sub` only after `resolve` has verified the token,
+    # so an unverified decode is all the stamp needs
+    return pyjwt.encode({"sub": sub}, "k" * 32, algorithm="HS256")
+
+
+def _stamping(resolve, clock):
+    inner, seen = _capturing()
+    stamped = []
+    app = mcp_mount.guarded(inner, "static", resolve=resolve,
+                            limiter=mcp_mount.RateLimiter(),
+                            stamp=lambda account_id, user_id: stamped.append((account_id, user_id)),
+                            stamps=mcp_mount.UseStamps(window_s=600, clock=clock))
+    return app, seen, stamped
+
+
+def test_calls_through_the_listed_door_stamp_once_per_window():
+    now = [1000.0]
+    app, seen, stamped = _stamping(lambda t: (7, "ok"), lambda: now[0])
+    header = f"Bearer {_person_token()}"
+    for _ in range(5):
+        assert _drive(app, header) == 200
+    assert stamped == [(7, "uid-ana")] and seen == [7] * 5
+    now[0] += 601
+    assert _drive(app, header) == 200
+    assert stamped == [(7, "uid-ana"), (7, "uid-ana")]
+    # a second person on the same account has their own window
+    assert _drive(app, f"Bearer {_person_token('uid-cleo')}") == 200
+    assert stamped[-1] == (7, "uid-cleo")
+
+
+def test_the_operator_key_stamps_nothing():
+    app, seen, stamped = _stamping(lambda t: (7, "ok"), lambda: 0.0)
+    for _ in range(3):
+        assert _drive(app, "Bearer static") == 200
+    assert stamped == [] and seen == [None] * 3
+
+
+def test_a_refused_caller_stamps_nothing():
+    app, seen, stamped = _stamping(lambda t: (None, "invalid_token"), lambda: 0.0)
+    assert _drive(app, f"Bearer {_person_token()}") == 401
+    app, seen, stamped2 = _stamping(lambda t: (None, "no_account"), lambda: 0.0)
+    assert _drive(app, f"Bearer {_person_token()}") == 403
+    assert stamped == stamped2 == []
+
+
+def test_a_stamp_that_fails_never_fails_the_call():
+    inner, seen = _capturing()
+
+    def broken(account_id, user_id):
+        raise RuntimeError("database is down")
+
+    app = mcp_mount.guarded(inner, "static", resolve=lambda t: (7, "ok"),
+                            limiter=mcp_mount.RateLimiter(), stamp=broken,
+                            stamps=mcp_mount.UseStamps())
+    assert _drive(app, f"Bearer {_person_token()}") == 200
+    assert seen == [7]
+
+
 def test_a_sign_in_with_no_membership_is_403_not_somebody_elses_board():
     inner, seen = _capturing()
     app = mcp_mount.guarded(inner, "static", resolve=lambda t: (None, "no_account"))
