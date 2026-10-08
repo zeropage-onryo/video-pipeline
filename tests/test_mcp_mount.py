@@ -751,6 +751,18 @@ def test_another_persons_job_is_no_job(two_people):
     assert not e2 and p2["label"] == "bob's job"
 
 
+def test_stats_keeps_the_shared_bank_off_the_listed_server(two_people):
+    """`sparks_unused` counts the SHARED spark bank; the 2026-10-08 walk
+    read the operator's 38 off a stranger's `stats`. The listed server
+    leaves it out; the operator's key still gets it."""
+    w = two_people
+    (e1, alice), (e2, operator) = _calls(w, [("alice", "stats", {}),
+                                             ("operator-key", "stats", {})])
+    assert not (e1 or e2)
+    assert "sparks_unused" not in alice
+    assert operator["sparks_unused"] >= 1          # Bob's banked direction
+
+
 def test_the_operator_key_still_reads_the_bootstrap_account(two_people):
     """Alice's account is the seeded (oldest) one, which is what the
     static key resolves to -- the pre-OAuth behaviour, unchanged."""

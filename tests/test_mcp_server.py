@@ -149,6 +149,15 @@ def test_a_captured_idea_has_nothing_to_score(tmp_db):
     assert mcp_server.get_idea(card["id"], dsn=tmp_db)["origin"] == "capture"
 
 
+def test_a_captured_idea_points_at_a_tool_every_caller_has(tmp_db):
+    """The 2026-10-08 second-account walk: the card told a directory user
+    to use `generate`, which the listed server does not offer.
+    `write_scene` is on both servers."""
+    card = mcp_server.capture_idea("zeropage", "Just a title", dsn=tmp_db)
+    assert "`write_scene`" in card["next"] and "generate" not in card["next"]
+    assert "write_scene" in mcp_server.LISTED_TOOLS
+
+
 def test_a_held_run_reports_its_reason_with_the_run(tmp_db, monkeypatch):
     """A phone that asked for a run must not need a second call to
     learn why it held."""

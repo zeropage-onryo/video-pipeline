@@ -67,10 +67,17 @@ GRANT_KEY = "oauth_consent_grant"       # {"id", "token", "csrf"} for one decisi
 # that, never anything that could break out of a URL path segment.
 _ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
-# How long a consent waits on a sign-in. Supabase's own authorization
-# request expires in minutes; past this the pending id is forgotten, so a
-# person who walked away is not shown "Connect an app" on their next visit.
+# How long a consent waits on a sign-in. Past this the pending id is
+# forgotten, so a person who walked away is not shown "Connect an app" on
+# their next visit. Supabase's own authorization request lasts about TEN
+# minutes (measured live 2026-10-08: two requests were gone 10m48s and
+# 11m14s after they were made). Deliberately LONGER than that, not equal:
+# a person who signs in at minute twelve should come back here and be
+# told the request expired (EXPIRED), not be dropped in the studio with
+# no word about the app they were connecting.
 PENDING_MAX_AGE = 15 * 60
+EXPIRED = ("This connection request has expired -- they last about ten minutes. "
+           "Go back to the app you came from and connect again.")
 
 
 def _valid_id(authorization_id: str) -> bool:
@@ -136,6 +143,14 @@ def _problem(request: Request, message: str, status: int = 400) -> HTMLResponse:
     return _page(request, status, problem=message)
 
 
+def _gone(status: int, body: Any) -> bool:
+    """Supabase no longer knows the authorization -- in practice, it
+    expired. Its own words for that are "authorization not found", which
+    reads like a bug to the person who just signed in."""
+    code = body.get("error_code") if isinstance(body, dict) else None
+    return status == 404 or code == "oauth_authorization_not_found"
+
+
 def _safe_redirect(url: Any) -> Optional[str]:
     """Supabase's redirect_url, followed only when it is an absolute
     http(s) URL -- the authorization server validated the client's
@@ -189,6 +204,8 @@ def consent_page(request: Request, authorization_id: str = ""):
         return _to_signin(request, authorization_id)
     if status >= 400:
         request.session.pop(GRANT_KEY, None)
+        if _gone(status, body):
+            return _problem(request, EXPIRED)
         return _problem(request, auth._error_text(
             body, "This authorization request has expired or was already used. "
                   "Start the connection again from the app you came from."))
@@ -250,6 +267,8 @@ def consent_decision(request: Request, authorization_id: str = Form(""),
     # one decision per sign-in: the token is dropped whatever the answer
     request.session.pop(GRANT_KEY, None)
     if status >= 400:
+        if _gone(status, body):
+            return _problem(request, EXPIRED)
         return _problem(request, auth._error_text(
             body, "The authorization server refused that answer. "
                   "Start the connection again from the app you came from."))
