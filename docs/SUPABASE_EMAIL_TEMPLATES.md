@@ -26,7 +26,7 @@ python -m ops.supabase_auth_email apply --templates --dry-run
 SMTP_PASS=re_... python -m ops.supabase_auth_email apply --templates \
     --smtp-host smtp.resend.com --smtp-port 465 --smtp-user resend \
     --sender-email no-reply@zeropage.studio --sender-name "Zero Page" \
-    --site-url https://zeropage-studio.fly.dev --rate-limit 100
+    --site-url https://api.zeropage.studio --rate-limit 100
 ```
 
 The template bodies live in `ops/email_templates/` (the same four shown
@@ -54,8 +54,9 @@ is what every page asks for) and a link that works from any browser
 no cookie needed — not the default `{{ .ConfirmationURL }}`, which is the
 PKCE link that failed above). `{{ .SiteURL }}` is the dashboard's **Site
 URL** (Authentication → URL Configuration) and must be the API origin —
-`https://zeropage-studio.fly.dev`, or `https://api.zeropage.studio` once
-the domain moves — because `/auth/confirm` lives there.
+`https://api.zeropage.studio` since 2026-10-08 (it was
+`https://zeropage-studio.fly.dev`, which Chrome flags as a lookalike of
+zeropage.studio) — because `/auth/confirm` lives there.
 
 **Confirm sign up**
 

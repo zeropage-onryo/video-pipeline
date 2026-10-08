@@ -24,7 +24,7 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | C12 | no AI image/video/audio generation | **FAIL — open review risk** | Built as Mike chose: `approve` renders stills and clips after a quote and a yes in chat. The checklist says such connectors "aren't accepted"; the Compliance step asks for the acknowledgment. Answer it truthfully; if refused, drop `approve` from LISTED_TOOLS (one line) and the Queue is the approve |
 | C13–C19 | OAuth, 401, metadata, AS metadata, DCR, PKCE, scopes | PASS | verified live from here 2026-10-07 |
 | C20 | callback URLs (incl. Claude Code loopback) | **PASS live 2026-10-08** | a Claude Code-shaped client registered `http://localhost:<port>/callback` through DCR (201) and completed the code flow (OAUTH_TEST.md, live results) |
-| C21 | consent screen | **PASS live 2026-10-08**, one open warning | shown and approved live; Chrome's lookalike interstitial on `zeropage-studio.fly.dev` until the Site URL moves to `https://api.zeropage.studio` (OAUTH_TEST.md Finding 4) |
+| C21 | consent screen | **PASS live 2026-10-08** | shown and approved live; the Site URL is `https://api.zeropage.studio` since the same day, so the consent page no longer meets Chrome's lookalike warning (OAUTH_TEST.md Finding 4) |
 | C22–C24 | token endpoint, latency, no tokens in URLs | PASS | |
 | C25 | remote HTTPS | PASS | |
 | C26 | tested in Claude + Inspector | PARTIAL | claude.ai on Mike's account and a second account through a local OAuth client, 2026-10-08; Inspector not run |
@@ -217,9 +217,9 @@ Not on the listed server (operator's door only): sparks, tonight, add_spark, ima
    `main` deploys Fly with Phase 4 and the rate limit.
 3. **Supabase dashboard** (Authentication → OAuth Server): set the
    Authorization Path to `/oauth/consent` (done 2026-10-07). The Site URL is
-   the API origin, and should be `https://api.zeropage.studio` -- the same
-   Fly app -- rather than `zeropage-studio.fly.dev`, which Chrome flags as a
-   lookalike on the consent page (`OAUTH_TEST.md` Finding 4 has the command).
+   the API origin, `https://api.zeropage.studio` (moved from
+   `zeropage-studio.fly.dev` on 2026-10-08, which Chrome flagged as a
+   lookalike on the consent page; `OAUTH_TEST.md` Finding 4).
 4. **Fly**: `fly releases` to confirm the live commit. `QUOTE_SIGNING_SECRET`
    is already set there, so `quote` will carry tokens. Optionally set
    `ZEROPAGE_MCP_RATE` / `ZEROPAGE_MCP_RATE_OPERATOR` (defaults 120 / 1200
