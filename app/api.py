@@ -63,7 +63,7 @@ from src import (
 from src.approvals import ApproveRefused
 from src.locations import IMAGE_EXTENSIONS
 
-from . import auth, jobs, model_connections, workflow_runner
+from . import auth, jobs, mcp_auth, model_connections, workflow_runner
 from . import creative_projects as creative_projects_routes
 
 router = APIRouter(prefix="/api")
@@ -131,7 +131,15 @@ def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
     subscription, priced into the plans). It is refused -- 402, BEFORE any
     job or model call -- only for an account with no plan and no credit
     balance (charge.create_refusal, the one predicate the MCP tools ask
-    too)."""
+    too).
+
+    EVERY ROUTE THAT SPENDS MODEL TEXT ASKS IT (2026-10-08, the spend
+    holes, docs/tasks/task-spend-holes-and-credits.md): the Guide, the
+    brief draft, an element's vision describe, Direct and Polish, the
+    canvas's Ground / Enhance / Run all, the research crawl, the evals and
+    the cut's index and agent. Each stays free per click; this is the one
+    question of whether the account has anything for it to be included in.
+    A new route that calls a model asks it too."""
     from src import charge as charging
     reason = charging.create_refusal(account_id)
     if reason:
@@ -398,7 +406,26 @@ def me(request: Request, account_id: int = Depends(auth.current_account_id)):
                  "avatar_url": user.get("avatar_url")},
         "account": _account_card(active) if active else None,
         "accounts": [_account_card(a) for a in member_of],
+        # the account menus' "Connect to Claude" panel (2026-10-08): the
+        # address to paste into claude.ai, from the one place it is
+        # defined, and the directory listing once there is one. Both are
+        # null when there is nothing to connect to; no database read.
+        "mcp_url": mcp_auth.connector_url(),
+        "claude_directory_url": mcp_auth.directory_url(),
     }
+
+
+@router.get("/mcp/connection")
+def mcp_connection(request: Request, account_id: int = Depends(auth.current_account_id)):
+    """Whether THIS person has connected Claude to THIS account, for the
+    account menus' Connect to Claude panel (src/mcp_connections.py says
+    what the studio can and cannot see). The tenant, not the brand: an
+    MCP call resolves to the person's oldest membership, so that is the
+    account a connection was recorded under. Never another account's,
+    never another member's. Nothing here calls Supabase or claude.ai."""
+    user = auth.current_user(request) or {}
+    from src import mcp_connections
+    return mcp_connections.status(account_id, str(user.get("id") or ""))
 
 
 # --- settings: the person's own row and their password --------------------
@@ -674,6 +701,13 @@ async def creative_guide_reply(request: Request,
     elif not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
 
+    # gated like Create (2026-10-08, the spend holes): a turn is free per
+    # click but runs the guide, the reference hunt, the link reader and the
+    # story judge -- refused here, before any of them and before an upload
+    # is saved, for an account with no plan and no balance
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     image_refs, ref_urls, _ = await _collect_refs(form)
     idea = (form.get("idea") or form.get("prompt") or "").strip()
     # The composer's Image | Video switch (2026-10-04): with it, the turn
@@ -716,7 +750,24 @@ async def creative_guide_reply(request: Request,
         # a scene could actually be written from. It writes nothing.
         grounding = scene_chain.ground(idea, brand=brand, account_id=account_id,
                                        refs=ref_urls)
-        note = lambda text: jobs.progress(job, 0.5, text)   # noqa: E731
+
+        # What the assistant's face reads off the job while the turn runs
+        # (2026-10-08, docs/ASSISTANT_AVATARS.md): `detail` is the line under
+        # it, `steps` {done, of} fills its arc -- only while a tool can say
+        # how far along it is (the reference hunt); a note clears it, so the
+        # arc goes back to sweeping -- and `partial` is the answer's own
+        # words as the model writes them, for the card to type out.
+        def note(text):
+            if text:
+                jobs.update(job["id"], progress=0.5, detail=text, steps=None)
+
+        def on_step(done, of, text):
+            jobs.update(job["id"], progress=done / of if of else 0.5, detail=text,
+                        steps={"done": done, "of": of} if of else None)
+
+        def on_text(text):
+            jobs.update(job["id"], partial=text)
+
         if assistant is not None:
             from src import assistant_brain
             note("remembering what you like")
@@ -745,13 +796,13 @@ async def creative_guide_reply(request: Request,
             # find_references comes back as reply.sheet, which both
             # threads now draw.
             tools, run_tool = _guide_tools(account_id, local=True, brand=brand,
-                                           maker=output is not None)
+                                           maker=output is not None, on_step=on_step)
             reply = creative_guide.respond(
                 conversation, client=genai.Client(api_key=_gemini_key(account_id)),
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
                 brain=brain, assistant=assistant, links=links, output=output,
-                project=project)
+                project=project, on_text=on_text)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
@@ -759,7 +810,7 @@ async def creative_guide_reply(request: Request,
                 "billing": "personal_plan" if personal else "studio_credits",
                 "brain": None if personal else brain,
                 "output": output,
-                "detail": "ready"}
+                "detail": "ready", "steps": None, "partial": None}
 
     job = jobs.start("guide", "creative guide", _in_project(project, work),
                      account_id=account_id)
@@ -787,20 +838,21 @@ def _remember_turn(project_id: int, conversation, reply: dict, account_id: int) 
 
 
 def _guide_tools(account_id: int, *, local: bool = False, brand: str = "",
-                 maker: bool = False):
+                 maker: bool = False, on_step=None):
     """(specs, run_tool) for a Guide turn, or (None, None) when the
     `mcp` package is absent or the server cannot be opened. Never
     raises: a board that cannot be read costs the answer its tools,
     not the person their turn. `local` adds the assistant's own tools
     (find/keep references), which need no MCP at all; `maker` adds the
-    composer's make_image / make_video (guide_tools.MAKE_TOOLS)."""
+    composer's make_image / make_video (guide_tools.MAKE_TOOLS);
+    `on_step` hears the reference hunt's progress."""
     from src import guide_tools
 
     if not guide_tools.available() and not local:
         return None, None
     try:
         return guide_tools.session(account_id=account_id, local=local, brand=brand,
-                                   maker=maker)
+                                   maker=maker, on_step=on_step)
     except Exception as exc:
         print(f"  guide tools unavailable: {exc}", file=sys.stderr)
         return None, None
@@ -1557,6 +1609,11 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     photo_urls = [u for u in form.getlist("photo_urls") if str(u or "").strip()]
     if not images and not photo_urls:
         return _error(400, "no_photos", "at least one photo is required")
+    # gated like Create (2026-10-08): saving an element describes its
+    # photos (a vision call) and teaches the RAG shelf (an embedding)
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     space_dir = LOCATIONS_DIR / slug
     space_dir.mkdir(parents=True, exist_ok=True)
@@ -1615,6 +1672,10 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     slug = _slug(name)
     if not slug:
         return _error(400, "invalid_name", "a name is required")
+    # gated like Create (2026-10-08): see asset_create_location
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     field = (form.get(label) or "").strip()
     notes = (form.get("notes") or "").strip()
     ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"),
@@ -1675,6 +1736,9 @@ def assets_backfill(body: BackfillBody, account_id: int = Depends(auth.current_a
     Runs as a job because a real library takes a while."""
     if body.describe and not _gemini_key(account_id):
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         client = None
@@ -2642,6 +2706,9 @@ def projects_draft_brief(body: ProjectDraftBody,
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     if not any((body.answers.get(k) or "").strip() for k, _ in projects.QUESTIONS):
         return _error(400, "no_answers", "answer at least one question first")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     from google import genai
     try:
         brief = projects.draft_brief(body.title or "untitled",
@@ -2786,10 +2853,14 @@ def scout_run(body: ScoutRunBody, account_id: int = Depends(auth.current_account
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
     brand = body.brand if body.brand in preprod.BRANDS else "antihero"
     count = max(1, min(6, int(body.count or 4)))
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         jobs.progress(job, 0.15, "crawling")
-        result = scout.scout(brand, count, lanes=scout.default_lanes(account_id))
+        result = scout.scout(brand, count, lanes=scout.default_lanes(account_id),
+                             account_id=account_id)
         jobs.progress(job, 0.9, "banking")
         if not result["ok"]:
             raise RuntimeError(result["errors"][0] if result["errors"]
@@ -3138,13 +3209,21 @@ def _render_state(account_id: Optional[int] = None) -> dict:
     pick = providers.check_render_choice()
     spec = providers.model_options(pick["provider"], pick["model"])
     axis = spec["duration"]
+    # what the studio shows: credits, never the provider's dollars
+    # (2026-10-08) -- the same conversion pricing.display makes per render
+    try:
+        credits = pricing.credits_for(pricing.usd_micros(pick["estimate_usd"]))
+    except pricing.PricingRefused:
+        credits = None
     return {"label": providers.RENDER_LABELS.get(pick["provider"], pick["provider"]),
             "provider": pick["provider"],
             "available": fal.has_key(account_id),
             # TRUE whenever the key is: the click is the approval (2026-09-09)
             "spend_ok": fal.has_key(account_id),
             "model": pick["model"],
+            # the provider's cost, for the operator's pages; the studio reads `credits`
             "estimate_usd": pick["estimate_usd"],
+            "credits": credits,
             "duration": pick["duration"],
             "resolution": pick["frame"],
             # every model with what a second of it costs at its default
@@ -4181,6 +4260,9 @@ def concept_direct(concept_id: int, body: DirectBody, account_id: int = Depends(
     note = body.note.strip()
     if not note:
         return _error(400, "empty_note", "an empty note directs nothing")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
@@ -4223,6 +4305,9 @@ def shot_refine(concept_id: int, shot_n: int, account_id: int = Depends(auth.cur
     concept = preprod.get_concept(concept_id, account_id=account_id)
     if concept is None:
         return _error(404, "not_found", "no such concept")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -5076,6 +5161,9 @@ def concept_approve(concept_id: int, account_id: int = Depends(auth.current_acco
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -5421,6 +5509,9 @@ def evals_run(body: EvalRunBody, account_id: int = Depends(auth.current_account_
     if not (api_key and _rag_reachable()):
         return _error(503, "evals_unavailable",
                       "needs the RAG store and GEMINI_API_KEY")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     cases = [{"query": g["query"], "relevant": g["relevant"]} for g in golden]
     # the view already appends "· n queries · k=…", so the default label
     # stays bare to avoid stuttering
@@ -5634,6 +5725,9 @@ def workflow_exec_ground(body: GroundBody, account_id: int = Depends(auth.curren
     "" with the store down, same as everywhere else."""
     from src import shootgen
 
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     references = shootgen.reference_block(
         spark=body.spark.strip() or None, db_path=None)
     return {"references": references}
@@ -5656,6 +5750,9 @@ def workflow_exec_enhance(body: EnhanceBody, account_id: int = Depends(auth.curr
     api_key = _gemini_key(account_id)
     if not api_key:
         return _error(503, "generation_unavailable", "GEMINI_API_KEY not set")
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
 
     def work(job):
         from google import genai
@@ -5883,6 +5980,12 @@ def workflows_run(workflow_id: int, account_id: int = Depends(auth.current_accou
     graph = workflow.get("graph") or {}
     if not graph.get("nodes"):
         return _error(400, "empty_graph", "the workflow has no nodes to run")
+    # gated like Create (2026-10-08): the enhance node is free per click
+    # but billed to the studio; the Nano and Generate nodes hold credits
+    # of their own and refuse on an empty balance regardless
+    refused = _create_gate(account_id)
+    if refused is not None:
+        return refused
     api_key = _gemini_key(account_id)
 
     def work(job):

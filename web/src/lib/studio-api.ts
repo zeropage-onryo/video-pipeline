@@ -26,8 +26,25 @@ export type Me = {
   };
   account: Account | null;
   accounts: Account[];
+  /** the address to paste into claude.ai (app/mcp_auth.connector_url);
+   *  null when this server takes no person's connection, absent on an
+   *  older API */
+  mcp_url?: string | null;
+  /** the connector's Claude directory listing, once it has one */
+  claude_directory_url?: string | null;
 };
 export const getMe = () => apiFetch<Me>("/me");
+
+/* whether THIS person has connected Claude to this account
+   (src/mcp_connections.py): recorded when they press Allow on the consent
+   page, stamped when Claude uses it. claude.ai is never asked. */
+export type McpConnection = {
+  connected: boolean;
+  approved_at: string | null;
+  last_used_at: string | null;
+  client_name: string | null;
+};
+export const getMcpConnection = () => apiFetch<McpConnection>("/mcp/connection");
 
 /* ── settings (2026-10-03): the person's own row and their password ──
    PATCH /api/me renames; the password and email writes each re-prove the
@@ -333,7 +350,11 @@ export type RendererState = {
   available: boolean;
   spend_ok: boolean;
   model: string;
+  /** the provider's cost -- for the operator's own pages, never shown in the studio */
   estimate_usd: number;
+  /** what the default clip costs in credits (pricing.credits_for), the
+   *  number every studio surface shows; null when the server could not price it */
+  credits?: number | null;
   duration?: number;
   resolution?: string;
   models?: RendererModel[];
@@ -571,6 +592,11 @@ export type Job = {
   file_url?: string | null;
   otio_url?: string | null;
   srt_url?: string | null;
+  /** a Guide turn (2026-10-08): how far a tool that can say so has come
+   *  (the reference hunt), null while nothing can -- the face's arc */
+  steps?: { done: number; of: number } | null;
+  /** a Guide turn: the answer's own words as the model writes them */
+  partial?: string | null;
 };
 /** POST /api/scenes/run — multipart: idea, brand, count (1–4), refs
  *  (asset photo urls) and files (uploads), exactly what the Jinja
@@ -618,12 +644,18 @@ export const runGuideAction = (
 export const PROJECT_TOOLS = ["create_project", "save_as_project"];
 export const isProjectTool = (tool?: string) => !!tool && PROJECT_TOOLS.includes(tool);
 export const getJob = (id: number) => apiFetch<Job>(`/jobs/${id}`);
-export async function waitForJob(id: number, onTick?: (job: Job) => void, everyMs = 1500) {
+/* `everyMs` may depend on what the job just said: a Guide turn whose
+   answer is arriving is polled faster than one still thinking. */
+export async function waitForJob(
+  id: number,
+  onTick?: (job: Job) => void,
+  everyMs: number | ((job: Job) => number) = 1500,
+) {
   for (;;) {
     const job = await getJob(id);
     onTick?.(job);
     if (["done", "failed", "cancelled"].includes(job.status)) return job;
-    await new Promise((r) => setTimeout(r, everyMs));
+    await new Promise((r) => setTimeout(r, typeof everyMs === "function" ? everyMs(job) : everyMs));
   }
 }
 
@@ -687,6 +719,22 @@ export const getBalance = () => apiFetch<Balance>("/billing/balance");
  *  finished render settles it. The shell re-reads the balance on it. */
 export const BALANCE_EVENT = "zpf:balance";
 export const announceBalanceChange = () => window.dispatchEvent(new Event(BALANCE_EVENT));
+/** Re-read the balance once `jobId` has ended (2026-10-08). A job that
+ *  draws a still or renders a clip settles -- or releases -- its hold when
+ *  it finishes, and the shell hears about it from nothing else; a caller
+ *  that is not already watching the job hands it here. Polls until the job
+ *  is terminal, gives up quietly on a lost connection (announcing once, so
+ *  the pill is re-read anyway), and outlives the component that asked. */
+export function announceBalanceWhenDone(jobId: number, every = 2500): void {
+  const tick = () =>
+    getJob(jobId)
+      .then((job) => {
+        if (job.status === "queued" || job.status === "running") setTimeout(tick, every);
+        else announceBalanceChange();
+      })
+      .catch(() => announceBalanceChange());
+  setTimeout(tick, every);
+}
 
 /* ── projects (2026-09-28) ──
    One brief and one memory per piece of work (src/projects.py). The

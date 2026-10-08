@@ -137,6 +137,7 @@ import {
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
 import "@/components/studio/composer/composer.css";
+import { AssistantAvatar } from "@/components/studio/assistant-avatar";
 
 /* an upload on its way to the bin: drawn from its object URL until the
    server answers with the URL the draft keeps */
@@ -1380,7 +1381,8 @@ function Composer() {
               <span className="spacer" />
               {filledBy && idea.trim() ? (
                 <span className="zpa-filled">
-                  {filledBy.avatar ? `${filledBy.avatar} ` : ""}Filled by {filledBy.name}
+                  {filledBy.avatar ? <AssistantAvatar avatar={filledBy.avatar} size="xs" className="zpa-filled-face" /> : null}
+                  Filled by {filledBy.name}
                 </span>
               ) : null}
               {liveRun ? (

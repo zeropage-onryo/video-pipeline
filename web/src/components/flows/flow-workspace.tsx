@@ -83,6 +83,7 @@ import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
 import { sceneHref, sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
 import { creditsText } from "@/lib/render-choice";
 import {
+  announceBalanceChange,
   announceQueueChange,
   getAssets,
   getCapabilities,
@@ -139,7 +140,7 @@ const notes: Record<Kind, string> = {
   reference: "One plate this shot starts from.",
   element: "Reference frames from the asset library. Keeps the face, the wardrobe or the room consistent across shots.",
   image: "Renders the keyframe the clip starts from — the enhanced prompt as a still, grounded on every reference wired in.",
-  video: "Takes every wire coming in and renders one clip, anchored on the keyframe. The only step that spends money.",
+  video: "Takes every wire coming in and renders one clip, anchored on the keyframe. Held in credits until the clip lands.",
 };
 const starterText =
   "A solitary rider crosses a sunlit field. Wind moves through the tall grass, warm afternoon light, subtle film grain. A quiet, unhurried moment.";
@@ -199,7 +200,9 @@ const Actions = createContext<{
   caps: Capabilities;
   /** what one still costs, and whether this account is charged (2026-09-29) */
   still: { credits: number; exempt: boolean } | null;
-}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null });
+  /** the operator's own account: prices show "not charged" beside them */
+  exempt: boolean;
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null, exempt: false });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -491,8 +494,8 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           )}
           <footer className="node-footer nodrag">
             <span className="m">
-              {data.kind === "video" && rw?.estimate_usd != null
-                ? `est. $${Number(rw.estimate_usd).toFixed(2)}`
+              {data.kind === "video" && rw?.credits != null && !data.busy
+                ? creditsText(rw.credits, actions.exempt)
                 : data.kind === "image" && actions.still && !data.busy
                   ? creditsText(actions.still.credits, actions.still.exempt)
                   : data.busy
@@ -1177,6 +1180,9 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
             else if (["failed", "cancelled"].includes(job.status))
               update(n.id, { busy: false, jobId: undefined, error: job.error || job.status });
             else update(n.id, { busy: true });
+            // a still or a clip settles (or releases) its hold as its job
+            // ends: the header's balance re-reads then, not on the next page
+            if (!isText(n.data.kind) && !["queued", "running"].includes(job.status)) announceBalanceChange();
           } catch (error) {
             if (!cancelled)
               update(n.id, {
@@ -1267,6 +1273,8 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
           lastSaved.current = "";
           setSaveRevision((n) => n + 1);
           if (job.status === "done") announceQueueChange();
+          // however the run ended, its stills and clips settled or released
+          announceBalanceChange();
         }
       } catch (error) {
         if (!cancelled) {
@@ -1339,7 +1347,7 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
   const gen = scene?.generate && !scene.generate.error ? scene.generate : null;
   const rw =
     scene?.renderer && gen
-      ? { ...scene.renderer, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd, resolution: gen.frame || scene.renderer.resolution }
+      ? { ...scene.renderer, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd, credits: gen.credits, resolution: gen.frame || scene.renderer.resolution }
       : (scene?.renderer ?? null);
 
   return (
@@ -1357,6 +1365,7 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
         renderer: rw,
         caps,
         still: shell.balance?.prices?.still != null ? { credits: shell.balance.prices.still, exempt: !!shell.balance.exempt } : null,
+        exempt: !!shell.balance?.exempt,
       }}
     >
       <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
@@ -1519,9 +1528,10 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
                 <div className="insp-sec">
                   <span className="m">spend</span>
                   <div className="insp-spend">
-                    <b>{rw?.estimate_usd != null ? `$${Number(rw.estimate_usd).toFixed(2)}` : "—"}</b>
+                    <b>{rw?.credits != null ? `${rw.credits.toLocaleString("en-US")} cr` : "—"}</b>
                     <span>
                       per {rw?.duration ?? 5}-second clip · {rw?.model ?? "video"}
+                      {rw?.credits != null && shell.balance?.exempt ? " · not charged" : ""}
                     </span>
                   </div>
                   {gateNote("video", caps) ? <span className="m gate">{gateNote("video", caps)}</span> : null}
@@ -1737,7 +1747,9 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
               <h2 id="render-title">Run {nodes.find((n) => n.id === confirm)?.data.label}?</h2>
               <p>
                 {nodes.find((n) => n.id === confirm)?.data.kind === "video"
-                  ? "This renders a clip on fal and holds credits — the adapter's own gate still has the last word."
+                  ? rw?.credits != null
+                    ? `This renders a clip on fal — ${creditsText(rw.credits, !!shell.balance?.exempt)}, held until it lands.`
+                    : "This renders a clip on fal and holds credits — the adapter's own gate still has the last word."
                   : nodes.find((n) => n.id === confirm)?.data.kind === "image" && shell.balance?.prices?.still != null
                     ? `This draws one still — ${creditsText(shell.balance.prices.still, !!shell.balance.exempt)}.`
                     : "This is a billed model call."}

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app import api, auth
 from app.main import app
-from src import assistant_brain, creative_guide, gemini_utils, guide_tools, scene_chain
+from src import assistant_brain, charge, creative_guide, gemini_utils, guide_tools, scene_chain
 
 # ---------- persona: nothing free-text reaches the prompt ----------
 
@@ -363,6 +363,9 @@ def client(monkeypatch):
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": "guide-user"})
     monkeypatch.setattr(auth, "current_account", lambda request: {"slug": "zeropage"})
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    # the account here is a made-up id with no plan and no balance: the
+    # Create gate (tested in test_spend_gates.py) is held open
+    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
     app.dependency_overrides[auth.current_account_id] = lambda: 42
     yield TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
     app.dependency_overrides.pop(auth.current_account_id, None)
@@ -545,3 +548,83 @@ def test_the_planner_and_the_guide_are_told_to_hunt_only_what_was_asked():
     tools = (assistant_brain.ROOT / "prompts" / "creative_guide_tools.txt").read_text()
     assert '["prop"]' in tools and "never a setting, lighting or wardrobe" in tools
     assert "never a setting, lighting or wardrobe" in assistant_brain.brain_prompt()
+
+
+# ---------- the hunt says how far along it is (2026-10-08) ----------
+
+def test_find_references_reports_its_steps_for_the_face():
+    steps = []
+
+    def search(query, brand, limit=6, dsn=None):
+        return [] if "nothing" in query else _cands(query, n=3)
+
+    def screen(candidates, need, **kw):
+        return {"checked": True, "keepers": candidates[:1], "rejected": [], "note": ""}
+
+    assistant_brain.find_references(
+        "a bar", plan=lambda *a, **k: _needs(("place", "dive bar"), ("light", "nothing at all")),
+        search=search, screen=screen, on_step=lambda *s: steps.append(s))
+    assert steps == [
+        (0, 0, "reading the scene"),                 # how many needs: not known yet
+        (1, 6, "searching for place frames"),
+        (2, 6, "looking at 3 place frames"),
+        (3, 6, "searching for light frames"),        # found nothing: still counts its two
+        (5, 6, "laying out the contact sheet"),
+    ]
+
+
+def test_a_step_listener_that_raises_never_stops_the_hunt():
+    def broken(*s):
+        raise RuntimeError("the card went away")
+
+    out = assistant_brain.find_references(
+        "a bar", plan=lambda *a, **k: _needs(("place", "dive bar")),
+        search=lambda q, b, limit=6, dsn=None: _cands(q, n=2),
+        screen=lambda c, n, **kw: {"checked": True, "keepers": c[:1], "rejected": [], "note": ""},
+        on_step=broken)
+    assert out["ok"]
+
+
+def test_route_puts_steps_and_the_written_words_on_the_job(client, monkeypatch):
+    """What the pill polls: `steps` fills the face's arc while the hunt
+    runs, a note clears it, `partial` is the answer so far -- and the
+    finished job carries neither."""
+    async def refs(form, **kwargs):
+        return [], [], []
+
+    monkeypatch.setattr(api, "_collect_refs", refs)
+    monkeypatch.setattr(scene_chain, "ground", lambda *a, **k: {})
+    monkeypatch.setattr(assistant_brain, "memory", lambda brand, account_id: {})
+    heard = {}
+
+    def tools(account_id, **kwargs):
+        heard["on_step"] = kwargs["on_step"]
+        return None, None
+
+    monkeypatch.setattr(api, "_guide_tools", tools)
+    seen = []
+    real_update = api.jobs.update
+
+    def update(job_id, **fields):
+        seen.append(fields)
+        return real_update(job_id, **fields)
+
+    monkeypatch.setattr(api.jobs, "update", update)
+
+    def respond(conversation, **kwargs):
+        heard["on_step"](1, 4, "searching for place frames")
+        kwargs["on_retry"]("looked at find_references")
+        kwargs["on_text"]("Found")
+        return {"message": "Found two."}
+
+    monkeypatch.setattr(creative_guide, "respond", respond)
+    r = client.post("/api/creative-guide", data={
+        "conversation": json.dumps({"messages": [{"role": "user", "content": "find a bar"}]}),
+        "assistant": "1", "stage": "references"})
+    done = _wait(client, r.json()["job_id"])
+    assert {"progress": 0.25, "detail": "searching for place frames",
+            "steps": {"done": 1, "of": 4}} in seen
+    assert {"progress": 0.5, "detail": "looked at find_references", "steps": None} in seen
+    assert {"partial": "Found"} in seen
+    assert done["reply"]["message"] == "Found two."
+    assert done["steps"] is None and done["partial"] is None

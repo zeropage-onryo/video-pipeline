@@ -2138,7 +2138,7 @@ def run_research(brand: str, count: int = 4, lanes=None,
         raise ValueError(f"unknown lanes {unknown}; known: {list(LANES)}")
 
     result = scout.scout(brand=brand, count=max(1, min(int(count), 8)),
-                         lanes=lanes, dsn=dsn)
+                         lanes=lanes, dsn=dsn, account_id=_account(account_id, dsn))
     return {
         "ok": result["ok"],
         "brand": brand,

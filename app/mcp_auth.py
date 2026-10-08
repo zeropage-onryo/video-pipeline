@@ -138,6 +138,49 @@ def configured() -> bool:
     return bool(auth.supabase_url())
 
 
+# --- what the studio's "Connect to Claude" panel shows (2026-10-08) --------
+#
+# Nothing on this side can connect anybody: a connector is added FROM
+# claude.ai, which starts the OAuth flow, and our consent page is where the
+# person says yes. The panel only makes that one step obvious, so all it
+# needs from the server is the address to paste -- and, once the directory
+# listing is live, the listing to send people to instead.
+
+DIRECTORY_ENV = "ZEROPAGE_CLAUDE_DIRECTORY_URL"
+
+
+def connector_url() -> Optional[str]:
+    """The address a person pastes into claude.ai, or None when this
+    server cannot take a person's connection.
+
+    `resource_url()` itself, never a second copy: it is the name tokens
+    are minted for and the name the metadata document publishes, so a
+    pasted URL that differed from it would connect to nothing. None when
+    the mount is off (`app.main` mounts /mcp on the same two env reads
+    `mcp_mount.build` makes) or when there is no authorization server --
+    with only the operator's static key, a person pressing Connect gets a
+    401 that names no way to sign in, and the panel should say the
+    connector is off rather than hand out a URL that fails.
+    """
+    from . import mcp_mount
+    if not (mcp_mount.enabled() and mcp_mount.token() and configured()):
+        return None
+    return resource_url()
+
+
+def directory_url() -> Optional[str]:
+    """The connector's Claude directory listing, once it has one
+    (`https://claude.ai/directory/connectors/<slug>`, permanent after
+    publication). Unset means not listed yet and the panel shows the
+    manual steps; setting it is a Fly env change, not a deploy. Only an
+    https claude.ai address is published -- the panel renders this as a
+    link, and an env typo must not become a link to somewhere else."""
+    raw = (os.environ.get(DIRECTORY_ENV) or "").strip()
+    if not raw.startswith("https://claude.ai/"):
+        return None
+    return raw
+
+
 def verify(token: str) -> Optional[dict[str, Any]]:
     """The claims of a token this server will accept, or None.
 

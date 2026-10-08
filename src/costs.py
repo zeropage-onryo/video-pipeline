@@ -33,7 +33,11 @@ NOTES = (
     "(src/spend.py PRICES, src/<tool>.py COST_*), never an invoice.",
     "A render with no price was paid for by a subscription, not per call; it "
     "is counted as free, not as $0.00 spend.",
-    "Embeddings (gemini-embedding-001, the RAG library) are not metered.",
+    "Embeddings (gemini-embedding-001, the RAG library) are metered since "
+    "2026-10-08; when the API reports no token count they are estimated at "
+    "four characters a token.",
+    "fal Whisper (the cut index's transcripts) is priced per audio minute and "
+    "Serper's image search per query -- flat estimates, not token counts.",
 )
 
 

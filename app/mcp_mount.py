@@ -24,6 +24,7 @@ caller cannot open a session or enumerate the tool list.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 import sys
@@ -111,6 +112,70 @@ class RateLimiter:
 
 
 LIMITER = RateLimiter()
+
+
+# --- "last used", for the account menus' Connect to Claude panel ----------
+#
+# A request through the listed door says this person's connection works,
+# and src/mcp_connections.touch writes that down. At most once per person
+# per account per USE_STAMP_WINDOW_S: a connector polls `job` in a loop,
+# and a database write per MCP call to keep one line of a panel fresh
+# would be the wrong trade. In-process for the rate limiter's reason (one
+# Fly machine); a deploy forgets the memo and the next call stamps again.
+USE_STAMP_WINDOW_S = 600
+
+
+class UseStamps:
+    """Which (account, person) pairs are due a stamp. `due` answers True
+    once per window per key and records the answer whether or not the
+    write that follows succeeds: a database that is down is asked again
+    next window, not on every call."""
+
+    def __init__(self, window_s: float = USE_STAMP_WINDOW_S,
+                 clock: Callable[[], float] = time.monotonic):
+        self.window_s = float(window_s)
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._last: dict = {}           # key -> when it was last stamped
+
+    def due(self, key) -> bool:
+        now = self.clock()
+        with self._lock:
+            last = self._last.get(key)
+            if last is not None and now - last < self.window_s:
+                return False
+            self._last[key] = now
+            return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._last.clear()
+
+
+USE_STAMPS = UseStamps()
+
+
+def _token_subject(token: str) -> str:
+    """The person a token names. Read WITHOUT verifying, and only ever
+    after `resolve` has verified the same token -- this is a label for
+    the stamp, never a decision about access."""
+    import jwt
+    try:
+        return str(jwt.decode(token, options={"verify_signature": False}).get("sub") or "")
+    except jwt.PyJWTError:
+        return ""
+
+
+async def _stamp_use(account_id: int, token: str, stamp, stamps: UseStamps) -> None:
+    """Best-effort, and never the request's problem: a failed write is
+    logged and the call goes on to the MCP app exactly as before."""
+    user_id = _token_subject(token)
+    if not user_id or not stamps.due((int(account_id), user_id)):
+        return
+    try:
+        await asyncio.to_thread(stamp, int(account_id), user_id)
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        print(f"[mcp] could not stamp the connection's last use: {exc}", file=sys.stderr)
 
 # The SDK refuses any request whose Host header it does not recognise --
 # DNS-rebinding protection, which defends a localhost server against a
@@ -210,7 +275,7 @@ def _too_many(retry_after: int, limit: int):
 
 
 def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = None,
-            listed_app=None):
+            listed_app=None, stamp=None, stamps: Optional[UseStamps] = None):
     """Wrap an ASGI app so every request names a caller.
 
     A plain ASGI wrapper rather than middleware on the parent app: the
@@ -249,11 +314,20 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
     engine tool. Registration is per server, not per request, so hiding
     tools from one door means a second server, not a filter. With no
     `listed_app` (a test that builds one app) everybody reaches `app`.
+
+    A SIGNED-IN CALL IS STAMPED as the person's connection's last use
+    (`stamp`, default `mcp_connections.touch`), throttled by `stamps` --
+    the studio's "Connected to Claude" line. The operator's key is not a
+    connection anybody made and stamps nothing.
     """
     if resolve is None:
         from .mcp_auth import account_for_token as resolve
     if limiter is None:
         limiter = LIMITER
+    if stamp is None:
+        from src.mcp_connections import touch as stamp
+    if stamps is None:
+        stamps = USE_STAMPS
 
     from src import mcp_server
 
@@ -291,6 +365,7 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
         if not ok:
             response = _too_many(retry_after, limit)
             return await response(scope, receive, send)
+        await _stamp_use(account_id, supplied, stamp, stamps)
         token = mcp_server.CALLER_ACCOUNT.set(account_id)
         try:
             return await (listed_app or app)(scope, receive, send)

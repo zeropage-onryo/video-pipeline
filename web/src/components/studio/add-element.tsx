@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Image as ImageIcon, LayoutGrid, X } from "lucide-react";
 import { API_URL } from "@/lib/api";
-import { createAsset, getCapabilities } from "@/lib/studio-api";
+import { announceBalanceWhenDone, createAsset, getCapabilities } from "@/lib/studio-api";
 import { useShell } from "@/components/studio/shell";
 import { creditsText } from "@/lib/render-choice";
 import { CREATE_ROUTE, ELEMENT_KINDS, PRODUCT_KIND, type ElementKind } from "@/lib/elements";
@@ -94,6 +94,9 @@ export function AddElement({
       urls.forEach((u) => form.append("photo_urls", u));
       form.append("sheet", willDraw ? "1" : "0");
       const res = await createAsset(CREATE_ROUTE[kind], form);
+      // the sheet is a charged still: the balance moves when its job ends,
+      // whichever page opened this modal (Elements, Assets, the composer)
+      if (res.sheet_job) announceBalanceWhenDone(res.sheet_job);
       onSaved(name.trim(), res.photos ?? photoCount, res.note, res.sheet_job ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save");
