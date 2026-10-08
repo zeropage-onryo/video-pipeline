@@ -48,7 +48,7 @@ import contextvars
 import os
 import sys
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, TypedDict
 
 from . import accounts, autonomy, db, imagesearch, preprod, refbin, scout
 
@@ -137,6 +137,7 @@ TITLES = {
     "project": "Open one project",
     "project_chat": "Read a project's chat history",
     "create_project": "Create a project",
+    "save_chat": "Save this chat into a project",
 }
 
 _CAP = f"Returns at most `limit` rows (default {LIST_LIMIT}, maximum 100)"
@@ -399,6 +400,17 @@ DESCRIPTIONS = {
         "the studio. Pass its id as `project_id` to a render or an effect to "
         "file the result under it. Spends nothing."
     ),
+    "save_chat": (
+        "Save turns of this conversation into one of your projects' chat "
+        "history (`project_id` from `projects`), so they are there when the "
+        "project is reopened -- here, or in the studio, where the project's "
+        "assistant picks the conversation up. `turns` are the person's "
+        "messages and your replies, in order, each {role: user or assistant, "
+        "content}; up to 100 per call. Turns the history already ends with are "
+        "skipped, so re-sending the conversation from its start saves only "
+        "what is new. Save when the person wants this conversation kept with "
+        "the project. Spends nothing."
+    ),
 }
 
 # What each tool DOES, for Claude's permission model: `read` (no change),
@@ -440,6 +452,7 @@ HINTS = {
     "project":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "project_chat":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "create_project":    {"read": False, "destructive": False, "idempotent": False, "open_world": False},
+    "save_chat":         {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
 }
 
 # THE LISTED SET (2026-10-07, Mike's call). What a signed-in stranger is
@@ -460,7 +473,7 @@ LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
 # always on here, because they are the point of it; each is quoted first
 # and runs only after the person's yes in chat (`approval_gate`), which is
 # the gate -- not the engine flag. `build_server(surface="studio")`.
-STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project",
+STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_chat",
                 "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
                 "generate_video", "apply_effect", "job")
@@ -475,8 +488,9 @@ STUDIO_INSTRUCTIONS = (
     "arguments and approve_usd = the quoted price. Never approve on the "
     "person's behalf. Work can be filed into a project: `projects` lists them, "
     "`project` reopens one (its brief, look, scenes, the reference images it "
-    "used and its chat), `create_project` starts one, and `project_id` on a "
-    "render files it there. References and sources are ids (gen:<id> from "
+    "used and its chat), `create_project` starts one, `project_id` on a "
+    "render files it there, and `save_chat` keeps this conversation with the "
+    "project when the person wants it kept. References and sources are ids (gen:<id> from "
     "renders, a photo ref from elements or a project, candidate:<id> from "
     "images_for), never URLs. "
     "Renders run in the background: poll `job`. prompt_craft holds the "
@@ -1578,8 +1592,11 @@ def _turn(message: dict, excerpt: Optional[int] = None) -> dict[str, Any]:
            "content": content if excerpt is None else content[:excerpt]}
     if excerpt is not None and len(content) > excerpt:
         out["truncated"] = True
-    extras = message.get("tool_calls")
-    if isinstance(extras, dict) and extras:
+    extras = dict(message.get("tool_calls") or {}) if isinstance(
+        message.get("tool_calls"), dict) else {}
+    if extras.get("via"):
+        out["via"] = extras.pop("via")           # saved from here, not the studio
+    if extras:
         out["carried"] = sorted(extras)          # what the studio drew beside it
     return out
 
@@ -1699,6 +1716,32 @@ def project_history(project_id: int, before: Optional[int] = None,
             "count": len(items), "turns": items, "has_more": bool(page["has_more"]),
             **({"next_before": items[0]["id"]} if page["has_more"] and items else {}),
             **({} if items else {"note": "no chat in this project yet"})}
+
+
+class ChatTurn(TypedDict):
+    """One turn `save_chat` files: who said it and what was said."""
+    role: Literal["user", "assistant"]
+    content: str
+
+
+def save_project_chat(project_id: int, turns: Optional[list] = None,
+                      dsn: Optional[str] = None,
+                      account_id: Optional[int] = None) -> dict[str, Any]:
+    """This conversation into the project's history (2026-10-08, Mike's
+    ask), marked `via: mcp`, de-duplicated against the history's tail by
+    `projects.append_turns`. Spends nothing; a person's own project only."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    project = _project_or_refuse(project_id, dsn, account_id)
+    if not turns:
+        raise ValueError("no turns to save -- pass the conversation as "
+                         "[{role: user|assistant, content}]")
+    done = projects.append_turns(project["id"], [dict(t) for t in turns], dsn,
+                                 account_id=account_id, via="mcp")
+    return {"project_id": project["id"], "title": project["title"], **done,
+            "note": ("saved; reopening the project here or in the studio shows it"
+                     if done["saved"] else "nothing new to save -- the history "
+                     "already ends with these turns")}
 
 
 def make_project(title: str, brief: str = "", look: str = "",
@@ -2517,6 +2560,11 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
     @_reg("create_project")
     def create_project(title: str, brief: str = "", look: str = "") -> dict:
         return _t(make_project, title, brief=brief, look=look, dsn=dsn,
+                  account_id=account_id)
+
+    @_reg("save_chat")
+    def save_chat(project_id: int, turns: list[ChatTurn]) -> dict:
+        return _t(save_project_chat, project_id, turns=turns, dsn=dsn,
                   account_id=account_id)
 
     @_reg("elements")

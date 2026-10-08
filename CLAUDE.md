@@ -146,7 +146,7 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # MMAudio sound), each quoted first and spent only after a yes in chat
 # (approve_usd), plus image_models / video_models / effects / elements /
 # renders / images_for / prompt_craft, and PROJECTS (projects / project /
-# project_chat / create_project; project_id on a render files it there).
+# project_chat / create_project / save_chat; project_id on a render files it there).
 # NO board tools. --surface board (or
 # ZEROPAGE_MCP_SURFACE=board) serves the full board; src/research_agent.py
 # asks for it by name. The Guide and the HTTP mount build the board surface.
@@ -1631,8 +1631,14 @@ is yours, in Resolve, by hand.
   scenes used (`projects.scene_refs`, each with the `ref` stored on the shot, its kind, label and
   source page), its renders and the latest chat turns -- `project_chat` pages the history
   (`projects.messages`, `before` = the oldest id held) and `create_project` makes one on the same
-  projects board the studio draws. Reopening is read-only: nothing here writes to a project's
-  chat. A project's scene refs join the reference grammar (`_project_refs`, read lazily, fails
+  projects board the studio draws. **`save_chat` writes the conversation back** (same day, Mike's
+  ask): Claude passes the turns, `projects.append_turns` files them into `project_messages`
+  marked `via: mcp` (shown as `via` when read back; the studio's thread ignores the key and draws
+  them as ordinary turns, so the project's assistant picks the conversation up), at most 100 per
+  call, refusing a role other than user/assistant. It de-duplicates by the TAIL: the longest run
+  of the batch the history already ends with is skipped, so re-sending a conversation from its
+  start saves only what is new -- but a studio turn written in between breaks the run and a
+  re-send then repeats, a rule kept simple enough to predict. A project's scene refs join the reference grammar (`_project_refs`, read lazily, fails
   CLOSED), and `project_id` on `generate_image` / `generate_video` / `apply_effect` files the
   render under the project -- in the generations row's params and the Assets row's metadata,
   NOT as a scene (that would be adding to the board) -- so `project` lists it on the next visit

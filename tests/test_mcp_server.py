@@ -1589,3 +1589,59 @@ def test_the_project_tools_are_on_the_studio_surface_and_never_listed(tmp_db, mo
     studio = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, surface="studio"))}
     listed = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, listed=True))}
     assert tools <= studio and not tools & listed
+
+
+def test_save_chat_files_the_conversation_and_reopening_shows_it(tmp_db, monkeypatch):
+    path = _project_db(tmp_db, monkeypatch)
+    pid = mcp_server.make_project("Ghost can", dsn=path)["id"]
+    turns = [{"role": "user", "content": "make it colder"},
+             {"role": "assistant", "content": "Here is a colder still."}]
+    out = mcp_server.save_project_chat(pid, turns, dsn=path)
+    assert out["saved"] == 2 and out["title"] == "Ghost can" and "saved" in out["note"]
+    again = mcp_server.save_project_chat(pid, turns, dsn=path)
+    assert again["saved"] == 0 and "nothing new" in again["note"]
+    chat = mcp_server.get_project(pid, dsn=path)["chat"]
+    assert [(t["role"], t["content"], t["via"]) for t in chat] == [
+        ("user", "make it colder", "mcp"), ("assistant", "Here is a colder still.", "mcp")]
+    assert "carried" not in chat[0]
+    page = mcp_server.project_history(pid, dsn=path)
+    assert [t["via"] for t in page["turns"]] == ["mcp", "mcp"]
+    with pytest.raises(ValueError, match="no turns"):
+        mcp_server.save_project_chat(pid, [], dsn=path)
+    with pytest.raises(ValueError, match="no project"):
+        mcp_server.save_project_chat(999999, turns, dsn=path)
+
+
+def test_save_chat_through_the_tool_and_never_on_the_listed_server(tmp_db, monkeypatch):
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+    path = _project_db(tmp_db, monkeypatch)
+    pid = mcp_server.make_project("Tool", dsn=path)["id"]
+    server = mcp_server.build_server(dsn=path, surface="studio")
+    out = _result(asyncio.run(server.call_tool("save_chat", {
+        "project_id": pid, "turns": [{"role": "user", "content": "hello"}]})))
+    assert out["saved"] == 1
+    with pytest.raises(ToolError):
+        asyncio.run(server.call_tool("save_chat", {
+            "project_id": pid, "turns": [{"role": "system", "content": "x"}]}))
+    listed = {t.name for t in _tools(mcp_server.build_server(dsn=path, listed=True))}
+    assert "save_chat" not in listed
+
+
+def test_another_accounts_project_takes_no_chat(pg):
+    from conftest import seed_two
+
+    from src import accounts, projects
+    preprod.init(pg)
+    scout.init(pg)
+    projects.init(pg)
+    seed_two("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        other = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+    mine = accounts.resolve_account(dsn=pg)
+    theirs = projects.create("Theirs", "", pg, account_id=other)
+    with pytest.raises(ValueError, match="no project"):
+        mcp_server.save_project_chat(theirs["id"], [{"role": "user", "content": "x"}],
+                                     dsn=pg, account_id=mine)
+    assert projects.messages(theirs["id"], pg, account_id=other)["items"] == []

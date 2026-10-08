@@ -97,6 +97,7 @@ MESSAGE_ROLES = ("user", "assistant")
 MESSAGE_MAX = 20000          # characters of one turn (creative_guide.Message)
 MESSAGES_PAGE = 40           # turns loaded when a workspace opens
 TOOL_CALLS_MAX = 60_000      # bytes of extras kept beside one turn
+SAVE_TURNS_MAX = 100         # turns one append_turns call takes
 
 
 def init(dsn: Optional[str] = None) -> None:
@@ -470,6 +471,53 @@ def copy_messages(project_id: int, turns, dsn: Optional[str] = None, *,
 
 
 # -- memory -------------------------------------------------------------------
+
+def append_turns(project_id: int, turns, dsn: Optional[str] = None, *,
+                 account_id: int, via: Optional[str] = None) -> dict[str, Any]:
+    """A conversation had somewhere else -- Claude, through the MCP
+    (2026-10-08, Mike's ask) -- filed into the project's history in order,
+    so it is there when the project is reopened, here or in the studio,
+    where the project's assistant reads it back.
+
+    Unlike `copy_messages` this is called again and again on ONE running
+    conversation, so it de-duplicates: the longest run of `turns` that the
+    history already ENDS with is skipped. Re-sending a conversation from
+    its first turn saves only what is new; a turn written in the studio
+    in between breaks the run, and the re-sent turns are then saved again
+    -- the rule is the tail, kept simple enough to predict.
+
+    Refuses rather than skips a turn that is not {role: user|assistant,
+    content}, a batch over SAVE_TURNS_MAX, and a project that is not this
+    account's. A turn with no words is skipped. `via` is stored with each
+    turn's extras (the studio ignores a key it does not draw)."""
+    clean: list[tuple[str, str]] = []
+    empty = 0
+    for t in list(turns or []):
+        if not isinstance(t, dict) or t.get("role") not in MESSAGE_ROLES:
+            raise ValueError(f"each turn is {{role: {' | '.join(MESSAGE_ROLES)}, content}}")
+        content = str(t.get("content") or "")[:MESSAGE_MAX]
+        if content.strip():
+            clean.append((t["role"], content))
+        else:
+            empty += 1
+    if len(clean) > SAVE_TURNS_MAX:
+        raise ValueError(f"at most {SAVE_TURNS_MAX} turns per call, got {len(clean)}")
+    if get(project_id, dsn, account_id=account_id) is None:
+        raise ValueError(f"no project {project_id}")
+    history = [(m["role"], m["content"]) for m in
+               messages(project_id, dsn, account_id=account_id, limit=200)["items"]]
+    overlap = next((k for k in range(min(len(history), len(clean)), 0, -1)
+                    if history[-k:] == clean[:k]), 0)
+    extras = {"via": via} if via else None
+    saved = []
+    for role, content in clean[overlap:]:
+        row = append_message(project_id, role, content, dsn, account_id=account_id,
+                             tool_calls=extras)
+        if row:
+            saved.append(row["id"])
+    return {"saved": len(saved), "already_saved": overlap, "empty": empty,
+            "last_id": saved[-1] if saved else None}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
