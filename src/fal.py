@@ -415,16 +415,25 @@ IMAGE_MODELS: dict[str, dict] = {
         "checked": "2026-10-04 (fal page via search: 1K/2K $0.15; 4K $0.30, not offered here)",
         "source": "https://fal.ai/models/fal-ai/nano-banana-pro",
     },
-    "seedream4": {
-        "label": "Seedream 4.0",
-        "note": "ByteDance; photographic, cheap, takes references.",
-        "endpoint": "fal-ai/bytedance/seedream/v4/text-to-image",
-        "edit": "fal-ai/bytedance/seedream/v4/edit",
+    # Seedream 4.5 replaced 4.0 on 2026-10-08 (Mike: "upgrade those models
+    # in my python with fal"), read off the queue OpenAPI schema that day.
+    # Its floor is ~3.7 megapixels (width and height 1920-4096, or a total
+    # between 2560x1440 and 4096x4096), so the composer's ~1MP frames go out
+    # doubled (`scale`): 2048x2048 square, 1824x2272 at 4:5, all inside the
+    # bounds. Flat per image whatever the size, references to the edit
+    # endpoint as `image_urls` (up to 10).
+    "seedream4.5": {
+        "label": "Seedream 4.5",
+        "note": "ByteDance; photographic, about 4 megapixels, generates and edits with up to 10 references.",
+        "endpoint": "fal-ai/bytedance/seedream/v4.5/text-to-image",
+        "edit": "fal-ai/bytedance/seedream/v4.5/edit",
         "size": "wh",
+        "scale": 2,
+        "max_references": 10,
         "params": ("image_size", "seed"),
-        "usd_per_image": 0.03,
-        "checked": "2026-10-04 (fal page via search: $0.03/image; image_size >= 960x960 px, all IMAGE_SIZES are)",
-        "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4/text-to-image",
+        "usd_per_image": 0.04,
+        "checked": "2026-10-08 (fal page + queue OpenAPI: $0.04/image; image_size 2560x1440..4096x4096)",
+        "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4.5/text-to-image",
     },
     "gpt-image-2": {
         "label": "GPT Image 2",
@@ -444,16 +453,25 @@ IMAGE_MODELS: dict[str, dict] = {
                     "$0.042; 1536x1024 assumed the same as its portrait twin -- re-check)"),
         "source": "https://fal.ai/models/openai/gpt-image-2",
     },
-    "ideogram3": {
-        "label": "Ideogram 3",
+    # Ideogram 4.5 replaced 3 on 2026-10-08 (same call), read off the queue
+    # OpenAPI schema that day: `ideogram/v4.5` (no fal-ai/ prefix), fal's
+    # named sizes, `quality` low/medium/high at $0.03/$0.06/$0.22 an image
+    # whatever the size -- sent at medium, the old BALANCED price. Prompt
+    # expansion (Ideogram's magic prompt) is on by default and left on. Its
+    # edit endpoint edits ONE source image (`image_url`, plus up to four
+    # `reference_image_urls`), which is not what a composer reference means,
+    # so the studio draws on it from text only, as it did on 3.
+    "ideogram4.5": {
+        "label": "Ideogram 4.5",
         "note": "Graphic, typographic, poster-like. Text-only.",
-        "endpoint": "fal-ai/ideogram/v3",
+        "endpoint": "ideogram/v4.5",
         "edit": None,
         "size": "enum",
-        "params": ("image_size", "rendering_speed"),
+        "quality": "medium",
+        "params": ("image_size", "quality"),
         "usd_per_image": 0.06,
-        "checked": "2026-10-04 (fal page via search: $0.06 at BALANCED, the default; TURBO $0.03, QUALITY $0.09)",
-        "source": "https://fal.ai/models/fal-ai/ideogram/v3",
+        "checked": "2026-10-08 (fal page + queue OpenAPI: low $0.03, medium $0.06, high $0.22)",
+        "source": "https://fal.ai/models/ideogram/v4.5",
     },
 }
 IMAGE_MODEL_NAMES = tuple(IMAGE_MODELS)
@@ -558,7 +576,8 @@ def image_request(model: str, prompt: str, *, aspect: Optional[str] = None,
     elif "width" in spec["params"]:
         body["width"], body["height"] = w, h
     else:
-        body["image_size"] = {"width": w, "height": h}
+        k = int(spec.get("scale", 1))
+        body["image_size"] = {"width": w * k, "height": h * k}
     return endpoint, body, used
 # The tool name an image attempt is logged under -- generative.IMAGE_TOOLS,
 # beside midjourney and nano, never a video platform.

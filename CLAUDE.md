@@ -1858,10 +1858,11 @@ is yours, in Resolve, by hand.
   and the conversation the brain reads says what each make produced. The draft's `mode`
   is stored and read by nothing.
   **Images come from fal too (same day, Mike's call).** `fal.IMAGE_MODELS` is six
-  models (FLUX 1.1 Pro, FLUX.2 Pro, Nano Banana Pro through fal, Seedream 4.0, GPT Image 2
+  models (FLUX 1.1 Pro, FLUX.2 Pro, Nano Banana Pro through fal, Seedream 4.5, GPT Image 2
   under the `openai/` namespace -- three named sizes priced each, `quality` sent as medium
   since fal's default is high at four times the price, up to 16 references -- and Ideogram
-  3), each with its text endpoint, an `edit` endpoint when it takes references
+  4.5; Seedream 4.0 and Ideogram 3 were replaced by their 4.5s on 2026-10-08, Mike's call,
+  Seedream's frames sent doubled because 4.5 refuses under ~3.7 MP), each with its text endpoint, an `edit` endpoint when it takes references
   (`image_urls`), how it wants the frame (`size`: wh / aspect / enum), a dated price and
   a source URL. `GET /api/image-models` is the composer's picker, a PROJECTION: Nano
   Banana on the Gemini key plus fal's table when `FAL_KEY` is set, with credits per still.
