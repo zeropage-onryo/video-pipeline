@@ -115,6 +115,34 @@ jobs:
         # the entrypoint does not. Same command CLAUDE.md gives for a laptop.
         run: python -m pytest tests/ -q
 
+  # The React studio's node:test suites (web/tests/*.test.mjs). Its own job,
+  # so it reports in seconds instead of waiting on the Python job's ~11
+  # minutes. The tests import web/src's .ts files directly through Node's
+  # type stripping (Node >= 23.6, hence 24) and nothing from npm, so there is
+  # no `npm ci`: a test that grows a dependency fails here with
+  # ERR_MODULE_NOT_FOUND, and that is the time to add one. A full checkout,
+  # not a sparse one of web/, because a guard test may read a file outside it
+  # (the legacy /ui Queue's queue.js, for one).
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Test web/ with node:test
+        working-directory: web
+        # The glob, not `node --test tests/`: the directory form does not
+        # find these files. NODE_OPTIONS reaches each test file's process and
+        # mutes one warning per imported .ts, which says web/package.json has
+        # no "type" -- adding one is a change to the Next app, not to CI.
+        env:
+          NODE_OPTIONS: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+        run: node --test tests/*.test.mjs
+
   # Everything in this job needs a real GEMINI_API_KEY -- it makes real
   # embedding, generation, and judge-model calls, unlike the hermetic
   # `test` job above (which conftest.py's no_network guard enforces).
