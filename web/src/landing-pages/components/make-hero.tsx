@@ -70,7 +70,7 @@ function Buttons({ page, align = "center", onDark = false }: { page: MakePage; a
 
 /** One hero still or clip, filling its box. */
 function Media({ tile, sizes, priority = false, className = "" }: { tile: MakeTile; sizes: string; priority?: boolean; className?: string }) {
-  if (tile.video) return <ClipPlayer tile={tile} className={className} />;
+  if (tile.video) return <ClipPlayer tile={tile} className={className} eager />;
   if (!tile.src) return <div aria-hidden className="absolute inset-0" style={{ background: tile.plate ?? "var(--plate-1)" }} />;
   return <Image src={tile.src} alt={tile.title} fill sizes={sizes} priority={priority} quality={75} className={`object-cover ${className}`} />;
 }
@@ -395,7 +395,7 @@ function TheaterHero({ page }: { page: MakePage }) {
               style={portrait ? { aspectRatio: main.aspect!.replace(":", " / ") } : undefined}
             >
               {main.video ? (
-                <ClipPlayer tile={main} label={{ on: "Sound on", off: "Turn the sound on" }} />
+                <ClipPlayer tile={main} label={{ on: "Sound on", off: "Turn the sound on" }} eager />
               ) : (
                 <Media tile={main} sizes={portrait ? "(min-width: 480px) 480px, 100vw" : "(min-width: 1040px) 1040px, 100vw"} priority />
               )}
