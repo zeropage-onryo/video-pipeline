@@ -1547,7 +1547,8 @@ is yours, in Resolve, by hand.
   `capture`, `pick`, `shoot`, `archive`, `stats`, `elements`, `write_scene`,
   `quote`, `approve`, `job`. Never the engine tools (whatever the flag says),
   never the spark bank (`scout_findings` / `scout_bin` are SHARED tables and
-  one person's directions must not be listed to another), never
+  one person's directions must not be listed to another -- nor their COUNT:
+  `stats` drops `sparks_unused` there, found on the 2026-10-08 live walk), never
   `images_for` / `reference` / `imagine_reference`. **Claude does the ideation
   in the chat and the MCP renders**: `elements` lists the account's
   characters/props/places with photo refs; `write_scene` saves a chat-written

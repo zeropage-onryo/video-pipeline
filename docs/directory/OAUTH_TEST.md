@@ -160,6 +160,91 @@ Until this exists the connector cannot be connected from claude.ai at all,
 whatever the tools look like. It is the one build the submission is
 blocked on that no decision can remove.
 
+## Live results, 2026-10-08 (the script below, walked)
+
+Walked against production (release v205, then v210) on the day the "Connect
+to Claude" panel shipped (#168). Two departures from the script, both forced:
+
+- **`zp-billing-test` cannot be the second person**: account 5 has no
+  members, so nobody can sign in as it (it was made for billing checks run
+  as code). The second person was a **fresh sign-up**, `deals4michael@gmail.com`
+  (Mike's), whose first sign-in on the consent page created workspace
+  **account 8** with the 100-credit trial -- the path a stranger from the
+  directory takes. The reviewer instructions in `SUBMISSION.md` still name
+  account 5; they need an account somebody can sign in to.
+- **The client was a local script, not claude.ai**: it discovers the
+  metadata, registers through DCR with a loopback redirect
+  (`http://localhost:53682/callback`) exactly as Claude Code does, runs PKCE,
+  and calls `/mcp` with the token. Mike signed in and pressed Allow
+  himself; nothing in his claude.ai changed. claude.ai itself was connected
+  and used on Mike's own account the same morning.
+
+| Step | Result |
+|---|---|
+| 0 live commit | PASS: v205 = `5f93ba4` (#168) at the start |
+| 1 discovery | PASS: `401` + `WWW-Authenticate: Bearer resource_metadata=".../oauth-protected-resource/mcp"`; `resource` exactly `https://zeropage-studio.fly.dev/mcp` |
+| 2 connect, consent page | PASS after a retry, see Finding 5: our page, named the client and `localhost` with the loopback warning |
+| 3 tool list | PASS: exactly `LISTED_TOOLS` (13); no `sparks`, `images`, `research`, `generate` |
+| 4 `board` | PASS: `count: 0` |
+| 5 `idea 375` | PASS: `no idea 375`; `pick 375` also `no concept 375`; #375 unchanged in the database |
+| 6 `capture` then `board` | PASS: #397 on account 8, board lists one idea; Mike's own connector's `search` finds only his #396 |
+| 7 `pick` | PASS: `status: picked`, no `keyframes` block; account 8 still 100 credits, one ledger entry |
+| 8 `sparks` | PASS: `Unknown tool: sparks` |
+| 9 rate limit | PASS: `{"200": 120, "429": 10}`, `Retry-After: 18`, the expected body; Mike's connector answered during the window. The FIRST burst read 130 × 200 because another session's deploy restarted the machine mid-burst and the in-process counter went with it -- the stated limit of an in-process count, seen live |
+| 10 reconnect | skipped (Mike's call) |
+| 11 loopback DCR | PASS: Supabase registered the loopback redirect (HTTP 201) and the whole code flow completed; the token's `sub` was the new user and `aud` `authenticated` |
+| panel (#168) | PASS: `mcp_connections` got account 8's row on Allow (client name, `localhost`), stamped on first use; Mike's own pre-existing connection appeared as a client-less row on its first use |
+
+Worth knowing from the token: Supabase's OAuth access token carries a
+`client_id` claim (the DCR client), so `mcp_connections.touch` could stamp
+the exact client rather than every client the person approved. Not done.
+
+## Findings from the live walk (2026-10-08)
+
+**Finding 4 -- Chrome's lookalike warning on the consent page (OPEN, a
+dashboard change).** Supabase sends the person to `<Site URL>/oauth/consent`,
+the Site URL is `https://zeropage-studio.fly.dev`, and Chrome shows its
+"did you mean zeropage.studio?" interstitial on that host -- the warning
+`api.zeropage.studio` was set up to avoid for the studio's own Sign in on
+2026-10-07. Every person connecting from Claude would meet it, on the one
+page where a warning makes them leave. The fix is the Site URL, nothing in
+code: `https://api.zeropage.studio` is the same Fly app, and was checked
+live to answer `/oauth/consent` (303 to its own `/signin`) and
+`/auth/confirm`. What the Site URL also drives, and why each is fine: the
+four auth emails' `{{ .SiteURL }}/auth/confirm` links (same app;
+`SUPABASE_EMAIL_TEMPLATES.md` already names this domain as the move) and
+Supabase's default redirect (the allow-list already carries
+`https://api.zeropage.studio/auth/callback`). The resource URL
+(`zeropage-studio.fly.dev/mcp`) does not move: Claude calls it server to
+server, no browser ever navigates there. To apply (Mike; the Management API
+token is in `SUPABASE_ACCESS_TOKEN`):
+
+    venv/bin/python -m ops.supabase_auth_email report
+    venv/bin/python -m ops.supabase_auth_email apply --site-url https://api.zeropage.studio --dry-run
+    venv/bin/python -m ops.supabase_auth_email apply --site-url https://api.zeropage.studio
+
+then connect once more and check the consent page loads on
+`api.zeropage.studio` with no interstitial, and send one sign-in email to
+check its link. Rolling back is the same command with the fly.dev origin.
+
+**Finding 5 -- a connection request lasts about ten minutes (FIXED, message).**
+Supabase forgot two requests 10m48s and 11m14s after making them, and our
+page showed its words, "authorization not found", which reads like our bug.
+The page now says the request expired and to connect again
+(`oauth_consent.EXPIRED`, on both the page and the Allow). Our own wait for a
+sign-in stays at 15 minutes on purpose: longer than Supabase's, so a late
+person is told it expired rather than dropped in the studio with no word.
+
+**Finding 6 -- `stats` showed strangers the shared spark bank's size (FIXED).**
+`sparks_unused` counted `scout_findings`, a shared table; account 8 read the
+operator's 38. The listed server leaves the field out; the operator's key
+keeps it.
+
+**Finding 7 -- `capture` pointed at a tool the listed server does not have
+(FIXED).** Its card said to write the scene "with `generate` where that tool
+is offered"; it now names `write_scene` (on both servers) and the studio,
+and the tool's description says the same.
+
 ## The live script (Mike, with the second account)
 
 Use `zp-billing-test` (account 5) as the SECOND person. Mike's own sign-in

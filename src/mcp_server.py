@@ -145,8 +145,8 @@ DESCRIPTIONS = {
     "capture": (
         "Add a new idea to your board with a title and optional hook, logline "
         "and the direction it came from. Saves the idea only -- no scene is "
-        "written and nothing is spent; the scene is written later in the "
-        "studio. Returns the new card."
+        "written and nothing is spent; write its scene afterwards with "
+        "`write_scene`, or in the studio. Returns the new card."
     ),
     "pick": (
         "Mark an idea as worth making (`picked: false` undoes it). Spends "
@@ -203,9 +203,8 @@ DESCRIPTIONS = {
     ),
     "stats": (
         "Your board in numbers: pick rate and shoot rate (ideas picked and "
-        "ideas made, against ideas written), the count in each status, how "
-        "many are waiting on you, and how many banked directions are unused. "
-        "Read-only."
+        "ideas made, against ideas written), the count in each status, and how "
+        "many are waiting on you. Read-only."
     ),
     "research": (
         "Run one research pass: crawl the configured lanes, distil what is "
@@ -628,10 +627,13 @@ def capture_idea(
         account_id=account_id,
     )
     card = _card(preprod.get_concept(idea_id, dsn=dsn, account_id=account_id))
+    # `write_scene` is on BOTH servers; `generate` is not on the listed one,
+    # so pointing a directory user at it named a tool they do not have
+    # (found on the 2026-10-08 second-account walk)
     card["next"] = (
-        "Idea only -- no scene prompt yet. Write its scene in the studio "
-        "(Create, with the idea as the brief) or with `generate` where that "
-        "tool is offered."
+        "Idea only -- no scene prompt yet. Write its scene with `write_scene` "
+        "(photo refs from `elements`), or in the studio (Create, with the idea "
+        "as the brief)."
     )
     return card
 
@@ -993,13 +995,19 @@ def list_sparks(brand: Optional[str] = None, unused_only: bool = True,
 
 # --- the numbers -----------------------------------------------------------
 
-def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None) -> dict[str, Any]:
+def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None,
+                   include_bank: bool = True) -> dict[str, Any]:
     """The two surviving labels plus what is sitting on the board.
 
     `by_prompt` is dropped on purpose: it is the per-prompt-hash
     breakdown the Dev Studio's Stats tab renders, and a phone asking
     "how are we doing" wants the headline. The Stats tab is where the
     breakdown belongs.
+
+    `include_bank=False` on the listed server: `sparks_unused` counts the
+    SHARED spark bank (`scout_findings`, db.SHARED_TABLES), which the
+    listed server otherwise keeps away from strangers -- the 2026-10-08
+    second-account walk read the operator's 38 off it.
     """
     account_id = _account(account_id, dsn)
     pick = preprod.pick_rate(dsn=dsn, account_id=account_id)
@@ -1007,7 +1015,7 @@ def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None) 
     board = {s: 0 for s in STATUSES if s != "all"}
     for concept in preprod.list_concepts(limit=SEARCH_SCAN, dsn=dsn, account_id=account_id):
         board[_status_of(concept)] += 1
-    return {
+    out = {
         "pick_rate": {k: pick[k] for k in ("generated", "picked", "rate")},
         "shoot_rate": {k: shoot.get(k) for k in ("generated", "shot", "rate")},
         "board": board,
@@ -1016,10 +1024,11 @@ def pipeline_stats(dsn: Optional[str] = None, account_id: Optional[int] = None) 
         # is still waiting on a person -- so the number it returns is
         # spelled out here rather than left to be derived wrongly.
         "waiting_on_you": board["open"] + board["parked"],
-        "sparks_unused": len(
-            scout.list_findings(unused_only=True, limit=100, dsn=dsn)
-        ),
     }
+    if include_bank:
+        out["sparks_unused"] = len(
+            scout.list_findings(unused_only=True, limit=100, dsn=dsn))
+    return out
 
 
 # --- the research bin ------------------------------------------------------
@@ -1639,7 +1648,7 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
 
     @_reg("stats")
     def stats() -> dict:
-        return _t(pipeline_stats, dsn=dsn, account_id=account_id)
+        return _t(pipeline_stats, dsn=dsn, account_id=account_id, include_bank=not listed)
 
     if (engine_enabled() if engine is None else engine) and not listed:
         @_reg("research")

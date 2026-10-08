@@ -23,18 +23,18 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 | C11 | first-party API | PASS | declare the image-search lanes as proxied APIs |
 | C12 | no AI image/video/audio generation | **FAIL — open review risk** | Built as Mike chose: `approve` renders stills and clips after a quote and a yes in chat. The checklist says such connectors "aren't accepted"; the Compliance step asks for the acknowledgment. Answer it truthfully; if refused, drop `approve` from LISTED_TOOLS (one line) and the Queue is the approve |
 | C13–C19 | OAuth, 401, metadata, AS metadata, DCR, PKCE, scopes | PASS | verified live from here 2026-10-07 |
-| C20 | callback URLs (incl. Claude Code loopback) | UNKNOWN | live check, OAUTH_TEST.md step 11 |
-| C21 | consent screen | **PASS after deploy + one dashboard setting** | `/oauth/consent` built (redirect host in bold, loopback warning); set Authorization Path = `/oauth/consent` in Supabase |
+| C20 | callback URLs (incl. Claude Code loopback) | **PASS live 2026-10-08** | a Claude Code-shaped client registered `http://localhost:<port>/callback` through DCR (201) and completed the code flow (OAUTH_TEST.md, live results) |
+| C21 | consent screen | **PASS live 2026-10-08**, one open warning | shown and approved live; Chrome's lookalike interstitial on `zeropage-studio.fly.dev` until the Site URL moves to `https://api.zeropage.studio` (OAUTH_TEST.md Finding 4) |
 | C22–C24 | token endpoint, latency, no tokens in URLs | PASS | |
 | C25 | remote HTTPS | PASS | |
-| C26 | tested in Claude + Inspector | UNKNOWN | live check |
+| C26 | tested in Claude + Inspector | PARTIAL | claude.ai on Mike's account and a second account through a local OAuth client, 2026-10-08; Inspector not run |
 | C27 | listing materials | PARTIAL | privacy/terms live; docs URL and icon: see "By hand" |
-| C28 | test account | PARTIAL | `zp-billing-test` (account 5); see reviewer instructions |
+| C28 | test account | **OPEN** | `zp-billing-test` (account 5) has NO members, so nobody can sign in as it; the reviewer needs an account with a sign-in (OAUTH_TEST.md, live results) |
 | C29 | public documentation | PARTIAL | the plugin README once the repo is public; a `zeropage.studio/connector` page would be better |
 | C39 | no clientInfo gating | PASS | |
-| — | rate limit | **PASS after Phase 2** | 120/min per account, 1200/min operator key; 429 + Retry-After |
+| — | rate limit | **PASS live 2026-10-08** | 120/min per account, 1200/min operator key; 429 + Retry-After; a deploy mid-window resets the in-process count |
 | — | token: audience, expiry, issuer | PASS after Phase 2 | issuer check added |
-| — | cross-tenant isolation (board, idea, search, capture, pick, archive, shoot, job, stats) | PASS, tested through the real transport | |
+| — | cross-tenant isolation (board, idea, search, capture, pick, archive, shoot, job, stats) | **PASS live 2026-10-08** with a second account, and through the real transport in tests | `stats` no longer reports the shared bank's size to a signed-in caller (Finding 6) |
 | — | cross-tenant: sparks / images bank | **PASS** -- not on the listed server | Mike's call 2026-10-07; the operator's door keeps them |
 | — | spend without a quote + approval | **PASS on the listed server** | `quote` then `approve` (tokens, hold before submit); `imagine_reference` is not on the listed server |
 
@@ -86,7 +86,8 @@ landed on this branch (not yet deployed — a push to `main` deploys Fly).
 
 - `fly releases --app zeropage-studio`: which commit is live; whether
   `ZEROPAGE_MCP_ENGINE` is set there (inferred from the tool list).
-- The second-account script, `OAUTH_TEST.md`, steps 0–11.
+- ~~The second-account script, `OAUTH_TEST.md`, steps 0–11.~~ **Walked
+  2026-10-08** (step 10 skipped); results and Findings 4–7 in `OAUTH_TEST.md`.
 - Reachability of `ewkbrenbjsiggufegrnd.supabase.co` from Anthropic's egress
   range (no WAF is in front of it, so expected PASS).
 
@@ -146,7 +147,9 @@ keyed) with our own keys. No personal health data. No sponsored content.
 **Test & launch** — reviewer instructions:
 
 1. Account: `zp-billing-test` (account 5) — a real workspace, kept for billing
-   checks. Mike populates it before submitting: three to five captured ideas,
+   checks. **It has no members (2026-10-08), so as written nobody can sign
+   in to it**: invite the reviewer's address to it (`src.accounts invite`),
+   or hand over a fresh sign-up's workspace instead. Mike populates it before submitting: three to five captured ideas,
    one picked, one with a written scene and two reference images, a small
    credit balance so `pick` returns a keyframe quote and `imagine_reference`
    can be refused or charged as the reviewer chooses. Credentials (the
@@ -209,13 +212,16 @@ Not on the listed server (operator's door only): sparks, tonight, add_spark, ima
 2. **Push this branch and open the PR** (nothing is pushed). Merging to
    `main` deploys Fly with Phase 4 and the rate limit.
 3. **Supabase dashboard** (Authentication → OAuth Server): set the
-   Authorization Path to `/oauth/consent`; the Site URL must stay
-   `https://zeropage-studio.fly.dev` (the page lives on the API origin).
+   Authorization Path to `/oauth/consent` (done 2026-10-07). The Site URL is
+   the API origin, and should be `https://api.zeropage.studio` -- the same
+   Fly app -- rather than `zeropage-studio.fly.dev`, which Chrome flags as a
+   lookalike on the consent page (`OAUTH_TEST.md` Finding 4 has the command).
 4. **Fly**: `fly releases` to confirm the live commit. `QUOTE_SIGNING_SECRET`
    is already set there, so `quote` will carry tokens. Optionally set
    `ZEROPAGE_MCP_RATE` / `ZEROPAGE_MCP_RATE_OPERATOR` (defaults 120 / 1200
    per minute) and `ZEROPAGE_SIGNUP_URL` (default https://zeropage.studio).
-5. **Walk `OAUTH_TEST.md`** with `zp-billing-test`; take the screenshots.
+5. ~~**Walk `OAUTH_TEST.md`**~~ walked 2026-10-08 with a fresh sign-up
+   (account 5 cannot sign in); the claude.ai screenshots are still to take.
 6. **Populate the test account** as the reviewer instructions describe; put
    its credentials in the portal only.
 7. ~~Create the GitHub repo~~ **Done 2026-10-07:**
