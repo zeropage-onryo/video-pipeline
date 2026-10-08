@@ -150,7 +150,8 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # NO board tools. --surface board (or
 # ZEROPAGE_MCP_SURFACE=board) serves the full board; src/research_agent.py
 # asks for it by name. The Guide and the HTTP mount build the board surface.
-# Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
+# Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json -- two entries,
+# `zeropage` = studio and `zeropage-board` = --surface board --engine -- then ⌘Q, reopen)
 
 # THE MANUAL RENDER LANE — a clip that reaches a concept without an API render.
 # ONE lane since 2026-09-28: the generic `manual` import (a clip rendered
