@@ -8,13 +8,16 @@ from pydantic import ValidationError
 
 from app import api, auth
 from app.main import app
-from src import creative_guide, gemini_utils, scene_chain
+from src import charge, creative_guide, gemini_utils, scene_chain
 
 
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": "guide-user"})
     monkeypatch.setattr(auth, "current_account", lambda request: {"slug": "zeropage"})
+    # the account here is a made-up id with no plan and no balance: the
+    # Create gate (tested in test_spend_gates.py) is held open
+    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     return TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
 

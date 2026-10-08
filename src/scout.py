@@ -1645,9 +1645,15 @@ def default_lanes(account_id, dsn=None) -> tuple:
 
 def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
           lanes=DEFAULT_LANES,
-          judge: bool = False, dsn=None, fetch=None) -> dict:
+          judge: bool = False, dsn=None, fetch=None,
+          account_id: Optional[int] = None) -> dict:
     """One full research pass. Returns
     {"ok", "findings": [...], "errors": [...], "signals": <int>}.
+
+    `account_id` is who ran it (the Studio route, the MCP `research` tool)
+    and so who pays for the generated references the pass draws
+    (refgen.render_for_finding). None -- the CLI -- is the unowned pool,
+    never charged.
 
     `ok` is False only when nothing could be banked -- every other
     degradation (a dead lane, a thin crawl, a candidate rejected for
@@ -1812,7 +1818,8 @@ def scout(brand: str = "zeropage", count: int = 4, *, client=None, model=None,
         # exactly as before, and says so once per spark below.
         if c.get("hook_frame"):
             from . import refgen
-            gen = refgen.render_for_finding(c["id"], c["hook_frame"], dsn=dsn)
+            gen = refgen.render_for_finding(c["id"], c["hook_frame"], dsn=dsn,
+                                            account_id=account_id)
             if not gen.get("ok"):
                 errors.append(f"no generated reference for finding {c['id']}: {gen.get('note')}")
 
