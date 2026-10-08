@@ -152,7 +152,7 @@
 .cx-input:focus,
 .cx-select:focus,
 .cx-textarea:focus {
-  border-color: rgb(228 0 43 / 0.5);
+  border-color: color-mix(in srgb, var(--signal) 50%, transparent);
 }
 .cx-sep {
   width: 1px;
@@ -212,7 +212,7 @@
   border-color: var(--cx-line);
 }
 input.cx-title {
-  border-color: rgb(228 0 43 / 0.5);
+  border-color: color-mix(in srgb, var(--signal) 50%, transparent);
   outline: none;
   user-select: text;
 }
@@ -283,7 +283,7 @@ input.cx-title {
 .cx-handle:hover,
 .cx-handle[data-separator="active"],
 .cx-handle[data-separator="hover"] {
-  background: rgb(228 0 43 / 0.6);
+  background: color-mix(in srgb, var(--signal) 60%, transparent);
 }
 
 .cx-pane-head {
@@ -352,7 +352,7 @@ input.cx-title {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(60% 60% at 50% 45%, rgb(228 0 43 / 0.05), transparent 70%),
+    radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--signal) 5%, transparent), transparent 70%),
     #050507;
 }
 .cx-viewer-head {
@@ -765,7 +765,7 @@ input.cx-title {
   background: repeating-linear-gradient(90deg, transparent 0 79px, rgb(255 255 255 / 0.018) 79px 80px);
 }
 .cx-lane.drop {
-  background: rgb(228 0 43 / 0.06);
+  background: color-mix(in srgb, var(--signal) 6%, transparent);
 }
 .cx-lane[data-muted="1"] .cx-clip {
   filter: grayscale(1) brightness(0.55);
@@ -945,7 +945,7 @@ input.cx-title {
   background: var(--signal);
   pointer-events: none;
   z-index: 6;
-  box-shadow: 0 0 6px rgb(228 0 43 / 0.6);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--signal) 60%, transparent);
 }
 .cx-playhead-flag {
   position: absolute;
@@ -1136,7 +1136,7 @@ input.cx-title {
   user-select: text;
 }
 .cx-composer textarea:focus {
-  border-color: rgb(228 0 43 / 0.45);
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
 }
 .cx-composer-row {
   display: flex;
@@ -1212,7 +1212,7 @@ input.cx-title {
   background: rgb(255 255 255 / 0.05);
 }
 .cx-ver[aria-current="true"] {
-  background: rgb(228 0 43 / 0.08);
+  background: color-mix(in srgb, var(--signal) 8%, transparent);
 }
 .cx-ver .n {
   font-family: var(--mono);
@@ -1364,8 +1364,36 @@ input.cx-title {
   z-index: 2;
   background: rgb(0 0 0 / 0.6);
 }
-.cxp-card:hover .cxp-del {
+.cxp-card:hover .cxp-del,
+.cxp-del:focus-visible {
   opacity: 1;
+}
+/* no hover on a touch screen: the remove button is simply there */
+@media (hover: none) {
+  .cxp-del {
+    opacity: 1;
+  }
+}
+/* the list's empty and error states (2026-10-08) */
+.cxp-empty {
+  border-style: solid;
+  padding: 22px;
+  gap: 8px;
+}
+.cxp-empty > span:not(.m) {
+  max-width: 40ch;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cxp-empty .cx-btn {
+  margin-top: 4px;
+  border-color: var(--line-hi);
+  color: var(--text) !important;
+}
+@media (min-width: 760px) {
+  .cxp-empty {
+    grid-column: span 2;
+  }
 }
 .cxp h2 {
   font-family: var(--mono);
@@ -1377,14 +1405,11 @@ input.cx-title {
   margin: 36px 0 12px;
 }
 
-/* Base UI portals mount on <body>, outside .zps and its tokens: carry
-   them (the fonts come from cardFonts on the same element). */
+/* Base UI portals mount on <body>, outside .zps: carry its font and
+   timing tokens (the fonts come from cardFonts on the same element) and
+   the editor's own palette. The shared colours need no copy here -- the
+   studio palette is on :root (studio.css, 2026-10-08). */
 .cx-portal {
-  --text: #f4f3f2;
-  --dim: #8e8c8a;
-  --dimmer: #55534f;
-  --signal: #e4002b;
-  --signal-soft: rgb(228 0 43 / 0.12);
   --display: var(--font-oswald), "Oswald", "Archivo Narrow", sans-serif;
   --body: var(--font-inter), "Inter", -apple-system, sans-serif;
   --mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
@@ -1448,7 +1473,7 @@ input.cx-title {
     background var(--t);
 }
 .cx-chip:hover:not(:disabled) {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
   background: var(--signal-soft);
 }
 .cx-chip:disabled {
@@ -1551,9 +1576,9 @@ input.cx-title {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: rgb(228 0 43 / 0.22);
-  border-top: 1px solid rgb(228 0 43 / 0.6);
-  border-bottom: 1px solid rgb(228 0 43 / 0.6);
+  background: color-mix(in srgb, var(--signal) 22%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--signal) 60%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--signal) 60%, transparent);
 }
 .cx-scrub-mark {
   position: absolute;
@@ -1609,7 +1634,7 @@ input.cx-title {
   border-color: var(--cx-line);
 }
 .cx-edit:hover:not(:disabled) {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .cx-transcript p {
   margin: 0;
@@ -1630,7 +1655,7 @@ input.cx-title {
 }
 .cx-word[data-marked="1"] {
   color: var(--text);
-  background: rgb(228 0 43 / 0.18);
+  background: color-mix(in srgb, var(--signal) 18%, transparent);
 }
 .cx-word[data-now="1"] {
   color: #fff;
@@ -1648,7 +1673,7 @@ input.cx-title {
   }
 }
 .cx-bin-item[aria-current="true"] {
-  border-color: rgb(228 0 43 / 0.6);
+  border-color: color-mix(in srgb, var(--signal) 60%, transparent);
 }
 .cx-bin-append {
   position: absolute;

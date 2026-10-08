@@ -563,6 +563,29 @@ def test_deleting_a_render_is_soft(tmp_db, monkeypatch):
     assert client.delete("/api/assets/generated/9999").status_code == 404
 
 
+def test_a_removed_render_comes_back_on_undo(tmp_db, monkeypatch):
+    """2026-10-08: the toast's Undo is the exact inverse of the soft
+    delete -- the wall shows it again and its prompt goes back on the
+    shelf. Only a removed row can be restored."""
+    image_id, video_id = _bank_two(tmp_db, monkeypatch)
+    monkeypatch.setattr(render_assets, "drop_chunk", lambda i: None)
+    shelved = []
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda asset_id, **k: shelved.append((asset_id, k["prompt"])))
+    # not removed yet: nothing to restore
+    assert client.post(f"/api/assets/generated/{video_id}/restore").status_code == 404
+    client.delete(f"/api/assets/generated/{video_id}")
+    back = client.post(f"/api/assets/generated/{video_id}/restore")
+    assert back.status_code == 200 and back.json() == {"restored": video_id}
+    assert shelved == [(video_id, "camera pushes toward the motorcycle")]
+    wall = client.get("/api/media?kind=all&scope=generated").json()
+    assert {i["generated_id"] for i in wall["items"]} == {image_id, video_id}
+    assert render_assets.get(video_id, dsn=tmp_db, account_id=None)["deleted_at"] is None
+    # twice is not twice: it is back already
+    assert client.post(f"/api/assets/generated/{video_id}/restore").status_code == 404
+    assert client.post("/api/assets/generated/9999/restore").status_code == 404
+
+
 def test_deleting_a_location_drops_its_row_and_chunk(tmp_db, monkeypatch):
     loc_id = preprod.add_location("garage", {"space": "low key garage"},
                                   dsn=tmp_db, account_id=None)
@@ -784,6 +807,11 @@ def test_concept_detail_carries_the_renderers_availability(tmp_db, monkeypatch):
     d = client.get(f"/api/concepts/{concept_id}").json()
     assert d["renderer"]["available"] is False
     assert d["renderer"]["estimate_usd"] > 0   # priced server-side either way
+    # ...and in CREDITS, by the quote's own conversion: the studio shows
+    # credits and never dollars (2026-10-08)
+    from src import pricing
+    assert d["renderer"]["credits"] == pricing.credits_for(
+        pricing.usd_micros(d["renderer"]["estimate_usd"]))
     assert "runway" not in d
 
 

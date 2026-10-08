@@ -256,6 +256,37 @@ def test_a_half_rendered_concept_opens_on_an_empty_timeline(api):
     assert got["head"]["op_summary"] == "new project" and got["head"]["doc"]["duration"] == 0
 
 
+def test_a_removed_project_comes_back_on_undo(api):
+    """2026-10-08: the list's Undo is the inverse of the soft delete. A
+    scratch project returns where it was; a concept's cut that was opened
+    again meanwhile is `taken` (one live project per concept); another
+    account's removed project is not found."""
+    client, w = api
+    scratch = _new(client, title="Scratch")
+    assert client.post(f"/api/cut/projects/{scratch['id']}/restore").status_code == 404  # not removed
+    _ok(client.delete(f"/api/cut/projects/{scratch['id']}"))
+    back = _ok(client.post(f"/api/cut/projects/{scratch['id']}/restore"))["project"]
+    assert back["id"] == scratch["id"] and set(back) == P_KEYS
+    assert [p["id"] for p in client.get("/api/cut/projects").json()["projects"]] == [scratch["id"]]
+    assert _open(client, scratch["id"])["head"]["op_summary"] == "new project"
+
+    cid = _concept(w["dsn"], w["a"], [{"n": 1, "media_url": "/renders/runway/clip1.mp4"}])
+    old = _new(client, concept_id=cid)
+    _ok(client.delete(f"/api/cut/projects/{old['id']}"))
+    again = _new(client, concept_id=cid)
+    assert again["id"] != old["id"]
+    taken = client.post(f"/api/cut/projects/{old['id']}/restore")
+    assert taken.status_code == 409 and taken.json()["error"]["code"] == "taken"
+
+    _ok(client.delete(f"/api/cut/projects/{scratch['id']}"))
+    _as(w["b"])
+    try:
+        assert client.post(f"/api/cut/projects/{scratch['id']}/restore").status_code == 404
+    finally:
+        _as(w["a"])
+    assert _ok(client.post(f"/api/cut/projects/{scratch['id']}/restore"))["project"]["id"] == scratch["id"]
+
+
 def test_a_concept_that_is_not_yours_is_not_found(api):
     client, w = api
     theirs = _concept(w["dsn"], w["b"], [{"n": 1}])

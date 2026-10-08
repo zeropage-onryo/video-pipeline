@@ -83,6 +83,7 @@ import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
 import { sceneHref, sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
 import { creditsText } from "@/lib/render-choice";
 import {
+  announceBalanceChange,
   announceQueueChange,
   getAssets,
   getCapabilities,
@@ -199,7 +200,9 @@ const Actions = createContext<{
   caps: Capabilities;
   /** what one still costs, and whether this account is charged (2026-09-29) */
   still: { credits: number; exempt: boolean } | null;
-}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null });
+  /** the operator's own account: prices still show, marked not charged */
+  exempt: boolean;
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null, exempt: false });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -491,8 +494,8 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           )}
           <footer className="node-footer nodrag">
             <span className="m">
-              {data.kind === "video" && rw?.estimate_usd != null
-                ? `est. $${Number(rw.estimate_usd).toFixed(2)}`
+              {data.kind === "video" && rw?.credits != null && !data.busy
+                ? creditsText(rw.credits, actions.exempt)
                 : data.kind === "image" && actions.still && !data.busy
                   ? creditsText(actions.still.credits, actions.still.exempt)
                   : data.busy
@@ -1168,6 +1171,9 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
           try {
             const job = await apiFetch<{ status: string; output?: string; error?: string }>(`/jobs/${n.data.jobId}`);
             if (cancelled) return;
+            // a node's render settled or released its hold: the header's
+            // balance is re-read (it reads only on such events)
+            if (["done", "failed", "cancelled"].includes(job.status)) announceBalanceChange();
             if (job.status === "done")
               update(n.id, {
                 busy: false,
@@ -1266,6 +1272,7 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
           notify(job.status === "done" ? job.detail || "Run complete" : job.error || `Run ${job.status}`);
           lastSaved.current = "";
           setSaveRevision((n) => n + 1);
+          announceBalanceChange();
           if (job.status === "done") announceQueueChange();
         }
       } catch (error) {
@@ -1339,7 +1346,15 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
   const gen = scene?.generate && !scene.generate.error ? scene.generate : null;
   const rw =
     scene?.renderer && gen
-      ? { ...scene.renderer, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd, resolution: gen.frame || scene.renderer.resolution }
+      ? {
+          ...scene.renderer,
+          model: gen.model,
+          duration: gen.durations[0],
+          estimate_usd: gen.estimate_usd,
+          // the Generate node's own price, in credits (pricing.display)
+          credits: gen.credits,
+          resolution: gen.frame || scene.renderer.resolution,
+        }
       : (scene?.renderer ?? null);
 
   return (
@@ -1357,6 +1372,7 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
         renderer: rw,
         caps,
         still: shell.balance?.prices?.still != null ? { credits: shell.balance.prices.still, exempt: !!shell.balance.exempt } : null,
+        exempt: !!shell.balance?.exempt,
       }}
     >
       <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
@@ -1519,7 +1535,7 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
                 <div className="insp-sec">
                   <span className="m">spend</span>
                   <div className="insp-spend">
-                    <b>{rw?.estimate_usd != null ? `$${Number(rw.estimate_usd).toFixed(2)}` : "—"}</b>
+                    <b>{rw?.credits != null ? creditsText(rw.credits, !!shell.balance?.exempt) : "—"}</b>
                     <span>
                       per {rw?.duration ?? 5}-second clip · {rw?.model ?? "video"}
                     </span>

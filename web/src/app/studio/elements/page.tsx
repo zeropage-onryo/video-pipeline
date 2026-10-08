@@ -24,7 +24,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ImageOff, Info, LayoutGrid, Plus, Trash2 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
-  deleteAsset,
+  announceBalanceChange,
   drawSheet,
   getAssets,
   getCapabilities,
@@ -34,8 +34,9 @@ import {
 } from "@/lib/studio-api";
 import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
+import { creditsText } from "@/lib/render-choice";
 import { AddElement } from "@/components/studio/add-element";
-import { ElementSheet } from "@/components/studio/element-sheet";
+import { ElementSheet, useElementDelete } from "@/components/studio/element-sheet";
 
 const ROUTE_KIND = { character: "characters", prop: "props", location: "locations" } as const;
 type RouteKind = ElementKind;
@@ -46,7 +47,9 @@ const routeOf = (a: Asset): [RouteKind, number] | null => {
 };
 
 export default function ElementsPage() {
-  const { brand, toast } = useShell();
+  const { brand, toast, balance } = useShell();
+  // a sheet is one still: its price says so before the click that spends it
+  const sheetPrice = balance?.prices ? creditsText(balance.prices.still, !!balance.exempt) : null;
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [grid, setGrid] = useState(false);
   const [howto, setHowto] = useState(false);
@@ -73,6 +76,8 @@ export default function ElementsPage() {
             delete next[assetId];
             return next;
           });
+          // a drawn sheet is a still: the header's balance moved
+          announceBalanceChange();
           if (job.status === "done") toast(`${name} · sheet drawn`);
           else toast(`${name} · sheet not drawn: ${job.error || job.status}`, "err");
           load();
@@ -89,16 +94,14 @@ export default function ElementsPage() {
       .catch((e) => toast(e instanceof Error ? e.message : "Could not draw the sheet", "err"));
   };
 
+  // the card's own delete and the sheet's go through one held delete with
+  // an Undo (element-sheet.tsx): off the page now, sent when the toast closes
+  const removeElement = useElementDelete();
+  const hide = (a: Asset) => setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
   const remove = (a: Asset) => {
-    const route = routeOf(a);
-    if (!route) return;
-    deleteAsset(route[0], route[1])
-      .then(() => {
-        setConfirming(null);
-        setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
-        toast(`${a.name} deleted · photos stay on disk`);
-      })
-      .catch((e) => toast(e instanceof Error ? e.message : "Could not delete", "err"));
+    if (!routeOf(a)) return;
+    setConfirming(null);
+    removeElement(a, { hide: () => hide(a), restore: () => load() });
   };
 
   const load = () => {
@@ -165,8 +168,8 @@ export default function ElementsPage() {
                   its real light. The photos become the frames a shot is held to.
                 </li>
                 <li>
-                  <b>Name it in a prompt.</b> Type <code>@</code> in Studio or on the Director canvas and pick it. Studio
-                  attaches its frames as references; Director drops an element card wired into the chain.
+                  <b>Name it in a prompt.</b> Type <code>@</code> in Studio or on a scene&rsquo;s canvas in its project and pick
+                  it. Studio attaches its frames as references; the canvas drops an element card wired into the chain.
                 </li>
                 <li>
                   <b>Let the notes do work.</b> What you write becomes a searchable chunk on the RAG assets shelf, so the
@@ -254,7 +257,7 @@ export default function ElementsPage() {
                           type="button"
                           className="zdx bg-black/70"
                           aria-label={`${a.sheet ? "Redraw" : "Draw"} the sheet for ${a.name}`}
-                          title={a.sheet ? "Redraw sheet · a few cents" : "Draw sheet · a few cents"}
+                          title={`${a.sheet ? "Redraw sheet" : "Draw sheet"}${sheetPrice ? ` · ${sheetPrice}` : ""}`}
                           onClick={() => draw(a)}
                         >
                           <LayoutGrid size={13} strokeWidth={1.7} />
@@ -307,9 +310,9 @@ export default function ElementsPage() {
           onClose={() => setOpen(null)}
           onDeleted={(a) => {
             setOpen(null);
-            setAssets((was) => (was ?? []).filter((x) => x.id !== a.id));
-            toast(`${a.name} deleted · photos stay on disk`);
+            hide(a);
           }}
+          onRestored={() => load()}
         />
       ) : null}
 

@@ -2,16 +2,64 @@
    from the "ZPF Gen Space" / "ZPF Elements" design files: signal red on
    near-black, Oswald display, Inter body, JetBrains Mono labels, 14/20/28
    radii. Scoped to .zps so the marketing pages keep their own look. */
-.zps {
+
+/* ── THE STUDIO'S ONE PALETTE (2026-10-08) ──
+   Every colour a studio page, the pill, the composer, the Director, the
+   editor or a Tailwind `noir-*` class draws comes from here: globals.css
+   maps the noir/bone/gate theme colours onto these, and the other studio
+   stylesheets read them by name. Before this there were three systems
+   (these variables, the Tailwind noir set, and ~140 hex literals) and
+   three reds (#e4002b, the cards' #e23b2e, the pill's #d10024).
+
+   On :root, not .zps, because Base UI mounts popovers and dialogs on
+   <body>, outside the shell's wrapper -- a colour that lived only on .zps
+   was transparent in every portal, which is why the credit pill and the
+   editor's .cx-portal had been carrying their own copies. Only colours
+   live here: the font tokens depend on next/font variables that exist on
+   the studio wrapper alone, so they stay scoped below. The names collide
+   with nothing on the public pages (.editorial sets its own --signal and
+   --glass, to the same red). */
+:root {
+  /* signal: the one accent */
+  --signal: #e4002b;
+  /* red TEXT on near-black: the signal itself is 4.1:1 there, this 6:1 */
+  --signal-hi: #ff4d6a;
+  /* a red fill, pressed */
+  --signal-deep: #c80026;
+  --signal-soft: color-mix(in srgb, var(--signal) 12%, transparent);
+  /* an OPAQUE red-tinted surface (a chosen chip, a red bubble) */
+  --signal-wash: color-mix(in srgb, var(--signal) 13%, var(--ground));
+
+  /* surfaces, darkest first (the noir set's values) */
   --void: #040405;
-  --glass: rgb(14 14 17 / 0.5);
+  --ground: #0b0b0b;
+  --well: #0f0f0e;
+  --panel: #151514;
+  --raise: #1c1b19;
+  --slate: #1f1e1c;
+  /* opaque hairlines on a surface, light to heavy */
+  --edge-lo: #262522;
+  --edge: #2e2d2a;
+  --edge-hi: #3a3935;
+  /* translucent lines and glass, over anything */
   --line: rgb(255 255 255 / 0.08);
   --line-hi: rgb(255 255 255 / 0.2);
+  --glass: rgb(14 14 17 / 0.5);
+
+  /* ink, brightest first */
   --text: #f4f3f2;
+  --bone: #cdc9c0;
+  --bone-2: #b3afa6;
+  --bone-3: #8c887f;
   --dim: #8e8c8a;
   --dimmer: #55534f;
-  --signal: #e4002b;
-  --signal-soft: rgb(228 0 43 / 0.12);
+
+  /* state */
+  --ok: #5fa878;
+  --warn: #d9a441;
+}
+
+.zps {
   --r1: 14px;
   --r2: 20px;
   --r3: 28px;
@@ -70,7 +118,7 @@
   pointer-events: none;
   background:
     repeating-linear-gradient(121deg, rgb(255 255 255 / 0.045) 0 1px, transparent 1px 5px, rgb(0 0 0 / 0.35) 5px 10px),
-    radial-gradient(70% 55% at 78% 22%, rgb(228 0 43 / 0.16), transparent 62%),
+    radial-gradient(70% 55% at 78% 22%, color-mix(in srgb, var(--signal) 16%, transparent), transparent 62%),
     radial-gradient(90% 70% at 18% 68%, rgb(30 44 62 / 0.3), transparent 70%),
     var(--void);
   mask-image: linear-gradient(180deg, #000 56%, transparent 94%);
@@ -84,7 +132,7 @@
   display: none;
 }
 .zps[data-view="studio"] {
-  background: #0b0b0b;
+  background: var(--ground);
 }
 .zps[data-stage="1"] .zps-field {
   display: none;
@@ -165,7 +213,7 @@
 }
 .mark:hover {
   border-color: var(--signal);
-  box-shadow: 0 0 26px -4px rgb(228 0 43 / 0.55);
+  box-shadow: 0 0 26px -4px color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .rtitle {
   font-size: 13px;
@@ -304,7 +352,7 @@
   margin-left: 6px;
   border-radius: 8px;
   overflow: hidden;
-  background: #1e1e21;
+  background: var(--slate);
   font-family: var(--mono);
   font-size: 12px;
   color: var(--dim);
@@ -464,7 +512,7 @@
   height: 9px;
   border-radius: 50%;
   background: var(--signal);
-  box-shadow: 0 0 10px rgb(228 0 43 / 0.55);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .htabs {
   display: flex;
@@ -508,7 +556,7 @@
   height: 34px;
   border-radius: 50%;
   border: 1px solid rgb(255 255 255 / 0.14);
-  background: #1b1b1b;
+  background: var(--raise);
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
@@ -619,10 +667,10 @@ button.tag:hover {
     box-shadow 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .glass.awake {
-  border-color: rgb(228 0 43 / 0.32);
+  border-color: color-mix(in srgb, var(--signal) 32%, transparent);
   box-shadow:
-    0 0 0 1px rgb(228 0 43 / 0.09),
-    0 26px 80px -34px rgb(228 0 43 / 0.42);
+    0 0 0 1px color-mix(in srgb, var(--signal) 9%, transparent),
+    0 26px 80px -34px color-mix(in srgb, var(--signal) 42%, transparent);
 }
 .go {
   font-family: var(--display);
@@ -831,7 +879,7 @@ button.tag:hover {
 .cattach.raw {
   background:
     repeating-linear-gradient(135deg, rgb(255 255 255 / 0.04) 0 5px, transparent 5px 12px),
-    #101012;
+    var(--well);
 }
 .cattach.raw::after {
   content: attr(data-ext);
@@ -918,7 +966,7 @@ button.tag:hover {
 }
 .pill.chosen {
   color: var(--text);
-  border-color: rgb(228 0 43 / 0.5);
+  border-color: color-mix(in srgb, var(--signal) 50%, transparent);
   background: var(--signal-soft);
 }
 .pill svg {
@@ -1080,7 +1128,7 @@ button.tag:hover {
   flex: none;
   background-size: cover;
   background-position: center;
-  background-color: #141417;
+  background-color: var(--panel);
   border: 1px solid var(--line);
 }
 .mention .mcat {
@@ -1303,7 +1351,7 @@ button.tag:hover {
   aspect-ratio: 4 / 5;
   border-radius: var(--r2);
   border: 1px solid var(--line);
-  background: #0b0b0d;
+  background: var(--ground);
   position: relative;
   overflow: hidden;
   padding: 0;
@@ -1531,7 +1579,7 @@ button.tag:hover {
 .cmode button[aria-checked="true"] {
   color: var(--text);
   background: var(--signal-soft);
-  box-shadow: inset 0 0 0 1px rgb(228 0 43 / 0.45);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--signal) 45%, transparent);
 }
 .cprogress {
   position: absolute;
@@ -1540,12 +1588,12 @@ button.tag:hover {
   height: 2px;
   border-radius: var(--rp);
   background: var(--signal);
-  box-shadow: 0 0 12px rgb(228 0 43 / 0.7);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--signal) 70%, transparent);
   transition: width 600ms cubic-bezier(0.22, 0.61, 0.36, 1);
   z-index: 2;
 }
 .cbox.busy {
-  border-top-color: rgb(228 0 43 / 0.35);
+  border-top-color: color-mix(in srgb, var(--signal) 35%, transparent);
 }
 .cbox.drop {
   border-color: var(--signal);
@@ -1597,7 +1645,7 @@ button.tag:hover {
 .cresult {
   margin: 4px 20px 0;
   padding: 14px 16px;
-  border: 1px solid rgb(228 0 43 / 0.35);
+  border: 1px solid color-mix(in srgb, var(--signal) 35%, transparent);
   border-radius: 16px;
   background: var(--signal-soft);
   display: flex;
@@ -1718,7 +1766,7 @@ button.tag:hover {
   padding: 0 22px;
   font-size: 14px;
   font-weight: 600;
-  box-shadow: 0 8px 26px -14px rgb(228 0 43 / 0.9);
+  box-shadow: 0 8px 26px -14px color-mix(in srgb, var(--signal) 90%, transparent);
 }
 .elnew svg {
   width: 16px;
@@ -1737,7 +1785,7 @@ button.tag:hover {
   color: var(--text);
 }
 .elhow:hover {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .elhow svg {
   width: 16px;
@@ -1750,8 +1798,8 @@ button.tag:hover {
 .elcollage span {
   position: absolute;
   border-radius: 6px;
-  border: 1px solid rgb(228 0 43 / 0.3);
-  background: #0b0b0d center/cover no-repeat;
+  border: 1px solid color-mix(in srgb, var(--signal) 30%, transparent);
+  background: var(--ground) center/cover no-repeat;
   box-shadow: 0 30px 80px -40px rgb(0 0 0 / 0.95);
 }
 .elcollage span:nth-child(1) {
@@ -1767,7 +1815,7 @@ button.tag:hover {
   aspect-ratio: 3 / 4;
   border-radius: 8px;
   border-width: 2px;
-  border-color: rgb(228 0 43 / 0.4);
+  border-color: color-mix(in srgb, var(--signal) 40%, transparent);
   box-shadow: 0 50px 120px -50px rgb(0 0 0 / 0.95);
 }
 .elcollage span:nth-child(3) {
@@ -1816,12 +1864,12 @@ button.tag:hover {
   gap: 12px;
   min-height: 300px;
   border-radius: 16px;
-  border: 2px dashed rgb(228 0 43 / 0.4);
+  border: 2px dashed color-mix(in srgb, var(--signal) 40%, transparent);
   background: transparent;
   color: var(--dim);
 }
 .elnewcard:hover {
-  border-color: rgb(228 0 43 / 0.85);
+  border-color: color-mix(in srgb, var(--signal) 85%, transparent);
   color: var(--text);
 }
 .elnewcard svg {
@@ -1830,7 +1878,7 @@ button.tag:hover {
 }
 .elcard {
   border-radius: 16px;
-  border: 2px solid rgb(228 0 43 / 0.4);
+  border: 2px solid color-mix(in srgb, var(--signal) 40%, transparent);
   background: rgb(14 14 17 / 0.5);
   overflow: hidden;
   text-align: left;
@@ -1838,7 +1886,7 @@ button.tag:hover {
   transition: border-color var(--t);
 }
 .elcard:hover {
-  border-color: rgb(228 0 43 / 0.7);
+  border-color: color-mix(in srgb, var(--signal) 70%, transparent);
 }
 .elplate {
   position: relative; /* the card's delete button and its confirm overlay (2026-09-18) */
@@ -1846,10 +1894,10 @@ button.tag:hover {
   align-items: center;
   justify-content: center;
   aspect-ratio: 4 / 5;
-  background: #0b0b0d center/cover no-repeat;
+  background: var(--ground) center/cover no-repeat;
 }
 .elplate.blank {
-  border-bottom: 1px dashed rgb(228 0 43 / 0.3);
+  border-bottom: 1px dashed color-mix(in srgb, var(--signal) 30%, transparent);
 }
 /* a drawn reference sheet is wide (four or five panels): show it whole (2026-09-18) */
 .elplate.sheet {
@@ -1913,7 +1961,7 @@ button.tag:hover {
   aspect-ratio: 1;
   border-radius: 6px;
   border: 1px solid var(--line);
-  background: #0b0b0d center/cover no-repeat;
+  background: var(--ground) center/cover no-repeat;
 }
 
 /* ── MODAL (add asset) ── */
@@ -1934,7 +1982,7 @@ button.tag:hover {
   max-height: 88vh;
   overflow-y: auto;
   border-radius: 20px;
-  border: 2px solid rgb(228 0 43 / 0.4);
+  border: 2px solid color-mix(in srgb, var(--signal) 40%, transparent);
   background: rgb(14 14 17 / 0.98);
   box-shadow: 0 50px 140px -50px rgb(0 0 0 / 0.95);
 }
@@ -1965,7 +2013,7 @@ button.tag:hover {
 }
 .zdx:hover {
   color: var(--text);
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .zdx svg {
   width: 14px;
@@ -2003,7 +2051,7 @@ button.tag:hover {
   width: 100%;
 }
 .zin:focus {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .zin:disabled {
   opacity: 0.45;
@@ -2014,7 +2062,7 @@ select.zin {
   cursor: pointer;
 }
 select.zin option {
-  background: #141417;
+  background: var(--panel);
 }
 .zin.grow {
   flex: 1;
@@ -2035,7 +2083,7 @@ textarea.zin {
   gap: 9px;
   height: 62px;
   border-radius: 12px;
-  border: 1px dashed rgb(228 0 43 / 0.4);
+  border: 1px dashed color-mix(in srgb, var(--signal) 40%, transparent);
   background: transparent;
   font-family: var(--mono);
   text-transform: uppercase;
@@ -2045,7 +2093,7 @@ textarea.zin {
   cursor: pointer;
 }
 .zdrop:hover {
-  border-color: rgb(228 0 43 / 0.85);
+  border-color: color-mix(in srgb, var(--signal) 85%, transparent);
   color: var(--text);
 }
 .zdrop svg {
@@ -2062,7 +2110,7 @@ textarea.zin {
   height: 52px;
   border-radius: 8px;
   border: 1px solid var(--line-hi);
-  background: #0b0b0d center/cover no-repeat;
+  background: var(--ground) center/cover no-repeat;
 }
 .zdfoot {
   display: flex;
@@ -2087,7 +2135,7 @@ textarea.zin {
 }
 .zbtn:hover {
   color: var(--text);
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .zbtn.pri {
   border: 0;
@@ -2103,7 +2151,7 @@ textarea.zin {
 }
 .zbtn.quiet:hover {
   color: var(--signal);
-  border-color: rgb(228 0 43 / 0.4);
+  border-color: color-mix(in srgb, var(--signal) 40%, transparent);
 }
 .zbtn.danger {
   background: var(--signal);
@@ -2125,27 +2173,95 @@ textarea.zin {
 }
 
 /* the toast the shell shows for a moment */
-.ztoast {
+/* the toast stack (2026-10-08): newest on top, each with its own timer, a
+   dismiss, and an Undo where the action has one. TOP-centre of the stage,
+   under the header: the bottom edge is where the composer's keyboard hint,
+   the assistant pill (right, or pushed left by the Assets rail and the
+   Director inspector, or full width on a phone) and the job rail all live,
+   and a toast that carries a button must never sit under one of them. */
+.ztoasts {
   position: fixed;
-  left: 50%;
-  bottom: 28px;
+  top: 76px;
+  left: calc(50% + 42px);
   transform: translateX(-50%);
   z-index: 130;
-  padding: 10px 16px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(640px, calc(100vw - 84px - 48px));
+  pointer-events: none;
+}
+.ztoast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 16px;
   border-radius: var(--rp);
   border: 1px solid var(--line);
   background: rgb(4 4 5 / 0.9);
   backdrop-filter: blur(16px);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
   font-family: var(--mono);
   font-size: 9.5px;
   letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--text);
-  max-width: min(720px, 90vw);
-  text-align: center;
+  max-width: 100%;
+}
+.ztoast .ztext {
+  min-width: 0;
+  padding: 4px 0;
 }
 .ztoast.err {
-  color: var(--signal);
+  color: var(--signal-hi);
+  border-color: color-mix(in srgb, var(--signal) 35%, transparent);
+}
+.ztoast .zact {
+  flex: none;
+  padding: 5px 12px;
+  border-radius: var(--rp);
+  border: 1px solid var(--line-hi);
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: var(--text);
+  transition:
+    background var(--t),
+    border-color var(--t);
+}
+.ztoast .zact:hover {
+  border-color: var(--text);
+  background: rgb(255 255 255 / 0.06);
+}
+.ztoast .zx {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--rp);
+  background: none;
+  color: var(--dim);
+  transition: color var(--t);
+}
+.ztoast .zx:hover {
+  color: var(--text);
+}
+/* a phone: the rail is a bar along the bottom, so the stage is the width */
+@media (max-width: 720px) {
+  .ztoasts {
+    left: 16px;
+    right: 16px;
+    transform: none;
+    width: auto;
+    max-width: none;
+    align-items: stretch;
+  }
 }
 
 /* the job rail, bottom-left */
@@ -2178,7 +2294,7 @@ textarea.zin {
   animation: zpulse 2.1s ease-in-out infinite;
 }
 .job .jd.d {
-  background: #5fd08a;
+  background: var(--ok);
   animation: none;
 }
 .job .jd.f {
@@ -2263,7 +2379,7 @@ textarea.zin {
   flex-direction: column;
   gap: 12px;
   padding: 20px 22px;
-  border: 2px solid rgb(228 0 43 / 0.28);
+  border: 2px solid color-mix(in srgb, var(--signal) 28%, transparent);
   cursor: pointer;
   transition:
     border-color var(--t),
@@ -2271,10 +2387,10 @@ textarea.zin {
 }
 .scene:hover,
 .scene.open {
-  border-color: rgb(228 0 43 / 0.55);
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
 }
 .scene.on {
-  border-color: rgb(228 0 43 / 0.7);
+  border-color: color-mix(in srgb, var(--signal) 70%, transparent);
 }
 .scene.off {
   opacity: 0.55;
@@ -2293,7 +2409,7 @@ textarea.zin {
   height: 34px;
   border-radius: 8px;
   border: 1px solid var(--line-hi);
-  background: #0b0b0d center/cover no-repeat;
+  background: var(--ground) center/cover no-repeat;
   flex: none;
 }
 .schead {
@@ -2329,7 +2445,7 @@ textarea.zin {
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.06);
-  background: #0d0d0f;
+  background: var(--well);
   display: grid;
   place-items: center;
 }
@@ -2440,13 +2556,13 @@ textarea.zin {
 }
 .swipe.yes:hover,
 .swipe.yes.on {
-  color: #5fd08a;
-  border-color: #5fd08a;
+  color: var(--ok);
+  border-color: var(--ok);
   background: rgb(95 208 138 / 0.14);
 }
 .swipe.shot:hover {
-  color: #e0a94e;
-  border-color: #e0a94e;
+  color: var(--warn);
+  border-color: var(--warn);
   background: rgb(224 169 78 / 0.12);
 }
 .scfoot .tag svg {
@@ -2479,7 +2595,7 @@ textarea.zin {
   border-radius: var(--rp);
 }
 .dot.ok {
-  background: #2f7d4f;
+  background: color-mix(in srgb, var(--ok) 60%, black);
 }
 .dot.run {
   background: var(--signal);
@@ -2565,7 +2681,7 @@ textarea.zin {
   height: 12px;
   border-radius: var(--rp);
   background: var(--text);
-  border: 2px solid #08080a;
+  border: 2px solid var(--void);
   transform: translate(-50%, -50%);
   transition: left 120ms;
 }
@@ -2600,7 +2716,7 @@ textarea.zin {
   aspect-ratio: 1;
   border-radius: var(--r1);
   border: 1px solid var(--line);
-  background: #0b0b0d center/cover no-repeat;
+  background: var(--ground) center/cover no-repeat;
   overflow: hidden;
   padding: 0;
   transition:
@@ -2608,7 +2724,7 @@ textarea.zin {
     transform var(--t);
 }
 .wtile:hover {
-  border-color: rgb(228 0 43 / 0.6);
+  border-color: color-mix(in srgb, var(--signal) 60%, transparent);
   transform: translateY(-2px);
 }
 /* the tile whose render is open in the detail rail (2026-09-18) */
@@ -2689,7 +2805,7 @@ textarea.zin {
   border-radius: var(--r1);
   overflow: hidden;
   border: 1px solid var(--line);
-  background: #0b0b0d;
+  background: var(--ground);
 }
 .adframe img,
 .adframe video {
@@ -2708,7 +2824,7 @@ textarea.zin {
   height: 48px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: #0b0b0d center/cover no-repeat;
+  background: var(--ground) center/cover no-repeat;
   padding: 0;
 }
 .adstrip button.on {
@@ -2762,7 +2878,7 @@ textarea.zin {
 /* the wall's provider filter: a native select on the input skin (2026-09-18) */
 select.zin {
   color-scheme: dark;
-  background: #0b0b0d;
+  background: var(--ground);
   color: var(--text);
 }
 
@@ -2825,7 +2941,7 @@ select.zin {
   color: var(--text);
 }
 .scsel select option {
-  background: #141417;
+  background: var(--panel);
   color: var(--text);
   text-transform: none;
   letter-spacing: normal;
@@ -2849,7 +2965,7 @@ select.zin {
   gap: 9px;
   height: 58px;
   border-radius: 12px;
-  border: 1px dashed rgb(228 0 43 / 0.4);
+  border: 1px dashed color-mix(in srgb, var(--signal) 40%, transparent);
   background: transparent;
   font-family: var(--mono);
   text-transform: uppercase;
@@ -2864,7 +2980,7 @@ select.zin {
 }
 .lanedrop:hover,
 .lanedrop.over {
-  border-color: rgb(228 0 43 / 0.9);
+  border-color: color-mix(in srgb, var(--signal) 90%, transparent);
   background: var(--signal-soft);
   color: var(--text);
 }
@@ -3010,7 +3126,7 @@ select.zin {
   aspect-ratio: 4 / 3;
   border-radius: var(--r1);
   border: 1px solid var(--line);
-  background: #0b0b0d;
+  background: var(--ground);
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -3043,7 +3159,7 @@ select.zin {
   height: 56px;
   border-radius: 9px;
   border: 1px solid var(--line);
-  background: #101012 center/cover no-repeat;
+  background: var(--well) center/cover no-repeat;
   padding: 0;
   transition: border-color var(--t);
 }
@@ -3184,8 +3300,8 @@ select.zin {
   }
 }
 .zcredit-pill.empty {
-  color: #e4002b;
-  border-color: rgb(228 0 43 / 0.45);
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
 }
 .zcredit {
   width: 280px;
@@ -3195,7 +3311,7 @@ select.zin {
   background: rgb(14 14 17 / 0.97);
   box-shadow: 0 18px 60px -20px rgb(0 0 0 / 0.8);
   backdrop-filter: blur(16px);
-  color: #f4f3f2;
+  color: var(--text);
   font-family: var(--font-inter), "Inter", -apple-system, sans-serif;
   outline: none;
 }
@@ -3206,7 +3322,7 @@ select.zin {
   font-size: 9px;
   letter-spacing: 0.13em;
   text-transform: uppercase;
-  color: #8e8c8a;
+  color: var(--dim);
 }
 .zcredit-head {
   display: flex;
@@ -3223,7 +3339,7 @@ select.zin {
   letter-spacing: 0.02em;
 }
 .zcredit-head strong.empty {
-  color: #e4002b;
+  color: var(--signal);
 }
 .zcredit-rows {
   display: flex;
@@ -3240,14 +3356,14 @@ select.zin {
 .zcredit-rows dd {
   margin: 0;
   font-size: 12.5px;
-  color: #f4f3f2;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 .zcredit-note {
   margin: 12px 0 0;
   font-size: 12px;
   line-height: 1.45;
-  color: #8e8c8a;
+  color: var(--dim);
 }
 .zcredit-actions {
   display: flex;
@@ -3263,7 +3379,7 @@ select.zin {
   border-radius: 999px;
   border: 1px solid rgb(255 255 255 / 0.2);
   background: transparent;
-  color: #f4f3f2;
+  color: var(--text);
   font-size: 12.5px;
   text-decoration: none;
   transition:
@@ -3271,15 +3387,15 @@ select.zin {
     background 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .zcredit-actions > *:hover {
-  border-color: #f4f3f2;
+  border-color: var(--text);
 }
 .zcredit-actions > .primary {
-  background: #e4002b;
-  border-color: #e4002b;
+  background: var(--signal);
+  border-color: var(--signal);
   color: #fff;
 }
 .zcredit-actions > .primary:hover {
-  background: #c80026;
+  background: var(--signal-deep);
 }
 .zcredit-actions > button:disabled {
   opacity: 0.6;

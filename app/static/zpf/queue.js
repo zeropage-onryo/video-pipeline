@@ -232,12 +232,11 @@ async function renderPending() {
     return pick;
   }
 
-  /* A LABEL, not an invoice. The server computes the authoritative
-     estimate in providers.check_render_choice on the way in and hands it
-     back on the approve response; this multiplies the rate card the
-     catalogue ships so that dragging a duration does not cost a request
-     per keystroke. tests/test_providers.py asserts the two agree for
-     every model, duration and frame. */
+  /* ORDERING ONLY, never shown (2026-10-08): the rate card the catalogue
+     ships, multiplied out so the default pick can be the cheapest usable
+     model. The price a card PRINTS is the server's quote, in credits (see
+     plan below). tests/test_providers.py asserts the two agree for every
+     model, duration and frame. */
   function estimate(spec, pick, seconds = pick.duration) {
     const price = spec && spec.price;
     if (!price) return null;
@@ -246,7 +245,8 @@ async function renderPending() {
     return (per === undefined || per === null) ? null : per * seconds;
   }
 
-  /* A TIMED SCENE'S PRICE IS THE SERVER'S (src/pricing.py, 2026-09-17).
+  /* A SCENE'S PRICE IS THE SERVER'S (src/pricing.py, 2026-09-17; a whole
+     scene's too since 2026-10-08, when the label became credits).
      Each shot renders at its own window's length fitted UP to what the
      model can make, and that fitting used to be done twice -- here, as a
      JS twin of timeline.fit_seconds, and again on approve. Two
@@ -267,7 +267,7 @@ async function renderPending() {
     : { provider: pick.provider, model: pick.model, frame: pick.frame, duration: pick.duration });
 
   function timedQuote(card, pick) {
-    if (matches(card.quote, pick)) return card.quote;
+    if (matches(card.quote, pick, !!card.timeline)) return card.quote;
     const key = quoteKey(card, pick);
     if (quotes.has(key)) return quotes.get(key);
     quotes.set(key, null);                       // in flight: ask once
@@ -348,24 +348,25 @@ async function renderPending() {
     }).join('');
   }
 
-  /* what an approve would make and cost: the count, the lengths, the
-     label's price. null usd = a model with no rate card, said as such */
+  /* what an approve would make and cost: the count, the lengths, and the
+     price IN CREDITS -- the server's quote for this pick, timed or whole
+     (2026-10-08: the studio shows credits, never dollars, and this shell
+     no longer prices a whole scene off the rate card itself) */
   function plan(card, spec, pick) {
     const todo = shotsToRender(card);
-    if (!todo) return { timed: false, n: 1, lengths: [pick.duration], usd: estimate(spec, pick) };
     const q = timedQuote(card, pick);
     if (!q || q.error) {
       // not priced yet (in flight), or refused: the shots are named, the
       // number is not made up
-      return { timed: true, n: todo.length, lengths: [], usd: null,
-               pending: !q, refused: q ? q.error : '' };
+      return { timed: !!todo, n: todo ? todo.length : 1, lengths: todo ? [] : [pick.duration],
+               credits: null, pending: !q, refused: q ? q.error : '' };
     }
-    return { timed: true, n: q.durations.length, lengths: q.durations, usd: q.estimate_usd };
+    return { timed: !!todo, n: q.durations.length, lengths: q.durations, credits: q.credits };
   }
 
-  const approveText = ({ n, usd, pending, refused }) =>
+  const approveText = ({ n, credits, pending, refused }) =>
     `Approve · ${n} shot${n === 1 ? '' : 's'} · ${refused ? 'refused' : pending ? 'pricing…'
-      : usd === null || usd === undefined ? 'unpriced' : '~$' + usd.toFixed(2)}`;
+      : credits === null || credits === undefined ? 'unpriced' : credits.toLocaleString('en-US') + ' cr'}`;
 
   function renderZone(card) {
     const pick = pickFor(card);

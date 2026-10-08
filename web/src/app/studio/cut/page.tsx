@@ -5,12 +5,14 @@
    aspect you pick), or opened from a rendered scene, which reuses that
    concept's Assemble history -- so the cut the Queue exported is the cut
    you open, version for version. Deleting a project hides it; its
-   versions are kept, like every version in this system. */
+   versions are kept, like every version in this system -- so removing one
+   asks nothing first and the toast offers Undo (2026-10-08). */
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Clapperboard, Film, Loader2, Plus, RectangleHorizontal, RectangleVertical, Square, Trash2 } from "lucide-react";
+import { Clapperboard, Film, Loader2, Plus, RectangleHorizontal, RectangleVertical, Scissors, Square, Trash2 } from "lucide-react";
 import { useShell } from "@/components/studio/shell";
-import { createProject, deleteProject, listProjects, type Project } from "@/lib/cut/api";
+import { createProject, deleteProject, listProjects, restoreProject, type Project } from "@/lib/cut/api";
 import { cutReady, type CutReady } from "@/lib/studio-api";
 import { shortDuration, type Aspect } from "@/lib/cut/timeline";
 import "@/components/cut/cut.css";
@@ -32,18 +34,24 @@ export default function CutProjectsPage() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [ready, setReady] = useState<CutReady[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // the list failed to load: said on the page with a retry, not only in a
+  // toast that is gone before it is read (an empty grid read as "no cuts")
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     listProjects()
-      .then((r) => setProjects(r.projects))
+      .then((r) => {
+        setProjects(r.projects);
+        setError(null);
+      })
       .catch((e) => {
         setProjects([]);
-        if (!signedOut) toast(e instanceof Error ? e.message : "could not list projects", "err");
+        if (!signedOut) setError(e instanceof Error ? e.message : "Your cuts could not be listed");
       });
     cutReady(brand || undefined)
       .then((r) => setReady(r.ready))
       .catch(() => setReady([]));
-  }, [brand, signedOut, toast]);
+  }, [brand, signedOut]);
   useEffect(() => {
     if (brand || signedOut) load();
   }, [brand, signedOut, load]);
@@ -60,10 +68,19 @@ export default function CutProjectsPage() {
   };
 
   const remove = async (p: Project) => {
-    if (!window.confirm(`Remove “${p.title}” from your projects? Its versions are kept.`)) return;
     try {
       await deleteProject(p.id);
       setProjects((all) => (all ?? []).filter((x) => x.id !== p.id));
+      toast(`“${p.title}” removed · its versions are kept`, "ok", {
+        action: {
+          label: "Undo",
+          run: () =>
+            restoreProject(p.id).then(() => {
+              toast(`“${p.title}” is back`);
+              load();
+            }),
+        },
+      });
     } catch (e) {
       toast(e instanceof Error ? e.message : "could not remove it", "err");
     }
@@ -105,6 +122,31 @@ export default function CutProjectsPage() {
         {projects === null ? (
           <div className="cxp-card cxp-new">
             <Loader2 className="animate-spin" size={18} />
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="cxp-card cxp-new cxp-empty" role="alert">
+            <b className="cx-h">Your cuts could not be listed</b>
+            <span className="m">{error}</span>
+            <button type="button" className="cx-btn" onClick={load}>
+              Try again
+            </button>
+          </div>
+        ) : projects && !projects.length ? (
+          <div className="cxp-card cxp-new cxp-empty">
+            <Scissors size={20} strokeWidth={1.4} />
+            <b className="cx-h">No cuts yet</b>
+            <span>
+              {fresh.length
+                ? "Start one from scratch, or open a rendered scene below — its clips land on the timeline in order."
+                : "Start one from scratch. A scene whose clips are rendered in the Queue shows up here, ready to cut."}
+            </span>
+            {fresh.length ? null : (
+              <Link href="/studio/queue" className="cx-btn">
+                Open the Queue
+              </Link>
+            )}
           </div>
         ) : null}
 

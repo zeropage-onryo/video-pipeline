@@ -1833,6 +1833,16 @@ def asset_delete_generated(asset_id: int, account_id: int = Depends(auth.current
     return {"deleted": asset_id}
 
 
+@router.post("/assets/generated/{asset_id}/restore")
+def asset_restore_generated(asset_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The Undo on a removed render (2026-10-08): back on the wall and
+    the assets shelf. 404 for a render that is not removed, or not this
+    account's."""
+    if not render_assets.restore(asset_id, account_id=account_id):
+        return _error(404, "not_found", "no removed render with that id")
+    return {"restored": asset_id}
+
+
 # --- retrieval --------------------------------------------------------------
 
 class RetrieveBody(BaseModel):
@@ -3117,6 +3127,13 @@ def _render_state(account_id: Optional[int] = None) -> dict:
     pick = providers.check_render_choice()
     spec = providers.model_options(pick["provider"], pick["model"])
     axis = spec["duration"]
+    # what a default clip costs in CREDITS, by the one conversion every
+    # quote uses (2026-10-08): the studio prints credits, never dollars.
+    # None only when the model has no estimate to price.
+    try:
+        credits = pricing.credits_for(pricing.usd_micros(pick["estimate_usd"]))
+    except pricing.PricingRefused:
+        credits = None
     return {"label": providers.RENDER_LABELS.get(pick["provider"], pick["provider"]),
             "provider": pick["provider"],
             "available": fal.has_key(account_id),
@@ -3124,6 +3141,7 @@ def _render_state(account_id: Optional[int] = None) -> dict:
             "spend_ok": fal.has_key(account_id),
             "model": pick["model"],
             "estimate_usd": pick["estimate_usd"],
+            "credits": credits,
             "duration": pick["duration"],
             "resolution": pick["frame"],
             # every model with what a second of it costs at its default

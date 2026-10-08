@@ -38,6 +38,7 @@ import { API_URL } from "@/lib/api";
 import {
   announceBalanceChange,
   announceQueueChange,
+  archiveConcept,
   cancelJob,
   clearJob,
   cutAssemble,
@@ -47,6 +48,7 @@ import {
   fileLaneClip,
   getCapabilities,
   listJobs,
+  pickConcept,
   queueApprove,
   queueQuote,
   queueManual,
@@ -99,7 +101,7 @@ const announced = new Set<number>();
 const PILL =
   "min-h-11 rounded-[6px] border px-3 font-plex! text-xs! focus-visible:rounded-[6px]! disabled:cursor-not-allowed";
 const pill = (on: boolean, off = false) =>
-  `${PILL} ${off ? (on ? "border-noir-line3 bg-noir-line3 text-bone!" : "border-noir-line2 text-[#5e5b55]!") : on ? "border-bone bg-bone text-noir-bg!" : "border-noir-line3 text-bone! hover:border-bone"}`;
+  `${PILL} ${off ? (on ? "border-noir-line3 bg-noir-line3 text-bone!" : "border-noir-line2 text-[var(--dimmer)]!") : on ? "border-bone bg-bone text-noir-bg!" : "border-noir-line3 text-bone! hover:border-bone"}`;
 const SIDE_BTN =
   "flex size-[52px] flex-none items-center justify-center rounded-[8px] border border-noir-line bg-transparent p-0 hover:enabled:border-bone hover:enabled:text-bone! disabled:opacity-50 focus-visible:rounded-[8px]!";
 const POPK = "mb-2 font-plex text-[11px] tracking-[0.14em] text-bone3";
@@ -327,6 +329,20 @@ export default function QueuePage() {
       setDrawing((d) => ({ ...d, [c.id]: false }));
     }
   };
+  /* the toast's Undo on a reject or a hand-made mark: the server's own
+     inverse routes, then the card is read back like any other change */
+  const undoDecision = async (c: Concept, what: "reject" | "shot") => {
+    if (what === "reject") {
+      await archiveConcept(c.id, false);
+      if (c.picked) await pickConcept(c.id, true);
+    } else {
+      await queueShot(c.id, false);
+    }
+    acted.delete(c.id);
+    announceQueueChange();
+    loadPending();
+    toast(`${c.n} is back in the Queue`);
+  };
   const decide = async (c: Concept, what: "approve" | "reject" | "shot") => {
     setBusy((b) => ({ ...b, [c.id]: what }));
     setPopId(null);
@@ -353,17 +369,24 @@ export default function QueuePage() {
         const charge = res.quote && res.quote.credits != null ? creditsText(res.quote.credits, !!balance?.exempt) : null;
         toast(
           r
-            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ${charge ?? `~$${Number(r.estimate_usd).toFixed(2)}`}`
+            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame}${charge ? ` · ${charge}` : ""}`
             : `${c.n} approved`,
         );
         acted.set(c.id, { status: "RENDERING", job: res.job_id, at: Date.now() });
       } else if (what === "reject") {
         await queueReject(c.id);
-        toast(`${c.n} rejected — archived, still counted`);
+        // Undo is the inverse, in order: un-archive (which withdraws any
+        // board ruling not yet taught), then pick again if it was picked --
+        // the pick re-records its own ruling. A parked card was never picked.
+        toast(`${c.n} rejected — archived, still counted`, "ok", {
+          action: { label: "Undo", run: () => undoDecision(c, "reject") },
+        });
         acted.set(c.id, { status: "ARCHIVED", at: Date.now() });
       } else {
         await queueShot(c.id);
-        toast(`${c.n} marked shot by hand`);
+        toast(`${c.n} marked shot by hand`, "ok", {
+          action: { label: "Undo", run: () => undoDecision(c, "shot") },
+        });
         acted.set(c.id, { status: "SHOT BY HAND", at: Date.now() });
       }
       held.delete(c.id);
@@ -486,31 +509,24 @@ export default function QueuePage() {
      approve is still its own click and its own signed quote. A card still
      pricing, refused or unpriced is counted out loud rather than as $0. */
   const spendable = (pending || []).filter((c) => !lockedFor(c) && !didFor(c));
-  // Credits are what this account is charged. Dollars appear only for a
-  // card the server has not priced in credits (the rate card's label).
+  // Credits are what this account is charged, and the only price the
+  // studio prints (2026-10-08): a card the server has not priced in credits
+  // is counted as "not priced", never summed in dollars.
   const tally = spendable.reduce(
     (t, c) => {
       const pick = pickOf(c);
       const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
       if (!pick || !spec || !renderers[pick.provider]?.available) return { ...t, open: t.open + 1 };
       const plan = planFor(spec, pick, c.timeline ? partsOf(c) : null, quoteOf(c, pick));
-      if (plan.pending || plan.refused) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
-      if (plan.credits !== null) return { ...t, shots: t.shots + plan.n, credits: t.credits + plan.credits };
-      return plan.usd === null
-        ? { ...t, shots: t.shots + plan.n, open: t.open + 1 }
-        : { ...t, shots: t.shots + plan.n, usd: t.usd + plan.usd };
+      if (plan.credits === null) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
+      return { ...t, shots: t.shots + plan.n, credits: t.credits + plan.credits };
     },
-    { credits: 0, usd: 0, shots: 0, open: 0 },
+    { credits: 0, shots: 0, open: 0 },
   );
   const charged = !!balance && !balance.exempt;
   const exempt = !!balance?.exempt;
   const short = charged && tally.credits > balance!.available ? tally.credits - Math.max(balance!.available, 0) : 0;
-  const tallyPrice = [
-    tally.credits ? `${creditsText(tally.credits)}` : "",
-    tally.usd ? `~$${tally.usd.toFixed(2)}` : "",
-  ]
-    .filter(Boolean)
-    .join(" + ") || "nothing priced";
+  const tallyPrice = tally.credits ? creditsText(tally.credits) : "nothing priced";
   /** A card this balance cannot pay for says so and does not offer the
    *  click (the approve would fail at the hold). The hold at submit is
    *  still what refuses (src/charge.py); this is only the early answer,
@@ -558,9 +574,9 @@ export default function QueuePage() {
                   key={p}
                   role="listitem"
                   title={gateLine(p) + (full ? " · daily cap reached" : "")}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-plex text-[10px] leading-none tracking-[0.08em] ${v.available ? "border-noir-line3 text-bone2" : "border-noir-line2 text-[#5e5b55]"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-plex text-[10px] leading-none tracking-[0.08em] ${v.available ? "border-noir-line3 text-bone2" : "border-noir-line2 text-[var(--dimmer)]"}`}
                 >
-                  <i className={`size-1.5 flex-none rounded-full ${!v.available ? "bg-[#4a4843]" : full ? "bg-gate-warn" : "bg-gate-pass"}`} />
+                  <i className={`size-1.5 flex-none rounded-full ${!v.available ? "bg-[var(--dimmer)]" : full ? "bg-gate-warn" : "bg-gate-pass"}`} />
                   {v.label.toUpperCase()}
                   <span className="text-bone3">
                     {!v.available ? "OFF" : v.today != null ? `${v.today}${v.cap ? `/${v.cap}` : ""}` : "READY"}
@@ -573,7 +589,7 @@ export default function QueuePage() {
           <span className="m">
             {renderer
               ? renderer.available
-                ? `${renderer.label} · ${renderer.model} · ~$${(renderer.estimate_usd || 0).toFixed(2)} a clip`
+                ? `${renderer.label} · ${renderer.model}${renderer.credits != null ? ` · ${creditsText(renderer.credits, exempt)} a clip` : ""}`
                 : "Video rendering isn't configured on this server — approving cannot render"
               : "—"}
           </span>
@@ -582,7 +598,7 @@ export default function QueuePage() {
       {error ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{error}</div> : null}
       {pending && !pending.length ? (
         <p className="stateline" style={{ padding: "0 42px" }}>
-          Nothing waiting — a Studio run lands here once its keyframe is rendered, or pick a concept on Pipeline
+          Nothing waiting — pick a scene in a project, or Send to Queue from Create, and it waits here for your approval
         </p>
       ) : null}
       <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
@@ -634,7 +650,7 @@ export default function QueuePage() {
             <article
               key={c.id}
               data-id={c.id}
-              className={`${CARD} ${locked ? "border-[#5a2320]" : "border-noir-line2"} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
+              className={`${CARD} ${locked ? "border-noir-red/40" : "border-noir-line2"} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
             >
               <Hero
                 concept={c}
@@ -1015,7 +1031,7 @@ export default function QueuePage() {
           </div>
           {lane && !lane.length ? (
             <p className="stateline" style={{ padding: "0 42px" }}>
-              Nothing to render by hand — the lane takes the scenes you picked on Pipeline or sent from the Director
+              Nothing to render by hand — the lane takes the scenes you picked in a project or sent to the Queue
             </p>
           ) : null}
           <div className="scenegrid">
