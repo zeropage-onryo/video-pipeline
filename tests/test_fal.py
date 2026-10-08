@@ -830,10 +830,10 @@ def test_a_still_filed_under_a_project_says_so_on_its_row_and_the_wall(
                         lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
     http = FakeHttp(result={"images": [{"url": "https://v3.fal.media/i.png"}]})
     result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
-                                            model="seedream4", project_id=7)
+                                            model="seedream4.5", project_id=7)
     assert result["ok"] is True, result["error"]
     plain = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
-                                           model="seedream4")
+                                           model="seedream4.5")
     assert plain["ok"] is True, plain["error"]
     with generative.connect(tmp_db) as conn:
         rows = [json.loads(r["params_json"]) for r in conn.execute(

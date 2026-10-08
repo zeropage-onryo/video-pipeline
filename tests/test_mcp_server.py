@@ -1113,9 +1113,9 @@ def test_image_models_projects_the_catalogue():
 def test_an_image_is_quoted_before_anything_is_spent(monkeypatch):
     from src import fal
     calls = _stub_still(monkeypatch)
-    out = mcp_server.run_image("a can", model="seedream4")
+    out = mcp_server.run_image("a can", model="seedream4.5")
     assert out["needs_approval"] is True and out["ok"] is False
-    assert out["quote"]["usd"] == fal.image_usd("seedream4")
+    assert out["quote"]["usd"] == fal.image_usd("seedream4.5")
     assert f"approve_usd={out['quote']['usd']}" in out["note"]
     with pytest.raises(ValueError, match="above the"):
         mcp_server.run_image("a can", model="nano-banana-pro", approve_usd=0.08)
@@ -1124,10 +1124,10 @@ def test_an_image_is_quoted_before_anything_is_spent(monkeypatch):
 
 def test_an_approved_image_renders_the_chosen_model(monkeypatch):
     calls = _stub_still(monkeypatch)
-    out = mcp_server.run_image("  a  can ", model="ideogram3", aspect="4:5", account_id=7,
+    out = mcp_server.run_image("  a  can ", model="ideogram4.5", aspect="4:5", account_id=7,
                                approve_usd=0.06)
     (c,) = calls
-    assert c["prompt"] == "a can" and c["model"] == "ideogram3" and c["aspect"] == "4:5"
+    assert c["prompt"] == "a can" and c["model"] == "ideogram4.5" and c["aspect"] == "4:5"
     assert c["approved"] is True and c["account_id"] == 7
     assert c["source"] == "mcp" and c["bank"] is True and c["reference_urls"] is None
     assert out["ok"] and out["quote"]["usd"] == 0.06 and out["asset_id"] == 3
@@ -1545,7 +1545,7 @@ def test_another_accounts_project_cannot_be_read_or_filed_into(pg):
     assert mcp_server.list_project_cards(dsn=pg, account_id=mine)["projects"] == []
     for call in (lambda: mcp_server.get_project(theirs["id"], dsn=pg, account_id=mine),
                  lambda: mcp_server.project_history(theirs["id"], dsn=pg, account_id=mine),
-                 lambda: mcp_server.run_image("a can", model="seedream4",
+                 lambda: mcp_server.run_image("a can", model="seedream4.5",
                                               project_id=theirs["id"], dsn=pg,
                                               account_id=mine)):
         with pytest.raises(ValueError, match="no project"):
@@ -1565,9 +1565,9 @@ def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypat
     project = mcp_server.make_project("Ad", dsn=path)
     pid = project["id"]
     stills, clips, fx = _stub_still(monkeypatch), _stub_render(monkeypatch), _stub_effect(monkeypatch)
-    quote = mcp_server.run_image("a can", model="seedream4", project_id=pid, dsn=path)
+    quote = mcp_server.run_image("a can", model="seedream4.5", project_id=pid, dsn=path)
     assert quote["quote"]["project"] == {"id": pid, "title": "Ad"}
-    mcp_server.run_image("a can", model="seedream4", project_id=pid, approve_usd=0.03, dsn=path)
+    mcp_server.run_image("a can", model="seedream4.5", project_id=pid, approve_usd=0.04, dsn=path)
     assert stills[0]["project_id"] == pid
     price = mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
                                  dsn=path)["quote"]["usd"]
@@ -1579,7 +1579,7 @@ def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypat
                           approve_usd=1, dsn=path)
     assert fx[0]["project_id"] == pid
     with pytest.raises(ValueError, match="no project 999999"):
-        mcp_server.run_image("a can", model="seedream4", project_id=999999, dsn=path)
+        mcp_server.run_image("a can", model="seedream4.5", project_id=999999, dsn=path)
     assert len(stills) == 1
 
 
