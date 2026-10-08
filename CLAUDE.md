@@ -1333,8 +1333,11 @@ is yours, in Resolve, by hand.
   `web`, `API_UPSTREAM` + `NEXT_PUBLIC_AUTH_ORIGIN` set to the API origin and no
   `NEXT_PUBLIC_API_URL`, live at `zpf-web.vercel.app`, which the API's `STUDIO_URL`
   names; `web/README.md` has the recipe. **A push that touches nothing under `web/` no
-  longer builds it** (2026-09-22, `web/vercel.json`'s `ignoreCommand`; the README says how
-  it decides and why it can only over-build). The studio's `/api`, `/auth` and media
+  longer builds it** (2026-09-22, `web/vercel.json`'s `ignoreCommand`, now
+  `web/scripts/vercel-ignore.sh`; the README says how it decides). Since 2026-10-08 a
+  preview branch is judged against its merge base with `main`, not against `HEAD^`: the
+  old rule skipped PR #182's `web/` change because its first push ended in a merge from
+  `main`. Unsure means build. The studio's `/api`, `/auth` and media
   traffic still proxies through Vercel's edge ON PURPOSE -- that is what keeps the session
   cookie first-party (the 2026-09-14 note above) -- and every poll and every photo is
   therefore a Vercel edge request plus origin transfer; `docs/tasks/task-api-domain-move.md`

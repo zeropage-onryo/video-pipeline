@@ -78,22 +78,39 @@ Supabase's Redirect URLs list beside the `fly.dev` one. The rest of the move
    Preview. Do not add `NEXT_PUBLIC_API_URL`.
 4. Deploy. Every later push to `main` deploys itself; branches get
    preview URLs. **A push that changes nothing under `web/` is skipped**
-   (`web/vercel.json`'s `ignoreCommand`, 2026-09-22): before it, every
-   docs/tests/adapter commit in the monorepo was a full `next build` and a
-   new deployment -- 51 of the 105 commits in the five days before the
-   file landed. The command diffs `VERCEL_GIT_PREVIOUS_SHA` (the last
-   deployment that actually built, so a push of several commits is judged
-   as a whole) against `HEAD`, falling back to `HEAD^`; the `:/web`
-   pathspec is anchored at the repo root, so it reads the same whether
-   Vercel runs it inside `web/` or at the root. Any git error -- a SHA
-   outside the shallow clone, a first commit -- is a non-zero exit and
-   the build proceeds: it can over-build, never under-build. Exit 0 is
-   the skip. The file is only read because Root Directory is `web`; move
-   the root and the setting moves to the dashboard (Settings -> Git ->
-   Ignored Build Step) with the same command.
-   **So a `NEXT_PUBLIC_*` change cannot be rebuilt by redeploying.** A
-   redeploy builds the same commit, the diff is empty, and the build is
-   canceled. Deploy from the CLI instead, which skips the step. Run it from
+   (`web/vercel.json`'s `ignoreCommand`, 2026-09-22; since 2026-10-08 it
+   runs `web/scripts/vercel-ignore.sh`): before it, every docs/tests/adapter
+   commit in the monorepo was a full `next build` and a new deployment --
+   51 of the 105 commits in the five days before the file landed. Exit 0
+   is the skip; anything else builds. Two rules:
+   - **`main` (production)** diffs `VERCEL_GIT_PREVIOUS_SHA` (the last
+     deployment that actually built, so a push of several commits is
+     judged as a whole) against `HEAD`, falling back to `HEAD^`.
+   - **Any other branch** diffs its merge base with `main` against `HEAD`:
+     a branch whose changes touch `web/` builds on every push, and one that
+     only merges `web/` changes in from `main` never does. The production
+     rule under-built here, which is why previews no longer use it: on a
+     branch's first push `VERCEL_GIT_PREVIOUS_SHA` is unset, and when that
+     tip is a merge FROM `main`, `HEAD^` already holds the branch's own
+     `web/` change, so the diff saw only `main`'s commits. PR #182
+     (2026-10-08) changed 20 files under `web/` and got "1 Skipped
+     Deployment" that way. Vercel clones with `--depth=10`, so the script
+     fetches `main` (from `origin`, else the public GitHub URL that
+     `VERCEL_GIT_REPO_OWNER`/`VERCEL_GIT_REPO_SLUG` name) and deepens both
+     histories to 64, 256, then 1024 commits until the merge base shows.
+
+   Whenever the script cannot tell -- no remote, a failed fetch, a SHA
+   outside the clone, no merge base within 1024 commits -- it builds: an
+   extra build costs minutes, a skipped preview costs the review.
+   `tests/test_vercel_ignore.py` replays these shapes on `--depth=10`
+   clones, PR #182's merge tip first. The file is only read because Root
+   Directory is `web`; move the root and the setting moves to the dashboard
+   (Settings -> Git -> Ignored Build Step) as
+   `sh web/scripts/vercel-ignore.sh` (the script finds the repository root
+   itself).
+   **So a `NEXT_PUBLIC_*` change cannot be rebuilt by redeploying
+   production.** A redeploy builds the same commit, the diff is empty, and
+   the build is canceled. Deploy from the CLI instead, which skips the step. Run it from
    the REPOSITORY ROOT (Root Directory is `web`, so a deploy from inside
    `web/` fails with "Root Directory does not exist"), on a clean checkout of
    the commit production runs, with `.claude` listed in a temporary
