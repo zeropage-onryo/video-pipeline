@@ -136,11 +136,7 @@ jobs:
       - name: Test web/ with node:test
         working-directory: web
         # The glob, not `node --test tests/`: the directory form does not
-        # find these files. NODE_OPTIONS reaches each test file's process and
-        # mutes one warning per imported .ts, which says web/package.json has
-        # no "type" -- adding one is a change to the Next app, not to CI.
-        env:
-          NODE_OPTIONS: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+        # find these files.
         run: node --test tests/*.test.mjs
 
   # Everything in this job needs a real GEMINI_API_KEY -- it makes real
