@@ -1,3 +1,4 @@
+import { Fragment, type ReactNode } from "react";
 import { EditorialSkin } from "@/components/editorial-skin";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
@@ -12,29 +13,36 @@ import { FaqSection } from "./faq-section";
 import { RelatedSection } from "./related-section";
 import { FinalCta } from "./final-cta";
 import { accentVars } from "../theme";
-import type { MakePage as MakePageEntry } from "../pages";
+import { DEFAULT_ORDER, type MakePage as MakePageEntry, type MakeSectionKey } from "../pages";
 
-// The whole /make page from one entry, in the order the brief fixed:
-// hero, the overview when the entry carries one (2026-10-07), the page's
-// signature section when it names one, the wall (its own
-// headline + Explore), features, models, how-to, FAQ, related, final CTA.
-// Same header, footer and skin as the homepage; the entry's accent rides
-// on the skin wrapper as CSS variables (theme.ts).
+// The whole /make page from one entry. The hero always comes first; the
+// sections after it follow the entry's `layout.order` (2026-10-08, so no two
+// pages are the same page), defaulting to the order the brief fixed: the
+// overview when the entry carries one, the signature when it names one, the
+// wall, features, models, how-to, FAQ, related, final CTA. Same header,
+// footer and skin as the homepage; the entry's accent rides on the skin
+// wrapper as CSS variables (theme.ts).
 export function MakePage({ page }: { page: MakePageEntry }) {
+  const order = page.layout?.order ?? DEFAULT_ORDER;
+  const section: Record<MakeSectionKey, () => ReactNode> = {
+    overview: () => <OverviewSection page={page} />,
+    signature: () => <Signature page={page} />,
+    wall: () => <AdWall page={page} />,
+    features: () => <FeaturesSection page={page} />,
+    models: () => <ModelsSection page={page} />,
+    howTo: () => <HowToSection page={page} />,
+    faq: () => <FaqSection title={page.faq.title} items={page.faq.items} />,
+    related: () => <RelatedSection page={page} />,
+    final: () => <FinalCta page={page} />,
+  };
   return (
     <EditorialSkin tone={page.tone} style={accentVars(page.accent)}>
       <SiteHeader />
       <main className="flex-1">
         <MakeHero page={page} />
-        <OverviewSection page={page} />
-        <Signature page={page} />
-        <AdWall page={page} />
-        <FeaturesSection page={page} />
-        <ModelsSection page={page} />
-        <HowToSection page={page} />
-        <FaqSection title={page.faq.title} items={page.faq.items} />
-        <RelatedSection page={page} />
-        <FinalCta page={page} />
+        {order.map((key) => (
+          <Fragment key={key}>{section[key]()}</Fragment>
+        ))}
       </main>
       <SiteFooter />
     </EditorialSkin>

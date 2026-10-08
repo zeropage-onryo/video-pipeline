@@ -1,18 +1,39 @@
 "use client";
 
+import Image from "next/image";
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { EASE_OUT, SPRINGS } from "@/lib/motion";
 import { useStill } from "@/lib/motion-hooks";
 import { IMAGE_FRAMES } from "../shared";
 import { useFit } from "./use-fit";
-import type { MakePage } from "../pages";
+import type { MakePage, MakeTile } from "../pages";
 
 // The FLUX page's signature (2026-10-05): the ten frames the composer
 // draws at. Pick one and the frame morphs to it (a layout animation on its
 // aspect ratio), the pixel size swaps underneath, and the pill slides
 // along the row. The sizes are src/fal.py IMAGE_SIZES, sent to the model
-// as exact width and height. Reduced motion: the morph is instant.
+// as exact width and height. Reduced motion: the morph is instant. The
+// frame shows `signatureFrames` (2026-10-08): one prompt drawn on the model
+// at five frames; a frame it was not drawn at shows the nearest, cropped,
+// and says so.
+
+const ratioOf = (aspect?: string) => {
+  const [w, h] = (aspect ?? "1:1").split(":").map(Number);
+  return w / h;
+};
+function nearest(tiles: MakeTile[], r: number): MakeTile | undefined {
+  let best: MakeTile | undefined;
+  let gap = Infinity;
+  for (const t of tiles) {
+    const d = Math.abs(Math.log(ratioOf(t.aspect) / r));
+    if (d < gap) {
+      gap = d;
+      best = t;
+    }
+  }
+  return best;
+}
 
 export function FramePicker({ page }: { page: MakePage }) {
   const still = useStill();
@@ -22,6 +43,10 @@ export function FramePicker({ page }: { page: MakePage }) {
   const box = useFit(stage, f.w / f.h);
   const t = still ? { duration: 0 } : SPRINGS.lift;
   const plate = page.wall.tiles[i % page.wall.tiles.length]?.plate ?? "var(--plate-1)";
+  // the signature's own stills: the same prompt drawn at the frames the
+  // model was asked for; a frame between them shows the nearest, cropped
+  const shot = nearest(page.signatureFrames ?? [], f.w / f.h);
+  const exact = shot?.aspect === f.ratio;
 
   return (
     <section id="frames" className="border-t border-border">
@@ -61,10 +86,16 @@ export function FramePicker({ page }: { page: MakePage }) {
             style={box.width ? { width: box.width, height: box.height } : { height: "100%", aspectRatio: `${f.w} / ${f.h}` }}
             className="relative overflow-hidden rounded-2xl bg-card shadow-[var(--card-shadow)]"
           >
-            <div aria-hidden className="absolute inset-0" style={{ background: plate }} />
-            <span className="absolute top-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-              TODO still
-            </span>
+            {shot?.src ? (
+              <Image src={shot.src} alt={shot.title} fill sizes="(min-width: 768px) 820px, 100vw" quality={75} className="object-cover" />
+            ) : (
+              <div aria-hidden className="absolute inset-0" style={{ background: plate }} />
+            )}
+            {shot?.src && (
+              <span className="absolute top-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+                {exact ? `Drawn at ${f.ratio}` : `The ${shot.aspect} draw, cropped`}
+              </span>
+            )}
             {/* a square inside the frame as a constant yardstick, so the ratio change reads */}
             <div aria-hidden className="absolute bottom-3 right-3 size-8 rounded-md border border-white/70" />
           </motion.div>
@@ -81,7 +112,7 @@ export function FramePicker({ page }: { page: MakePage }) {
               className="text-[15px] text-[var(--ink-2)]"
             >
               <span className="font-semibold text-foreground">{f.ratio}</span> is sent as {f.w} by {f.h} pixels,{" "}
-              {((f.w * f.h) / 1_000_000).toFixed(2)} megapixels.
+              {((f.w * f.h) / (1024 * 1024)).toFixed(2)} megapixels.
             </motion.p>
           </AnimatePresence>
         </div>

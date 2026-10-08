@@ -117,7 +117,13 @@ function Media({ tile, title, plate, still, sound }: { tile?: MakeTile; title: s
     setMuted(v.muted);
   };
   return (
-    <div ref={ref} className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-card">
+    <div
+      ref={ref}
+      // a tile's own frame when it names one (a 4:5 label still must not be
+      // cropped to 4:3 and lose its words); 4:3 otherwise, as before
+      style={tile?.aspect ? { aspectRatio: tile.aspect.replace(":", " / ") } : undefined}
+      className={`relative w-full overflow-hidden rounded-2xl bg-card ${tile?.aspect ? "mx-auto max-w-[460px]" : "aspect-[4/3]"}`}
+    >
       <Fill tile={tile} alt={tile?.title || title} plate={plate} />
       {tile?.tag && <span className={`absolute bottom-3 left-3 ${CHIP}`}>{tile.tag}</span>}
       {sound && tile?.video && (

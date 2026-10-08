@@ -7,6 +7,7 @@ import { ArrowRight } from "lucide-react";
 import { motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { SectionTitle } from "./section-title";
 import { ShowcaseWall } from "./showcase-wall";
+import { EditorialWall, FilmstripWall, PostersWall, PromptsWall } from "./walls";
 import { Button } from "@/components/ui/button";
 import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
@@ -32,8 +33,20 @@ const PLATES = ["var(--plate-1)", "var(--plate-2)"];
 const COL = "contents lg:flex lg:flex-col lg:gap-4";
 
 export function AdWall({ page }: { page: MakePage }) {
-  if (page.wall.layout === "showcase") return <ShowcaseWall page={page} />;
-  return <BentoWall page={page} />;
+  switch (page.wall.layout) {
+    case "showcase":
+      return <ShowcaseWall page={page} />;
+    case "filmstrip":
+      return <FilmstripWall page={page} />;
+    case "prompts":
+      return <PromptsWall page={page} />;
+    case "editorial":
+      return <EditorialWall page={page} />;
+    case "posters":
+      return <PostersWall page={page} />;
+    default:
+      return <BentoWall page={page} />;
+  }
 }
 
 function BentoWall({ page }: { page: MakePage }) {

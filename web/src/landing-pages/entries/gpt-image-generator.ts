@@ -15,7 +15,7 @@ import type { MakePage } from "../pages";
 
 const gpt = imageModel("gpt-image-2");
 const nano = imageModel("nano-banana-pro");
-const ideogram = imageModel("ideogram3");
+const ideogram = imageModel("ideogram4.5");
 
 const TILES = plateTiles([
   ["Headline in frame", "Text", "#eff6ff", "#93c5fd", "#1d4ed8"],

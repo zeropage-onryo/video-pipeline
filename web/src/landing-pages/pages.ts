@@ -93,6 +93,51 @@ export type MakeOverviewBlock = {
    *  the 720p final: `media` is the right side, this is the left. */
   compare?: { media: MakeTile; label: string; mediaLabel: string };
 };
+/** The sections after the hero, by name, for `layout.order`. */
+export type MakeSectionKey =
+  | "overview"
+  | "signature"
+  | "wall"
+  | "features"
+  | "models"
+  | "howTo"
+  | "faq"
+  | "related"
+  | "final";
+
+/** A page's own arrangement (2026-10-08, Mike: "make sure every layout
+ *  varies so neither one is identical"). Everything defaults to the shape
+ *  the Ad Generator and Seedance pages already have, so an entry without a
+ *  `layout` renders byte for byte as before. */
+export type MakeLayout = {
+  /** The hero's shape (make-hero.tsx): "center" (the default: one serif
+   *  line over the buttons), "split" (the copy left, `hero.media[0]` large
+   *  right with the rest pinned to it as reference chips), "cover" (the
+   *  first media full-bleed behind the copy), "stack" (centered copy over
+   *  a row of the media) or "fan" (centered copy over the media fanned like
+   *  a hand of cards). */
+  hero?: "center" | "split" | "cover" | "stack" | "fan";
+  /** The order of the sections after the hero. Absent = DEFAULT_ORDER. A
+   *  section left out is not drawn. */
+  order?: MakeSectionKey[];
+  /** How the nine features are drawn: "grid" (cards, the default), "list"
+   *  (two hairline columns, numbered) or "split" (the title pinned left,
+   *  the nine as rows on the right). */
+  features?: "grid" | "list" | "split";
+};
+
+export const DEFAULT_ORDER: MakeSectionKey[] = [
+  "overview",
+  "signature",
+  "wall",
+  "features",
+  "models",
+  "howTo",
+  "faq",
+  "related",
+  "final",
+];
+
 export type MakeFaq = {
   q: string;
   /** Plain text: it is also the FAQPage JSON-LD answer. */
@@ -138,6 +183,11 @@ export type MakePage = {
   /** The page's own colours (theme.ts), published as CSS variables on the
    *  skin wrapper. `RED` is the light tone's original palette. */
   accent: MakeAccent;
+  /** The page's arrangement: hero shape, section order, features shape. */
+  layout?: MakeLayout;
+  /** What a "split", "cover", "stack" or "fan" hero draws: stills or
+   *  clips, drawn like wall tiles. */
+  heroMedia?: MakeTile[];
   /** The page's one signature interaction, drawn between the hero and the
    *  wall (components/signatures.tsx). Absent = none. */
   signature?: SignatureKey;
@@ -154,8 +204,15 @@ export type MakePage = {
     /** "bento" (default) is the four-column wall; "showcase" is three
      *  masonry columns of mixed-frame tiles, each opening its prompt
      *  underneath on click (showcase-wall.tsx, after ByteDance's own
-     *  "Creativity Unleashed" grid; 2026-10-07, Mike's call). */
-    layout?: "bento" | "showcase";
+     *  "Creativity Unleashed" grid; 2026-10-07, Mike's call). The rest
+     *  came 2026-10-08 so no two pages share a wall (walls.tsx):
+     *  "filmstrip" is one scrolling row at a fixed height, each tile at its
+     *  own frame, captioned underneath; "prompts" is a grid where every
+     *  still shows the prompt that drew it, with the words it had to get
+     *  right marked `[[like this]]`; "editorial" is one large plate beside
+     *  a column of numbered figures; "posters" is a staggered row of 2:3
+     *  posters on a tinted ground. */
+    layout?: "bento" | "showcase" | "filmstrip" | "prompts" | "editorial" | "posters";
   };
   /** The signature's own frames, when they are not the wall's first tiles
    *  (shot-timeline.tsx reads these first). */

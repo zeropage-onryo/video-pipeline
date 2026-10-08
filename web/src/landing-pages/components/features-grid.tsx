@@ -108,3 +108,61 @@ function Card({ item, index, show, still }: { item: MakeFeature; index: number; 
     </motion.li>
   );
 }
+
+// Two more shapes (2026-10-08, so the nine are not drawn the same way on
+// every page): a hairline list in two columns, numbered, the glyph inline;
+// and rows under a title pinned to the left (features-section.tsx).
+export function FeaturesList({ items }: { items: MakeFeature[] }) {
+  const still = useStill();
+  const { ref, show } = useRevealGroup<HTMLOListElement>(0.12);
+  return (
+    <ol ref={ref} className="mt-10 grid gap-x-12 border-t border-[var(--card-line)] md:mt-14 md:grid-cols-2">
+      {items.map((item, i) => {
+        const Icon = ICONS[item.icon];
+        return (
+          <motion.li
+            key={item.title}
+            {...reveal(i, { still, show, y: 16, duration: 0.5 })}
+            className="group grid grid-cols-[auto_1fr] gap-x-5 border-b border-[var(--card-line)] py-7"
+          >
+            <span className="flex flex-col items-center gap-3">
+              <span className="eyebrow">{String(i + 1).padStart(2, "0")}</span>
+              <Icon className="size-5 text-[var(--primary)] transition-transform duration-300 group-hover:-translate-y-0.5" strokeWidth={1.75} />
+            </span>
+            <span>
+              <h3 className="text-[19px] font-bold leading-tight tracking-[-0.015em]">{item.title}</h3>
+              <p className="mt-2 text-[14.5px] leading-relaxed text-[var(--ink-2)]">{item.body}</p>
+            </span>
+          </motion.li>
+        );
+      })}
+    </ol>
+  );
+}
+
+export function FeaturesRows({ items }: { items: MakeFeature[] }) {
+  const still = useStill();
+  const { ref, show } = useRevealGroup<HTMLUListElement>(0.1);
+  return (
+    <ul ref={ref} className="flex flex-col">
+      {items.map((item, i) => {
+        const Icon = ICONS[item.icon];
+        return (
+          <motion.li
+            key={item.title}
+            {...reveal(i, { still, show, y: 14, duration: 0.5, base: 0.03 })}
+            className="group flex gap-5 border-t border-border py-6 first:border-t-0 first:pt-0"
+          >
+            <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-[var(--card-line)] transition-colors duration-300 group-hover:border-[var(--line-hover)] group-hover:bg-[var(--primary)] group-hover:text-[var(--primary-foreground)]">
+              <Icon className="size-[18px]" strokeWidth={1.75} />
+            </span>
+            <span>
+              <h3 className="text-[18px] font-bold leading-tight tracking-[-0.015em]">{item.title}</h3>
+              <p className="mt-1.5 max-w-[60ch] text-[14.5px] leading-relaxed text-[var(--ink-2)]">{item.body}</p>
+            </span>
+          </motion.li>
+        );
+      })}
+    </ul>
+  );
+}

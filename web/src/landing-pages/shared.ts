@@ -77,11 +77,11 @@ export type ImageModel = { id: string; label: string; note: string; references: 
 export const IMAGE_MODELS: ImageModel[] = [
   { id: "nano-banana-pro", label: "Nano Banana Pro", note: "Gemini's image model; strong on references and text.", references: true },
   { id: "flux2-pro", label: "FLUX.2 Pro", note: "FLUX's newest; takes reference images.", references: true },
-  { id: "seedream4", label: "Seedream 4.0", note: "ByteDance; photographic, cheap, takes references.", references: true },
+  { id: "seedream4.5", label: "Seedream 4.5", note: "ByteDance; photographic, about 4 megapixels, generates and edits with up to 10 references.", references: true },
   { id: "gpt-image-2", label: "GPT Image 2", note: "OpenAI's image model; strong on text and instructions, takes up to 16 references.", references: true },
-  { id: "ideogram3", label: "Ideogram 3", note: "Graphic, typographic, poster-like. Text-only.", references: false },
+  { id: "ideogram4.5", label: "Ideogram 4.5", note: "Graphic, typographic, poster-like. Text-only.", references: false },
   { id: "flux-pro1.1", label: "FLUX 1.1 Pro", note: "Sharp, fast, the default. Text-only (no reference input).", references: false },
-]; // src/fal.py IMAGE_MODELS, read 2026-10-05
+]; // src/fal.py IMAGE_MODELS, read 2026-10-05; Seedream and Ideogram 4.5 2026-10-08
 
 export const imageModel = (id: string): ImageModel => {
   const m = IMAGE_MODELS.find((x) => x.id === id);
