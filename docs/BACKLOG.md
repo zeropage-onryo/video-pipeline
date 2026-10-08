@@ -905,7 +905,7 @@ A first — it is small and it is the only thing that lets the system see the
 work Mike is actually making. Then C (references are what separate #171 from
 the 48 rows before it), then B. D and E are cheap. F is not fixable here.
 
-## 15. Review-queue UI — ML-labeling / editorial-CMS pattern, not a video-tool pattern  (parked — Mike's ask, 2026-09-04)
+## 15. Review-queue UI — ML-labeling / editorial-CMS pattern, not a video-tool pattern  (the keys SHIPPED 2026-10-08; the rest parked — Mike's ask, 2026-09-04)
 
 From the UI-revamp research thread (2026-09-04, see the landing-page mood board
 artifact from that session): none of the AI production comps studied — LTX
@@ -957,6 +957,23 @@ mark gets entered).
 Not scoped yet — this is a direction, not a build plan. Revisit after #1 (UI
 readability pass) and #13-D/B are settled, since the reason-tag vocabulary and
 the `shot` column both feed the same review moment this would touch.
+
+**Shipped 2026-10-08: the keys, without a focus mode** (the front-end gap list
+vs LTX Studio and invideo, item 3; `web/src/lib/verdict-keys.ts`). On the Queue
+and on a project's scene list, `A` approves, `X` rejects, `←`/`→` move (`↑`/`↓` too
+on the scene list, which is a column). There was no need for a separate focus
+mode: the scene list already has a "current" scene (the one on the canvas), and
+the Queue got a cursor ring. Two rules that go beyond the sketch above:
+- **A keystroke never spends on its own.** On the Queue the first `A` focuses
+  the card's priced Approve and says what it costs; a second `A` (or Enter) renders.
+  On a project `A` is a pick, which spends nothing, so it is one press.
+- **A verdict lands only on a card the person can see is the one.** On the Queue
+  the first key just shows the ring. On a project, a verdict waits until the
+  canvas has actually opened the scene the arrows moved to.
+Still NOT built: the reason picked at the moment of rejecting (the board's X
+is "one tap, no reason box" by Mike's standing rule — `concept_archive`'s
+docstring — so this half needs his call first), batch actions on a filtered
+slice, the "14 of 52 graded" counter, and the diff since last seen.
 
 ## 16. Media storage at Runway-scale — CDN, signed URLs, video transcoding  (parked — Mike's ask, 2026-09-08: getting real users soon, no time to build this now)
 Context: the same session that found the deployed site showing blank images

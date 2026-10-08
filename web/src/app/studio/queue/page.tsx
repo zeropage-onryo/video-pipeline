@@ -29,7 +29,7 @@
    clips' own sound). Nothing here spends; the export is a job in the
    registry below, and the card's link is the head version's MP4. */
 /* eslint-disable @next/next/no-img-element */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
 import { Camera, ChevronDown, Clock, Copy, Film, Monitor, Music, RectangleVertical, Scissors, Upload, X } from "lucide-react";
@@ -72,6 +72,8 @@ import { CARD, Hero, RefImg, RefThumbs, TAG, TAG_DARK, TitleBlock, brandName, pa
 import { PreviewOverlay, type PreviewState } from "@/components/studio/preview-overlay";
 import { useShell } from "@/components/studio/shell";
 import { forgetJobs, refreshJobs, rememberJob, useJobs } from "@/lib/jobs";
+import { useVerdictKeys } from "@/lib/use-verdict-keys";
+import { moveCursor, nextAfter } from "@/lib/verdict-keys";
 import {
   approveText,
   chipText,
@@ -132,6 +134,18 @@ export default function QueuePage() {
   const [cutOk, setCutOk] = useState(true);
   const [cutting, setCutting] = useState<Record<number, number>>({});
   const [beds, setBeds] = useState<Record<number, { handle?: string; name: string }>>({});
+  /* the keyboard (lib/verdict-keys.ts): the card the keys act on, whether
+     its ring is showing (a key shows it, a click hides it -- the
+     :focus-visible rule), and the card whose Approve the first A armed */
+  const grid = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [keyed, setKeyed] = useState(false);
+  const [armed, setArmed] = useState<number | null>(null);
+  useEffect(() => {
+    const off = () => setKeyed(false);
+    window.addEventListener("pointerdown", off, true);
+    return () => window.removeEventListener("pointerdown", off, true);
+  }, []);
 
   // `stale` lets an effect drop a response that arrives after the brand
   // changed: the shell resolves the brand a beat after mount, and the
@@ -524,6 +538,95 @@ export default function QueuePage() {
   const cannotAfford = (plan: { credits: number | null } | null) =>
     !!plan && plan.credits !== null && charged && plan.credits > balance!.available;
   const blockedCount = (pending || []).filter(lockedFor).length;
+
+  /** A card's Approve: what its button says and whether it can be pressed.
+   *  The button and the A key read this one answer, so the key can never
+   *  approve what the button would refuse. */
+  const approveOf = (c: Concept) => {
+    const pick = pickOf(c);
+    const locked = lockedFor(c);
+    const did = didFor(c);
+    const r = pick ? renderers[pick.provider] : undefined;
+    const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
+    const quote = quoteOf(c, pick);
+    const plan = pick && spec ? planFor(spec, pick, c.timeline ? partsOf(c) : null, quote) : null;
+    // one reason left, and the only one a restart could ever have fixed
+    const noKey = r && !r.available ? `${r.label} is not configured` : "";
+    const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
+    const disabled = locked || !pick || !!noKey || badLength || cannotAfford(plan) || !!did || !!busy[c.id];
+    const label =
+      busy[c.id] === "approve" || did?.status === "RENDERING"
+        ? "Rendering…"
+        : did
+          ? did.status
+          : locked
+            ? "Add references to approve"
+            : !pick || !spec || !plan
+              ? "No renderer is configured"
+              : noKey
+                ? noKey
+                : badLength
+                  ? `${spec.id} renders ${spec.duration.min}-${spec.duration.max}s`
+                  : cannotAfford(plan)
+                    ? `Need ${plan.credits!.toLocaleString("en-US")} cr · have ${Math.max(balance!.available, 0).toLocaleString("en-US")}`
+                    : approveText(plan, exempt);
+    return { pick, locked, did, r, spec, quote, plan, disabled, label };
+  };
+
+  /* THE KEYS. A card takes a verdict while nothing is happening to it. The
+     first key only shows the ring (on the card last touched, else the
+     first): a verdict never lands on a card the person cannot see is the
+     one. X rejects at once -- the toast carries Undo. A never spends on its
+     own: the first press focuses the card's priced Approve and says so,
+     and only a second A (or Enter, the button's own key) renders. */
+  const takesVerdict = (c: Concept) => !didFor(c) && !busy[c.id];
+  const cardEl = (id: number) => grid.current?.querySelector<HTMLElement>(`article[data-id="${id}"]`) ?? null;
+  const goTo = (id: number | null) => {
+    if (id == null) return;
+    setCursor(id);
+    setArmed(null);
+    const el = cardEl(id);
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView({ block: "nearest" });
+  };
+  useVerdictKeys(grid, (verdict) => {
+    const list = pending || [];
+    if (!list.length) return false;
+    const order = list.map((c) => c.id);
+    const can = (id: number) => list.some((c) => c.id === id && takesVerdict(c));
+    const here = list.find((c) => c.id === cursor && takesVerdict(c));
+    if (!keyed || !here) {
+      setKeyed(true);
+      goTo(here ? here.id : moveCursor(order, cursor, 1, can));
+      return true;
+    }
+    if (verdict === "next" || verdict === "prev") {
+      goTo(moveCursor(order, here.id, verdict === "next" ? 1 : -1, can));
+      return true;
+    }
+    const after = nextAfter(order, here.id, can);
+    if (verdict === "reject") {
+      void decide(here, "reject");
+      goTo(after);
+      return true;
+    }
+    const a = approveOf(here);
+    if (a.disabled) {
+      toast(a.label, "err");
+      return true;
+    }
+    const button = grid.current?.querySelector<HTMLButtonElement>(`button[data-approve="${here.id}"]`);
+    if (!button) return true;
+    if (armed === here.id && document.activeElement === button) {
+      void decide(here, "approve");
+      goTo(after);
+    } else {
+      button.focus({ preventScroll: true });
+      button.scrollIntoView({ block: "nearest" });
+      setArmed(here.id);
+    }
+    return true;
+  });
   const clearFinished = async () => {
     // one request for every finished job (DELETE /api/jobs); the stream
     // tells every open tab, and a polling one is told here
@@ -550,6 +653,12 @@ export default function QueuePage() {
         <span className="m">
           {pending ? `${spendable.length} waiting${blockedCount ? ` · ${blockedCount} blocked` : ""}` : ""}
         </span>
+        {pending && pending.length ? (
+          <span className="zkeys max-md:hidden!" aria-hidden>
+            <kbd>A</kbd> approve · <kbd>X</kbd> reject · <kbd>←</kbd>
+            <kbd>→</kbd> move
+          </span>
+        ) : null}
         <span className="spacer" />
         {/* one chip per renderer: can it render, and how much of today's cap
             is left. The old single line of mono text said all of this and
@@ -591,7 +700,10 @@ export default function QueuePage() {
           Nothing waiting — pick a scene in a project, or Send to Queue from Create, and it waits here for your approval
         </p>
       ) : null}
-      <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
+      <div
+        ref={grid}
+        className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4"
+      >
         {/* before the first answer: the cards' own shape, not an empty gate */}
         {!pending && !error
           ? Array.from({ length: 3 }, (_, i) => (
@@ -607,16 +719,9 @@ export default function QueuePage() {
             ))
           : null}
         {(pending || []).map((c) => {
-          const pick = pickOf(c);
-          const locked = lockedFor(c);
-          const did = didFor(c);
-          const r = pick ? renderers[pick.provider] : undefined;
-          const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
-          const quote = quoteOf(c, pick);
-          const plan = pick && spec ? planFor(spec, pick, c.timeline ? partsOf(c) : null, quote) : null;
-          // one reason left, and the only one a restart could ever have fixed
-          const noKey = r && !r.available ? `${r.label} is not configured` : "";
-          const badLength = !!(pick && spec && plan && !plan.timed && !legalDuration(spec.duration as AxisLike, Number(pick.duration)));
+          const approve = approveOf(c);
+          const { pick, locked, did, r, spec, plan } = approve;
+          const ringed = keyed && cursor === c.id;
           // a blocked card says WHY, in the gate's own words, not how it would anchor
           // park_reason is what the NIGHT said ("no keyframe: daily ceiling
           // …"); a pick draws the still afterwards, and the card then showed
@@ -640,7 +745,12 @@ export default function QueuePage() {
             <article
               key={c.id}
               data-id={c.id}
-              className={`${CARD} ${locked ? "border-noir-red/40" : "border-noir-line2"} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
+              // focusable by the keys (never by Tab): the ring is the focus mark
+              tabIndex={-1}
+              aria-current={ringed ? "true" : undefined}
+              onFocus={() => setCursor(c.id)}
+              onPointerDown={() => setCursor(c.id)}
+              className={`${CARD} outline-none ${locked ? "border-noir-red/40" : "border-noir-line2"} ${ringed ? "shadow-[0_0_0_2px_var(--signal)]" : ""} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
             >
               <Hero
                 concept={c}
@@ -882,30 +992,26 @@ export default function QueuePage() {
                 <div className="flex min-w-0 gap-2">
                   <button
                     type="button"
-                    disabled={locked || !pick || !!noKey || badLength || cannotAfford(plan) || !!did || !!busy[c.id]}
+                    data-approve={c.id}
+                    aria-keyshortcuts="A"
+                    disabled={approve.disabled}
                     onClick={() => decide(c, "approve")}
-                    className="h-[52px] min-w-0 flex-1 truncate rounded-[8px] bg-noir-red px-2.5 font-bebas! text-[22px]! leading-none! tracking-[0.05em] text-noir-bg! hover:enabled:bg-noir-red2 focus-visible:rounded-[8px]! disabled:cursor-not-allowed disabled:bg-noir-line2 disabled:text-bone3!"
+                    onBlur={() => setArmed((a) => (a === c.id ? null : a))}
+                    onKeyDown={(e) => {
+                      // Esc puts an armed approve down again, on its card
+                      if (e.key !== "Escape" || armed !== c.id) return;
+                      e.preventDefault();
+                      goTo(c.id);
+                    }}
+                    className={`h-[52px] min-w-0 flex-1 truncate rounded-[8px] bg-noir-red px-2.5 font-bebas! text-[22px]! leading-none! tracking-[0.05em] text-noir-bg! hover:enabled:bg-noir-red2 focus-visible:rounded-[8px]! disabled:cursor-not-allowed disabled:bg-noir-line2 disabled:text-bone3! ${armed === c.id ? "outline-2! outline-offset-2! outline-bone!" : ""}`}
                   >
-                    {busy[c.id] === "approve" || did?.status === "RENDERING"
-                      ? "Rendering…"
-                      : did
-                        ? did.status
-                        : locked
-                          ? "Add references to approve"
-                          : !pick || !spec || !plan
-                            ? "No renderer is configured"
-                            : noKey
-                              ? noKey
-                              : badLength
-                                ? `${spec.id} renders ${spec.duration.min}-${spec.duration.max}s`
-                                : cannotAfford(plan)
-                                  ? `Need ${plan.credits!.toLocaleString("en-US")} cr · have ${Math.max(balance!.available, 0).toLocaleString("en-US")}`
-                                  : approveText(plan, exempt)}
+                    {approve.label}
                   </button>
                   <button
                     type="button"
                     className={`${SIDE_BTN} text-bone!`}
-                    title="Reject — archive it"
+                    title="Reject — archive it (X)"
+                    aria-keyshortcuts="X"
                     aria-label={`Reject ${c.title}`}
                     disabled={!!did || !!busy[c.id]}
                     onClick={() => decide(c, "reject")}
@@ -923,6 +1029,11 @@ export default function QueuePage() {
                     <Camera size={20} strokeWidth={2} aria-hidden />
                   </button>
                 </div>
+                {armed === c.id ? (
+                  <p className="zkeys -mt-1 mb-0" role="status">
+                    <kbd>A</kbd> again or <kbd>↵</kbd> renders it — {approve.label}. <kbd>esc</kbd> puts it down.
+                  </p>
+                ) : null}
               </div>
             </article>
           );
