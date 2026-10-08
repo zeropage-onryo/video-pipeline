@@ -32,6 +32,7 @@ import {
   ListVideo,
   LogOut,
   PanelLeft,
+  Plug,
   Scissors,
   Settings,
 } from "lucide-react";
@@ -48,6 +49,7 @@ import {
   type Me,
 } from "@/lib/studio-api";
 import { CreditPill } from "@/components/studio/credit-pill";
+import { ConnectClaude } from "@/components/studio/connect-claude";
 import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
@@ -130,6 +132,31 @@ const readPin = () => {
   }
 };
 
+/* The end of both account menus -- the rail's profile row and the header's
+   avatar -- as ONE component, so the two menus cannot drift apart. */
+function MenuTail({ close, onConnect }: { close: () => void; onConnect: () => void }) {
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onConnect();
+        }}
+      >
+        <Plug strokeWidth={1.6} /> Connect to Claude
+      </button>
+      <Link href="/studio/settings" role="menuitem" onClick={close}>
+        <Settings strokeWidth={1.6} /> Settings
+      </Link>
+      <button type="button" role="menuitem" onClick={signOut}>
+        <LogOut strokeWidth={1.6} /> Sign out
+      </button>
+    </>
+  );
+}
+
 export function StudioShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/studio";
   const view = VIEW_BY_PATH.find(([p]) => pathname.startsWith(p))?.[1] ?? "studio";
@@ -147,6 +174,8 @@ export function StudioShell({ children }: { children: ReactNode }) {
   // the header's avatar menu (accounts, sign out) -- its own flag, so the
   // rail's account row and the avatar never open each other's
   const [hmenu, setHmenu] = useState(false);
+  // the Connect to Claude panel, opened from either menu
+  const [connect, setConnect] = useState(false);
   const [pending, setPending] = useState(0);
   // keyed by the account it was read for, so a switch never shows the
   // previous account's number while the new one is being asked
@@ -382,12 +411,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                       {a.label}
                     </button>
                   ))}
-                  <Link href="/studio/settings" role="menuitem" onClick={() => setMenu(false)}>
-                    <Settings strokeWidth={1.6} /> Settings
-                  </Link>
-                  <button type="button" onClick={signOut}>
-                    <LogOut strokeWidth={1.6} /> Sign out
-                  </button>
+                  <MenuTail close={() => setMenu(false)} onConnect={() => setConnect(true)} />
                 </span>
               ) : null}
             </button>
@@ -455,12 +479,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                         {a.label}
                       </button>
                     ))}
-                    <Link href="/studio/settings" role="menuitem" onClick={() => setHmenu(false)}>
-                      <Settings strokeWidth={1.6} /> Settings
-                    </Link>
-                    <button type="button" onClick={signOut}>
-                      <LogOut strokeWidth={1.6} /> Sign out
-                    </button>
+                    <MenuTail close={() => setHmenu(false)} onConnect={() => setConnect(true)} />
                   </span>
                 ) : null}
               </span>
@@ -468,6 +487,8 @@ export function StudioShell({ children }: { children: ReactNode }) {
           </header>
           {stage ? <div className="stage">{children}</div> : children}
         </div>
+
+        {connect ? <ConnectClaude me={me} onClose={() => setConnect(false)} toast={toast} /> : null}
 
         {toastState ? (
           <div className={`ztoast${toastState.kind === "err" ? " err" : ""}`} role="status">

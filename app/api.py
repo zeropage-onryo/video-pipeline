@@ -63,7 +63,7 @@ from src import (
 from src.approvals import ApproveRefused
 from src.locations import IMAGE_EXTENSIONS
 
-from . import auth, jobs, model_connections, workflow_runner
+from . import auth, jobs, mcp_auth, model_connections, workflow_runner
 from . import creative_projects as creative_projects_routes
 
 router = APIRouter(prefix="/api")
@@ -398,7 +398,26 @@ def me(request: Request, account_id: int = Depends(auth.current_account_id)):
                  "avatar_url": user.get("avatar_url")},
         "account": _account_card(active) if active else None,
         "accounts": [_account_card(a) for a in member_of],
+        # the account menus' "Connect to Claude" panel (2026-10-08): the
+        # address to paste into claude.ai, from the one place it is
+        # defined, and the directory listing once there is one. Both are
+        # null when there is nothing to connect to; no database read.
+        "mcp_url": mcp_auth.connector_url(),
+        "claude_directory_url": mcp_auth.directory_url(),
     }
+
+
+@router.get("/mcp/connection")
+def mcp_connection(request: Request, account_id: int = Depends(auth.current_account_id)):
+    """Whether THIS person has connected Claude to THIS account, for the
+    account menus' Connect to Claude panel (src/mcp_connections.py says
+    what the studio can and cannot see). The tenant, not the brand: an
+    MCP call resolves to the person's oldest membership, so that is the
+    account a connection was recorded under. Never another account's,
+    never another member's. Nothing here calls Supabase or claude.ai."""
+    user = auth.current_user(request) or {}
+    from src import mcp_connections
+    return mcp_connections.status(account_id, str(user.get("id") or ""))
 
 
 # --- settings: the person's own row and their password --------------------

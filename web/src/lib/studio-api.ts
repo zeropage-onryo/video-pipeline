@@ -26,8 +26,25 @@ export type Me = {
   };
   account: Account | null;
   accounts: Account[];
+  /** the address to paste into claude.ai (app/mcp_auth.connector_url);
+   *  null when this server takes no person's connection, absent on an
+   *  older API */
+  mcp_url?: string | null;
+  /** the connector's Claude directory listing, once it has one */
+  claude_directory_url?: string | null;
 };
 export const getMe = () => apiFetch<Me>("/me");
+
+/* whether THIS person has connected Claude to this account
+   (src/mcp_connections.py): recorded when they press Allow on the consent
+   page, stamped when Claude uses it. claude.ai is never asked. */
+export type McpConnection = {
+  connected: boolean;
+  approved_at: string | null;
+  last_used_at: string | null;
+  client_name: string | null;
+};
+export const getMcpConnection = () => apiFetch<McpConnection>("/mcp/connection");
 
 /* ── settings (2026-10-03): the person's own row and their password ──
    PATCH /api/me renames; the password and email writes each re-prove the
