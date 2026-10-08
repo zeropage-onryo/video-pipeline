@@ -52,20 +52,23 @@ test('the button carries shot count and price; a timed scene is priced by the se
   const pick = withModel(renderers, 'fal', 'kling');
   const parts = [{ seconds: 3 }, { seconds: 4, media_url: 'x.mp4' }, { seconds: 7 }];
   // the server's quote for this pick: the windows fitted, the done shot skipped
-  const quote = { timed: true, durations: [5, 10], estimate_usd: 1.05 };
+  const quote = { timed: true, durations: [5, 10], estimate_usd: 1.05, credits: 252 };
   const plan = planFor(spec, pick, parts, quote);
   assert.deepEqual(plan.lengths, [5, 10]);
-  assert.equal(approveText(plan), 'Approve · 2 shots · ~$1.05');
+  assert.equal(approveText(plan), 'Approve · 2 shots · 252 cr');
   assert.equal(chipText(spec, pick, plan), 'KLING · 2 SHOTS · 1080P');
   // no quote yet: the shots are named, the number is not made up here
   const waiting = planFor(spec, pick, parts);
   assert.deepEqual(waiting.lengths, []);
   assert.equal(approveText(waiting), 'Approve · 2 shots · pricing…');
   assert.equal(approveText(planFor(spec, pick, parts, { error: 'no', timed: true, durations: [], estimate_usd: 0 })), 'Approve · 2 shots · refused');
+  // a scene that renders whole with no quote yet: no dollar label, ever
+  // (2026-10-08) -- the client never prices a render itself
   const whole = planFor(spec, pick, null);
-  assert.equal(approveText(whole), 'Approve · 1 shot · ~$0.35');
+  assert.equal(approveText(whole), 'Approve · 1 shot · pricing…');
   assert.equal(chipText(spec, pick, whole), 'KLING · 5S · 1080P');
-  assert.equal(approveText(planFor({ ...spec, price: undefined }, pick, null)), 'Approve · 1 shot · unpriced');
+  assert.equal(approveText(planFor({ ...spec, price: undefined }, pick, null)), 'Approve · 1 shot · pricing…');
+  assert.equal('usd' in whole, false);
 });
 
 test('a charged account sees credits from the server, never a client-side conversion', () => {

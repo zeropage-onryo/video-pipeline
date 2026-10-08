@@ -24,6 +24,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ImageOff, Info, LayoutGrid, Plus, Trash2 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import {
+  announceBalanceChange,
   deleteAsset,
   drawSheet,
   getAssets,
@@ -32,6 +33,7 @@ import {
   type Asset,
   type ElementKind,
 } from "@/lib/studio-api";
+import { creditsText } from "@/lib/render-choice";
 import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
@@ -46,7 +48,9 @@ const routeOf = (a: Asset): [RouteKind, number] | null => {
 };
 
 export default function ElementsPage() {
-  const { brand, toast } = useShell();
+  const { brand, toast, balance } = useShell();
+  // a sheet is one still, priced like any other before the click that draws it
+  const sheetPrice = balance?.prices ? creditsText(balance.prices.still, !!balance.exempt) : null;
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [grid, setGrid] = useState(false);
   const [howto, setHowto] = useState(false);
@@ -75,6 +79,8 @@ export default function ElementsPage() {
           });
           if (job.status === "done") toast(`${name} · sheet drawn`);
           else toast(`${name} · sheet not drawn: ${job.error || job.status}`, "err");
+          // the still's hold settled (or was released) as the job ended
+          announceBalanceChange();
           load();
         })
         .catch(() => setTimeout(tick, 4000));
@@ -254,7 +260,7 @@ export default function ElementsPage() {
                           type="button"
                           className="zdx bg-black/70"
                           aria-label={`${a.sheet ? "Redraw" : "Draw"} the sheet for ${a.name}`}
-                          title={a.sheet ? "Redraw sheet · a few cents" : "Draw sheet · a few cents"}
+                          title={`${a.sheet ? "Redraw" : "Draw"} sheet${sheetPrice ? ` · ${sheetPrice}` : ""}`}
                           onClick={() => draw(a)}
                         >
                           <LayoutGrid size={13} strokeWidth={1.7} />

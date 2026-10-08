@@ -3151,13 +3151,21 @@ def _render_state(account_id: Optional[int] = None) -> dict:
     pick = providers.check_render_choice()
     spec = providers.model_options(pick["provider"], pick["model"])
     axis = spec["duration"]
+    # what the studio shows: credits, never the provider's dollars
+    # (2026-10-08) -- the same conversion pricing.display makes per render
+    try:
+        credits = pricing.credits_for(pricing.usd_micros(pick["estimate_usd"]))
+    except pricing.PricingRefused:
+        credits = None
     return {"label": providers.RENDER_LABELS.get(pick["provider"], pick["provider"]),
             "provider": pick["provider"],
             "available": fal.has_key(account_id),
             # TRUE whenever the key is: the click is the approval (2026-09-09)
             "spend_ok": fal.has_key(account_id),
             "model": pick["model"],
+            # the provider's cost, for the operator's pages; the studio reads `credits`
             "estimate_usd": pick["estimate_usd"],
+            "credits": credits,
             "duration": pick["duration"],
             "resolution": pick["frame"],
             # every model with what a second of it costs at its default
