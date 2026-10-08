@@ -328,10 +328,18 @@ export const SEEDANCE: MakePage = {
         },
       ],
     },
-    related: ["ai-product-ad-generator"],
+    // The four sibling video pages (the other video entries already link
+    // here), then the Ad Generator this page was first written beside.
+    related: [
+      "kling-video-generator",
+      "veo-video-generator",
+      "ltx-video-generator",
+      "wan-video-generator",
+      "ai-product-ad-generator",
+    ],
     finalCta: {
       eyebrow: "Your first scene",
-      title: "Render your first scene on Seedance.",
-      body: "Write it, see every keyframe, see the price, approve.",
+      title: "Render your first scene on Seedance 2.5.",
+      body: "Write it, draw the keyframes, check the price, approve. The sound comes with the picture.",
     },
   };

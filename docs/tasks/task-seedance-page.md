@@ -78,10 +78,10 @@ keyframe on all three.
 - [x] Q1 names 2.5 (30 s a shot, sound in the same pass); references answer says Create, not "the composer"
 - [x] Added "Does Seedance 2.5 make sound?" (diegetic sound, same pass, in the price)
 
-## 8. Related and close
+## 8. Related and close, done 2026-10-08
 
-- [ ] `related` is still only `ai-product-ad-generator` (written before the other model pages existed): add the video pages -- kling, veo, wan, ltx
-- [ ] Final CTA: "Your first scene" / "Render your first scene on Seedance." / "Write it, see every keyframe, see the price, approve."
+- [x] `related`: the four sibling video pages (Kling, Veo, LTX, Wan; each already links back here), then the Ad Generator; all five resolve
+- [x] Final CTA: "Your first scene" / "Render your first scene on Seedance 2.5." / "Write it, draw the keyframes, check the price, approve. The sound comes with the picture."
 
 ## 9. Check
 
