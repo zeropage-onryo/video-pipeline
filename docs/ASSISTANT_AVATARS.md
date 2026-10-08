@@ -122,8 +122,10 @@ step with the preview.
    route stores it on the job as `partial`, the pill polls every 500ms instead of 1.5s once
    words are arriving, and `Typed` catches up a 24th of the gap each frame
    (`lib/assistant-text.ts typeAhead`), with a red caret. Screen readers hear the landed turn
-   once, not the typing. The pill's Guide turns stream today; the Studio composer's do not yet,
-   though the job now carries `partial` for it too.
+   once, not the typing. The Studio composer streams the same way (same day, a follow-up): its
+   Guide turn reads `partial` off the same job and types it on the left of the stream, where
+   the answer will land. `components/studio/typed-text.tsx` is the one typing component; the
+   pill and the composer pass their own caret class.
 
 Also fixed on the way: the setup card ("Meet your assistant") was 850px tall inside a card
 capped at `100vh - 110px`. On a laptop screen its "Say hi" button fell off the bottom. It
@@ -134,7 +136,5 @@ scrolls inside the card now.
 1. **The credit card everywhere.** It only shows on the Queue. Any proposal that spends should
    show "N cr · you have M" in the card (see `docs/tasks/task-metering-and-credits.md`, which
    waits on Mike's call between a daily allowance and per-turn credits).
-2. **Streaming in the Studio composer.** Its Guide turns post the same route, so it is a client
-   change: read `partial` in `pollJob`'s tick and draw it in the brain's bubble.
-3. **Rive**, if the glyphs ever need layered expressions. One state machine per glyph, under
+2. **Rive**, if the glyphs ever need layered expressions. One state machine per glyph, under
    100KB. CSS is enough for now.
