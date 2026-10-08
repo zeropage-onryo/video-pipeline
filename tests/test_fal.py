@@ -740,6 +740,15 @@ def test_references_go_to_the_edit_endpoint_only_where_one_exists():
     assert fal.image_request("ideogram4.5", "x", aspect="16:9")[1]["image_size"] == "landscape_16_9"
     assert fal.image_request("ideogram4.5", "x", aspect="7:5")[1]["image_size"] == "square_hd"
     assert fal.image_request("ideogram4.5", "x")[1]["quality"] == "medium"   # not high, ~4x the price
+    # GPT Image 2.5 (2026-10-08): exact {width, height}, quality sent at high,
+    # up to 16 references to the variant's own edit endpoint
+    refs16 = [f"https://r2.example/{i}.jpg" for i in range(20)]
+    for v in ("flare", "sunburst"):
+        endpoint, body, used = fal.image_request(f"gpt-image-2.5-{v}", "a can", aspect="4:5", reference_urls=refs16)
+        assert endpoint == f"openai/gpt-image-2.5/{v}/edit" and used == 16
+        assert body["image_size"] == {"width": 912, "height": 1136} and body["quality"] == "high"
+        assert fal.image_request(f"gpt-image-2.5-{v}", "x")[0] == f"openai/gpt-image-2.5/{v}/text-to-image"
+        assert fal.image_usd(f"gpt-image-2.5-{v}", "21:9") == 0.06
     # Seedream 4.5 (2026-10-08) refuses under ~3.7MP: the frame goes out doubled
     assert fal.image_request("seedream4.5", "x", aspect="4:5")[1]["image_size"] == {"width": 1824, "height": 2272}
     for a in fal.IMAGE_SIZES:

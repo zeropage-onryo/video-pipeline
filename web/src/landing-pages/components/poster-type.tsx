@@ -70,7 +70,7 @@ export function PosterType({ page }: { page: MakePage }) {
                   className="absolute inset-0"
                 >
                   {poster.src ? (
-                    <Image src={poster.src} alt={`${poster.title}: ${poster.meta ?? ""}`} fill sizes="360px" quality={80} className="object-cover" />
+                    <Image src={poster.src} alt={`${poster.title}: ${poster.meta ?? ""}`} fill sizes="360px" quality={75} className="object-cover" />
                   ) : (
                     <div aria-hidden className="absolute inset-0" style={{ background: poster.plate ?? "var(--plate-1)" }} />
                   )}

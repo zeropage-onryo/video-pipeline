@@ -20,6 +20,8 @@ export type MakeAccent = {
   cardLight: string;
   /** The two gradient plates a wall tile draws when it has no still. */
   plates: [string, string];
+  /** The dark panel a "theater" hero sits on (default near-black). */
+  panel?: string;
 };
 
 export const RED: MakeAccent = {
@@ -150,6 +152,22 @@ export const FUCHSIA: MakeAccent = {
   ],
 };
 
+// The GPT Image 2.5 page's accent (2026-10-08): the lime and deep green of
+// the Brightly showcase it was made with. #4d7c0f on white is 5.0:1; the
+// theater panel is the showcase's own green.
+export const LIME: MakeAccent = {
+  primary: "#4d7c0f",
+  primaryForeground: "#ffffff",
+  cardLine: "#d3e8a8",
+  lineHover: "#4d7c0f",
+  cardLight: "rgba(77,124,15,0.08)",
+  plates: [
+    "linear-gradient(135deg, #f7fee7 0%, #bef264 55%, #4d7c0f 100%)",
+    "linear-gradient(135deg, #ecfdf5 0%, #a7f3d0 50%, #134e4a 100%)",
+  ],
+  panel: "#0c2925",
+};
+
 /** The inline variables the skin wrapper carries for `accent`. */
 export function accentVars(accent: MakeAccent): CSSProperties {
   return {
@@ -161,5 +179,6 @@ export function accentVars(accent: MakeAccent): CSSProperties {
     "--card-light": accent.cardLight,
     "--plate-1": accent.plates[0],
     "--plate-2": accent.plates[1],
+    ...(accent.panel ? { "--panel": accent.panel } : {}),
   } as CSSProperties;
 }

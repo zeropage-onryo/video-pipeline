@@ -72,7 +72,7 @@ function Buttons({ page, align = "center", onDark = false }: { page: MakePage; a
 function Media({ tile, sizes, priority = false, className = "" }: { tile: MakeTile; sizes: string; priority?: boolean; className?: string }) {
   if (tile.video) return <ClipPlayer tile={tile} className={className} />;
   if (!tile.src) return <div aria-hidden className="absolute inset-0" style={{ background: tile.plate ?? "var(--plate-1)" }} />;
-  return <Image src={tile.src} alt={tile.title} fill sizes={sizes} priority={priority} quality={78} className={`object-cover ${className}`} />;
+  return <Image src={tile.src} alt={tile.title} fill sizes={sizes} priority={priority} quality={75} className={`object-cover ${className}`} />;
 }
 
 function CenterHero({ page }: { page: MakePage }) {
@@ -365,11 +365,20 @@ function PhoneHero({ page }: { page: MakePage }) {
 
 // A dark panel inset under the header, the clip large under the copy and
 // its sound toggle the first thing to press -- Veo is bought for its sound.
+// A portrait still (the GPT Image 2.5 page's 4:5 ad) is drawn at its own
+// aspect, centred in the panel, rather than cropped into the 16:9 screen a
+// clip plays on.
+const isPortrait = (aspect?: string) => {
+  const [w, h] = (aspect ?? "").split(":").map(Number);
+  return h > w;
+};
+
 function TheaterHero({ page }: { page: MakePage }) {
   const main = page.heroMedia?.[0];
+  const portrait = !!main && !main.video && isPortrait(main.aspect);
   return (
     <section className="relative pt-[60px]">
-      <div className="mx-2 overflow-hidden rounded-[28px] bg-[#0a0b10] text-white sm:mx-4 md:rounded-[40px]">
+      <div className="mx-2 overflow-hidden rounded-[28px] bg-[var(--panel,#0a0b10)] text-white sm:mx-4 md:rounded-[40px]">
         <div className="mx-auto flex max-w-[1100px] flex-col items-center px-4 pt-14 text-center md:px-6 md:pt-20">
           <h1 className={`serif serif-bold max-w-[13ch] text-[clamp(2.9rem,9vw,6.75rem)] text-white ${REVEAL} motion-safe:duration-700`}>
             {page.h1}
@@ -380,12 +389,15 @@ function TheaterHero({ page }: { page: MakePage }) {
           <Buttons page={page} onDark />
         </div>
         {main && (
-          <figure className={`mx-auto mt-12 max-w-[1040px] px-4 pb-10 md:mt-16 md:px-6 md:pb-16 ${REVEAL} motion-safe:duration-1000 motion-safe:delay-200`}>
-            <div className="relative aspect-video overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
+          <figure className={`mx-auto mt-12 ${portrait ? "max-w-[480px]" : "max-w-[1040px]"} px-4 pb-10 md:mt-16 md:px-6 md:pb-16 ${REVEAL} motion-safe:duration-1000 motion-safe:delay-200`}>
+            <div
+              className={`relative overflow-hidden rounded-2xl bg-black ring-1 ring-white/10 ${portrait ? "" : "aspect-video"}`}
+              style={portrait ? { aspectRatio: main.aspect!.replace(":", " / ") } : undefined}
+            >
               {main.video ? (
                 <ClipPlayer tile={main} label={{ on: "Sound on", off: "Turn the sound on" }} />
               ) : (
-                <Media tile={main} sizes="(min-width: 1040px) 1040px, 100vw" priority />
+                <Media tile={main} sizes={portrait ? "(min-width: 480px) 480px, 100vw" : "(min-width: 1040px) 1040px, 100vw"} priority />
               )}
             </div>
             {main.title && (
