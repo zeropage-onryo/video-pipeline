@@ -49,14 +49,16 @@
   height: 56px;
   flex: none;
   border-radius: 999px;
-  background: #151515;
-  border: 2px solid var(--signal);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
   line-height: 1;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.6);
+}
+/* the face itself (assistant-avatar.tsx) fills whatever box the pill gives it;
+   its ring is the red border the old emoji circle had */
+.zpa-avatar > .zav {
+  width: 100%;
+  height: 100%;
 }
 .zpa-bubble {
   max-width: 260px;
@@ -148,7 +150,6 @@
   top: -30px;
   width: 60px;
   height: 60px;
-  font-size: 30px;
 }
 .zpa-head {
   padding: 38px 20px 14px;
@@ -641,6 +642,9 @@
   animation: zpa-ring 1.6s ease-in-out infinite;
 }
 .zps .zpa-filled {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--mono);
   font-size: 9.5px;
   letter-spacing: 0.14em;
@@ -770,7 +774,6 @@
   .zpa-avatar {
     width: 52px;
     height: 52px;
-    font-size: 26px;
   }
   .zpa-bubble {
     max-width: calc(100vw - 120px);
@@ -817,4 +820,86 @@
   .zps[data-canvas="1"] .zpa.open .zpa-card {
     max-height: calc(100vh - 160px - 150px);
   }
+}
+
+/* ── the face in the pill's text: what state it is in, for anyone who
+   cannot read the ring (a dot + a word, never colour alone) ── */
+.zpa-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+}
+.zpa-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.zpa-state[data-state="needs"] { color: #f5a524; }
+.zpa-state[data-state="working"],
+.zpa-state[data-state="thinking"] { color: #ff4d6a; }
+.zpa-state[data-state="success"] { color: #3ddc84; }
+.zpa-state[data-state="error"] { color: #ff4d6a; }
+.zpa-state[data-state="sleeping"] { color: var(--dim); }
+/* needs you: the pill's own border goes amber and steady */
+.zpa[data-face="needs"] .zpa-pill {
+  border-color: #f5a524;
+  box-shadow:
+    0 12px 40px rgb(0 0 0 / 0.7),
+    0 0 34px rgb(245 165 36 / 0.22);
+}
+
+/* ── "Meet your assistant": the look picker ── */
+.zpa-preview {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid #1f1f1f;
+  background: radial-gradient(120% 140% at 0% 0%, #1a0a0e 0%, #0c0c0d 60%);
+}
+.zpa-preview .zpa-mono {
+  display: block;
+}
+.zpa-preview b {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--display);
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+.zpa-glyphs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.zpa-glyph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px 8px;
+  border-radius: 16px;
+  border: 1px solid #222;
+  background: #101011;
+  color: var(--text);
+  font-size: 11px;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zpa-glyph:hover {
+  border-color: #3a3a3a;
+}
+.zpa-glyph[aria-pressed="true"] {
+  border-color: var(--signal);
+  background: #1c060b;
+}
+.zpa-glyph:focus-visible,
+.zpa-av:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
 }

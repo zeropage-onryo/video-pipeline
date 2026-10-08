@@ -73,6 +73,17 @@ import {
 } from "@/lib/assistant";
 import "@/components/studio/assistant.css";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
+import {
+  AVATAR_STATES,
+  AssistantAvatar,
+  DEFAULT_AVATAR,
+  EMOJI_SKINS,
+  GLYPHS,
+  STATE_LABEL,
+  glyphAvatar,
+  glyphOf,
+  type AvatarState,
+} from "@/components/studio/assistant-avatar";
 
 /* a sheet opens with the frames the check kept already chosen */
 const chosenOf = (t: Turn): Record<string, boolean> => {
@@ -83,6 +94,10 @@ const chosenOf = (t: Turn): Record<string, boolean> => {
 };
 
 const GREETED_KEY = "zpf.assistant.greeted";
+/* how long the face says "done" after a turn lands, and how long nothing
+   has to happen before it rests (assistant-avatar.tsx's states) */
+const SUCCESS_MS = 1400;
+const SLEEP_MS = 10 * 60 * 1000;
 
 export function AssistantPill() {
   const pathname = usePathname() || "/studio";
@@ -110,6 +125,9 @@ export function AssistantPill() {
   const [detail, setDetail] = useState("");
   const [bubble, setBubble] = useState("");
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [landed, setLanded] = useState(false);
+  const [resting, setResting] = useState(false);
+  const wasBusy = useRef(false);
   const body = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -173,6 +191,25 @@ export function AssistantPill() {
   useEffect(() => {
     body.current?.scrollTo({ top: body.current.scrollHeight, behavior: "smooth" });
   }, [turns, busy, open]);
+
+  // a turn that comes back without failing earns one "done" on the face
+  useEffect(() => {
+    if (wasBusy.current && !busy && !turns.some((t) => t.failed)) {
+      setLanded(true);
+      const t = setTimeout(() => setLanded(false), SUCCESS_MS);
+      wasBusy.current = busy;
+      return () => clearTimeout(t);
+    }
+    wasBusy.current = busy;
+  }, [busy, turns]);
+  // nobody has touched it in a while: it rests, and wakes on the next touch
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- any activity wakes it
+    setResting(false);
+    if (busy || open) return;
+    const t = setTimeout(() => setResting(true), SLEEP_MS);
+    return () => clearTimeout(t);
+  }, [busy, open, turns, text, bubble]);
 
   const stage: Stage = laterStage(convStage, pageStage(pathname));
   const step = STAGES.indexOf(stage) + 1;
@@ -366,15 +403,39 @@ export function AssistantPill() {
       : pageAhead
         ? `On ${STAGE_LABEL[stage]} — ask me what's next`
         : nextMove || `On ${STAGE_LABEL[stage]}`;
-  const avatar = persona?.avatar ?? "✦";
+  const avatar = persona?.avatar ?? DEFAULT_AVATAR;
   const name = persona?.name ?? "Assistant";
+  // what the face shows. "needs" is the newest answer waiting on the
+  // person's click: a confirm card not yet answered, or a contact sheet
+  // with frames picked and not yet kept.
+  const latest = lastIndex >= 0 ? turns[lastIndex] : null;
+  const waiting =
+    !!latest &&
+    !busy &&
+    ((!!latest.reply?.proposal && isProjectTool(latest.reply.proposal.tool) && latest.decided == null) ||
+      (!!latest.reply?.sheet?.sheet?.length && !latest.kept && Object.values(chosenOf(latest)).some(Boolean)));
+  const face: AvatarState = busy
+    ? detail && !/^thinking/i.test(detail)
+      ? "working"
+      : "thinking"
+    : turns.some((t) => t.failed)
+      ? "error"
+      : landed
+        ? "success"
+        : waiting
+          ? "needs"
+          : open && text.trim()
+            ? "listening"
+            : resting
+              ? "sleeping"
+              : "idle";
 
   return (
-    <div className={`zpa${open ? " open" : ""}`} data-page={where.toLowerCase()}>
+    <div className={`zpa${open ? " open" : ""}`} data-page={where.toLowerCase()} data-face={face}>
       {open ? (
         <section className="zpa-card" aria-label={name} role="dialog">
-          <span className="zpa-avatar big" aria-hidden>
-            {avatar}
+          <span className="zpa-avatar big">
+            <AssistantAvatar avatar={avatar} state={setup || !persona ? "listening" : face} size="lg" title={`${name}: ${STATE_LABEL[face]}`} />
           </span>
           {setup || !persona ? (
             <Setup
@@ -511,8 +572,8 @@ export function AssistantPill() {
       ) : (
         <>
           <span className="zpa-perch">
-            <span className="zpa-avatar" aria-hidden>
-              {avatar}
+            <span className="zpa-avatar">
+              <AssistantAvatar avatar={avatar} state={face} size="md" title={`${name}: ${STATE_LABEL[face]}`} />
             </span>
             {bubble ? (
               <span className="zpa-bubble" role="status">
@@ -533,6 +594,11 @@ export function AssistantPill() {
             <span className="zpa-lines">
               <span className="zpa-mono">
                 {name} · {project ? `Step ${step} of 7` : `on ${where}`}
+                {face !== "idle" ? (
+                  <span className="zpa-state" data-state={face}>
+                    {STATE_LABEL[face]}
+                  </span>
+                ) : null}
               </span>
               <span className="zpa-nudge">{pillLine}</span>
             </span>
@@ -755,8 +821,19 @@ function Setup({
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? "Nova");
-  const [avatar, setAvatar] = useState(initial?.avatar ?? AVATARS[0]);
-  const [other, setOther] = useState(initial && !AVATARS.includes(initial.avatar) ? initial.avatar : "");
+  const [avatar, setAvatar] = useState(initial?.avatar ?? DEFAULT_AVATAR);
+  const [other, setOther] = useState(
+    initial && !glyphOf(initial.avatar) && !EMOJI_SKINS.includes(initial.avatar) && !AVATARS.includes(initial.avatar)
+      ? initial.avatar
+      : "",
+  );
+  // the preview walks through every state so the look is seen moving
+  const [demo, setDemo] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setDemo((d) => (d + 1) % AVATAR_STATES.length), 1700);
+    return () => clearInterval(t);
+  }, []);
+  const demoState = AVATAR_STATES[demo];
   const [tone, setTone] = useState<Tone>(initial?.tone ?? "direct");
   const clean = cleanName(name);
   return (
@@ -764,7 +841,7 @@ function Setup({
       className="zpa-setup"
       onSubmit={(e) => {
         e.preventDefault();
-        if (clean) onDone({ name: clean, avatar: avatar || AVATARS[0], tone });
+        if (clean) onDone({ name: clean, avatar: avatar || DEFAULT_AVATAR, tone });
       }}
     >
       <div className="zpa-title">
@@ -778,10 +855,35 @@ function Setup({
         <span className="zpa-mono">Name</span>
         <input value={name} maxLength={24} onChange={(e) => setName(e.target.value)} />
       </label>
+      <div className="zpa-preview" aria-live="off">
+        <AssistantAvatar avatar={avatar} state={demoState} size="xl" />
+        <div>
+          <span className="zpa-mono">{STATE_LABEL[demoState]}</span>
+          <b>{clean || "Your assistant"}</b>
+        </div>
+      </div>
       <div className="zpa-field">
         <span className="zpa-mono">Look</span>
+        <div className="zpa-glyphs">
+          {GLYPHS.map((g) => {
+            const id = glyphAvatar(g.id);
+            return (
+              <button
+                type="button"
+                key={g.id}
+                className="zpa-glyph"
+                aria-pressed={avatar === id}
+                title={g.note}
+                onClick={() => setAvatar(id)}
+              >
+                <AssistantAvatar avatar={id} state={avatar === id ? demoState : "idle"} size="sm" />
+                {g.label}
+              </button>
+            );
+          })}
+        </div>
         <div className="zpa-avs">
-          {AVATARS.map((a) => (
+          {EMOJI_SKINS.map((a) => (
             <button type="button" key={a} className="zpa-av" aria-pressed={avatar === a} onClick={() => setAvatar(a)}>
               {a}
             </button>
