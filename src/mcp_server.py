@@ -48,7 +48,15 @@ import contextvars
 import os
 import sys
 from pathlib import Path
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Literal, Optional
+
+# typing_extensions', NOT typing's: pydantic (which the SDK builds every
+# tool's schema with) refuses `typing.TypedDict` on Python < 3.12, and the
+# Fly image is 3.11 -- so `save_chat`'s argument type took the whole server
+# down there (2026-10-08: /mcp unmounted after #165) while CI (3.12) and
+# this Mac (3.13) passed. tests/test_mcp_server.py builds every surface
+# under 3.11's rule.
+from typing_extensions import TypedDict
 
 from . import accounts, autonomy, db, imagesearch, preprod, refbin, scout
 
