@@ -189,3 +189,21 @@ def test_a_reversed_and_a_fast_clip_really_render(tmp_path, monkeypatch):
     # monotone across the reversed clip's chunk joins
     lumas = [_luma(out, t / 10) for t in range(1, 29, 3)]
     assert lumas == sorted(lumas, reverse=True), lumas
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg is not installed")
+def test_a_reversed_source_keeps_its_length_across_chunk_joins(tmp_path, monkeypatch):
+    # ffmpeg 7.1's concat demuxer read each piece a frame short, so a joined
+    # file lost one frame of time per join unless the listing states it
+    src = tmp_path / "ramp.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "nullsrc=s=64x64:r=30,geq=lum='16+T*60':cb=128:cr=128", "-t", "3",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    monkeypatch.setattr(render, "REVERSE_CHUNK_SECONDS", 0.5)    # six pieces, five joins
+    rev = render.reverse_source("ffmpeg", src, 0, 90, 30, tmp_path, "rev")
+    got = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                          "-show_entries", "stream=nb_read_frames,duration", "-of", "csv=p=0", str(rev)],
+                         capture_output=True, text=True, check=True).stdout.strip().split(",")
+    seconds, frames = float(got[0]), int(got[1])
+    assert frames == 90
+    assert abs(seconds - 3.0) < 0.5 / 30, seconds

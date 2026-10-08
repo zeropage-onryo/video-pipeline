@@ -537,7 +537,7 @@ def reverse_source(exe: str, src: Path, start: int, end: int, fps: int, work: Pa
     last-first) so no more than a second of decoded picture is ever held.
     The `reverse` filter on a whole 10 s 1080p span is ~1.8 GB of frames."""
     chunk = max(1, round(REVERSE_CHUNK_SECONDS * fps))
-    pieces: list[Path] = []
+    pieces: list[tuple[Path, int]] = []
     a = start
     while a < end:
         b = min(end, a + chunk)
@@ -551,10 +551,16 @@ def reverse_source(exe: str, src: Path, start: int, end: int, fps: int, work: Pa
         if proc.returncode != 0 or not out.is_file():
             tail = (proc.stderr or "").strip().splitlines()[-2:]
             raise RenderError("reversing a clip failed: " + (" | ".join(tail) or f"exit {proc.returncode}"))
-        pieces.append(out)
+        pieces.append((out, b - a))
         a = b
+    # each piece's length is stated, not read off the file: ffmpeg 7.1's
+    # concat demuxer measured every piece a frame short, so the joined file
+    # kept all its frames on timestamps that overlapped by one per join and
+    # the render's fps step dropped them (2026-10-07, a 10 s clip at the
+    # default 1 s chunks came out 9.7 s). 6.1 and 8.1 measured them right.
     listing = work / f"{name}.txt"
-    listing.write_text("".join(f"file '{p.name}'\n" for p in reversed(pieces)), encoding="utf-8")
+    listing.write_text("".join(f"file '{p.name}'\nduration {_s(n, fps)}\n" for p, n in reversed(pieces)),
+                       encoding="utf-8")
     final = work / f"{name}.mp4"
     proc = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
                            "-safe", "0", "-i", str(listing), "-c", "copy", str(final)],
