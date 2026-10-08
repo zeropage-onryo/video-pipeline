@@ -55,11 +55,13 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
-          # 3.3 both require 3.10+, so the install step had no version to
-          # resolve. The laptop venv is 3.13; 3.12 is the newest with wheels
-          # for everything torch/whisper drag in.
-          python-version: "3.12"
+          # 3.11 -- the Python the Fly image runs (Dockerfile: python:3.11-slim),
+          # so CI tests what production runs. It was 3.12 until 2026-10-08,
+          # when a `typing.TypedDict` in an MCP tool signature passed CI (3.12
+          # accepts it) and unmounted /mcp on Fly (pydantic refuses it before
+          # 3.12). Keep this and the Dockerfile's FROM in step. Not below 3.10:
+          # `mcp>=2` and psycopg 3.3 require it. The laptop venv is 3.13.
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -194,11 +196,13 @@ jobs:
       - uses: actions/setup-python@v7
         if: ${{ env.GEMINI_API_KEY != '' }}
         with:
-          # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
-          # 3.3 both require 3.10+, so the install step had no version to
-          # resolve. The laptop venv is 3.13; 3.12 is the newest with wheels
-          # for everything torch/whisper drag in.
-          python-version: "3.12"
+          # 3.11 -- the Python the Fly image runs (Dockerfile: python:3.11-slim),
+          # so CI tests what production runs. It was 3.12 until 2026-10-08,
+          # when a `typing.TypedDict` in an MCP tool signature passed CI (3.12
+          # accepts it) and unmounted /mcp on Fly (pydantic refuses it before
+          # 3.12). Keep this and the Dockerfile's FROM in step. Not below 3.10:
+          # `mcp>=2` and psycopg 3.3 require it. The laptop venv is 3.13.
+          python-version: "3.11"
 
       - name: Install dependencies
         if: ${{ env.GEMINI_API_KEY != '' }}
