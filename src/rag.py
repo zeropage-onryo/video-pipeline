@@ -166,7 +166,13 @@ def embed_texts(texts: list, client, task_type: str = "RETRIEVAL_DOCUMENT") -> l
     Still raises once the budget is spent. Callers own the degrade --
     retrieve_references turns it into {"ok": False} and an ungrounded run,
     which is the right outcome after we have actually waited.
+
+    METERED PER BATCH (2026-10-08): one llm_calls row, stage `embed`,
+    attributed through spend.bind like every other call (_embed_usage says
+    where the token count comes from).
     """
+    from . import spend
+
     vectors: list = []
     config = types.EmbedContentConfig(
         task_type=task_type, output_dimensionality=EMBED_DIM
@@ -175,9 +181,13 @@ def embed_texts(texts: list, client, task_type: str = "RETRIEVAL_DOCUMENT") -> l
         batch = texts[start:start + EMBED_BATCH]
         for attempt in range(gemini_utils.MAX_RETRIES):
             try:
+                began = time.monotonic()
                 response = client.models.embed_content(
                     model=EMBED_MODEL, contents=batch, config=config
                 )
+                spend.record_call(stage="embed", model_asked=EMBED_MODEL,
+                                  usage=_embed_usage(batch, response),
+                                  ms=int((time.monotonic() - began) * 1000))
                 break
             except Exception as e:
                 if not gemini_utils.is_retriable(e):
@@ -191,6 +201,23 @@ def embed_texts(texts: list, client, task_type: str = "RETRIEVAL_DOCUMENT") -> l
                 time.sleep(delay)
         vectors.extend(e.values for e in response.embeddings)
     return vectors
+
+
+def _embed_usage(batch: list, response) -> dict:
+    """The input tokens one embed call billed. The Gemini API's response
+    carries no usage block; Vertex's carries a token count per embedding,
+    used when EVERY vector has one. Otherwise the count is estimated at
+    four characters a token -- an estimate stored as a count, which
+    /costs already says every figure is. Never raises."""
+    try:
+        counts = [getattr(getattr(e, "statistics", None), "token_count", None)
+                  for e in (getattr(response, "embeddings", None) or [])]
+        if counts and all(c is not None for c in counts):
+            return {"prompt_tokens": int(sum(counts))}
+    except Exception:
+        pass
+    chars = sum(len(str(t or "")) for t in batch)
+    return {"prompt_tokens": max(1, -(-chars // 4))}
 
 
 def make_client():

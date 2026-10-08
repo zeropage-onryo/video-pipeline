@@ -43,6 +43,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -61,6 +62,13 @@ SCENE_THRESHOLD = 0.35
 MIN_SHOT_FRAMES = 12
 INLINE_VIDEO_LIMIT = 19_000_000
 TRANSCRIBE_MODEL = "fal-ai/whisper"
+# fal bills Whisper by GPU compute time and its model page states no rate
+# (it renders "$0 per compute second"; checked 2026-10-08), so the meter
+# prices it by the AUDIO minute at a third-party reading of fal's cost
+# (~$0.00544 per 10-minute clip, costbench.com, 2026-10-08). An estimate
+# like every figure on /costs, and unverified against fal's own page:
+# FAL_WHISPER_USD_PER_MIN overrides it.
+WHISPER_USD_PER_MIN = 0.000544
 SEGMENT_GAP_S = 0.8
 PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "cut" / "shot_log.txt"
 
@@ -300,6 +308,15 @@ def parse_transcript(result: dict, fps: int, frames: int) -> dict[str, list[dict
     return {"words": words, "segments": segments}
 
 
+def whisper_usd(seconds: float) -> float:
+    """The estimated price of transcribing `seconds` of audio."""
+    try:
+        rate = float(os.environ.get("FAL_WHISPER_USD_PER_MIN") or WHISPER_USD_PER_MIN)
+    except ValueError:
+        rate = WHISPER_USD_PER_MIN
+    return round(max(0.0, float(seconds or 0)) / 60.0 * rate, 6)
+
+
 def transcribe(path: Path, sha: str, *, account_id: Optional[int], workdir: Path,
                fps: int = INDEX_FPS, frames: int, http: Optional[Callable] = None) -> dict:
     from .. import fal, spend
@@ -312,9 +329,11 @@ def transcribe(path: Path, sha: str, *, account_id: Optional[int], workdir: Path
         result, _ = fal._submit_and_wait(TRANSCRIBE_MODEL, body, http=http, account_id=account_id)
         ok = True
     finally:
-        # one row per call, priced as UNKNOWN (usage={} -> NULL cost), never $0
+        # one row per call, priced by the audio's length (whisper_usd),
+        # never by tokens -- Whisper reports none
         spend.record_call(stage="transcribe", model_asked=TRANSCRIBE_MODEL, usage={},
-                          ok=ok, account_id=account_id)
+                          ok=ok, account_id=account_id,
+                          cost_usd=whisper_usd(frames / fps if fps else 0))
     out = parse_transcript(result, fps, frames)
     out["language"] = (result.get("inferred_languages") or [None])[0]
     return out

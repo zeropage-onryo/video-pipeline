@@ -53,6 +53,7 @@ import {
   queuePending,
   queueReject,
   queueShot,
+  sceneHref,
   waitForJob,
   type Concept,
   type CutReady,
@@ -352,7 +353,7 @@ export default function QueuePage() {
         const charge = res.quote && res.quote.credits != null ? creditsText(res.quote.credits, !!balance?.exempt) : null;
         toast(
           r
-            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame} · ${charge ?? `~$${Number(r.estimate_usd).toFixed(2)}`}`
+            ? `Rendering ${c.n} — ${r.provider} · ${r.model} · ${r.frame}${charge ? ` · ${charge}` : ""}`
             : `${c.n} approved`,
         );
         acted.set(c.id, { status: "RENDERING", job: res.job_id, at: Date.now() });
@@ -483,33 +484,25 @@ export default function QueuePage() {
   /* What approving everything on the page would make and cost: the SAME
      plan each card prints on its button, summed. Display only -- every
      approve is still its own click and its own signed quote. A card still
-     pricing, refused or unpriced is counted out loud rather than as $0. */
+     pricing or refused is counted out loud rather than as 0. */
   const spendable = (pending || []).filter((c) => !lockedFor(c) && !didFor(c));
-  // Credits are what this account is charged. Dollars appear only for a
-  // card the server has not priced in credits (the rate card's label).
+  // Credits, only: what this account is charged, as the server priced it.
+  // The studio shows no dollars (2026-10-08).
   const tally = spendable.reduce(
     (t, c) => {
       const pick = pickOf(c);
       const spec = pick ? specOf(catalogue, pick.provider, pick.model) : null;
       if (!pick || !spec || !renderers[pick.provider]?.available) return { ...t, open: t.open + 1 };
       const plan = planFor(spec, pick, c.timeline ? partsOf(c) : null, quoteOf(c, pick));
-      if (plan.pending || plan.refused) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
-      if (plan.credits !== null) return { ...t, shots: t.shots + plan.n, credits: t.credits + plan.credits };
-      return plan.usd === null
-        ? { ...t, shots: t.shots + plan.n, open: t.open + 1 }
-        : { ...t, shots: t.shots + plan.n, usd: t.usd + plan.usd };
+      if (plan.pending || plan.refused || plan.credits === null) return { ...t, shots: t.shots + plan.n, open: t.open + 1 };
+      return { ...t, shots: t.shots + plan.n, credits: t.credits + plan.credits };
     },
-    { credits: 0, usd: 0, shots: 0, open: 0 },
+    { credits: 0, shots: 0, open: 0 },
   );
   const charged = !!balance && !balance.exempt;
   const exempt = !!balance?.exempt;
   const short = charged && tally.credits > balance!.available ? tally.credits - Math.max(balance!.available, 0) : 0;
-  const tallyPrice = [
-    tally.credits ? `${creditsText(tally.credits)}` : "",
-    tally.usd ? `~$${tally.usd.toFixed(2)}` : "",
-  ]
-    .filter(Boolean)
-    .join(" + ") || "nothing priced";
+  const tallyPrice = tally.credits ? creditsText(tally.credits) : "nothing priced";
   /** A card this balance cannot pay for says so and does not offer the
    *  click (the approve would fail at the hold). The hold at submit is
    *  still what refuses (src/charge.py); this is only the early answer,
@@ -572,7 +565,7 @@ export default function QueuePage() {
           <span className="m">
             {renderer
               ? renderer.available
-                ? `${renderer.label} · ${renderer.model} · ~$${(renderer.estimate_usd || 0).toFixed(2)} a clip`
+                ? `${renderer.label} · ${renderer.model}${renderer.credits != null ? ` · ${creditsText(renderer.credits, exempt)} a clip` : ""}`
                 : "Video rendering isn't configured on this server — approving cannot render"
               : "—"}
           </span>
@@ -729,11 +722,11 @@ export default function QueuePage() {
                   // Director icon opens. "Add references" with nowhere to add
                   // them is a dead end.
                   <Link
-                    href={`/studio/flows?concept=${c.id}&shot=1`}
-                    aria-label={`Open ${c.title} in Director to attach references`}
+                    href={sceneHref(c.id, 1)}
+                    aria-label={`Open ${c.title} on its canvas to attach references`}
                     className="-mt-1 inline-flex min-h-11 items-center self-start rounded-[8px] border border-noir-line px-3 font-plex! text-[11px]! tracking-[0.08em] text-noir-red2! hover:border-noir-red2"
                   >
-                    ATTACH REFERENCES IN DIRECTOR →
+                    ATTACH REFERENCES ON ITS CANVAS →
                   </Link>
                 ) : null}
                 {!locked && !did && c.keyframes ? (

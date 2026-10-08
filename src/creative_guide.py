@@ -1,5 +1,6 @@
 """Conversational brief development; no concept or render mutations."""
 import json
+import re
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -132,10 +133,30 @@ OUTPUT_NOTES = {
 }
 
 
+def project_note(project) -> str:
+    """One line for the model when the turn runs inside a project
+    (2026-10-07): which one, so "continue the story" continues it and
+    create_project / save_as_project are never proposed for a
+    conversation that already has one. "" outside a project."""
+    if not project or not isinstance(project, dict):
+        return ""
+    title = " ".join(str(project.get("title") or "").split())[:120] or "untitled"
+    return (f"This conversation is INSIDE the project “{title}”: its brief and what it "
+            "has learned are in your instructions. Continue that project's story and "
+            "work; do not propose creating or saving a project.")
+
+
 def respond(conversation, *, client, brand, grounding, image_refs=(),
             account_id=None, on_retry=None, tools=None, run_tool=None, brain=None,
-            assistant=None, judge=None, links=None, output=None):
+            assistant=None, judge=None, links=None, output=None, project=None,
+            on_text=None):
     """One Guide turn.
+
+    `project` (2026-10-07) is the studio project the turn runs inside
+    (src/projects.py's row), when it does: the last message carries one
+    line naming it, so the model knows it is already in one and never
+    proposes creating another; its brief and memory reach the
+    instructions through shootgen.load_brand as they always did.
 
     With `tools` (the specs `guide_tools.session` returns) and
     `run_tool`, the model may call the board's READ tools before it
@@ -170,8 +191,15 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     tools handed in by the route then include make_image / make_video
     (guide_tools.MAKE_SPECS). Without it -- the pill, every older caller --
     the turn is byte for byte what it was.
+
+    `on_text` (2026-10-08, the assistant card) is told the answer's
+    `message` as the model writes it (`partial_message` over the streamed
+    JSON), "" whenever what it was told no longer stands -- a retry, or a
+    tool round that starts over. It only ever hears the reply's own words;
+    the return value is the whole reply, exactly as without it.
     """
     brain = gemini_utils.resolve_brain(brain or DEFAULT_BRAIN)
+    feed = _Partial(on_text) if on_text is not None else None
     # The fast tier's config is None on purpose (its request is the one
     # this module has always sent); the Guide needs an object to hang
     # the system instruction and the response schema on.
@@ -183,17 +211,18 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
 
     contents = _contents(conversation, grounding, image_refs,
                          notes=(assistant_brain.link_note(links),
-                                OUTPUT_NOTES.get(output or "", "")))
+                                OUTPUT_NOTES.get(output or "", ""),
+                                project_note(project)))
     if not tools:
         config.response_mime_type = "application/json"
         config.response_json_schema = Answer.model_json_schema()
         raw = gemini_utils.generate_with_retry(
             client, brain["model"], contents, config=config, fallbacks=brain["fallbacks"],
-            stage="creative_guide", account_id=account_id, on_retry=on_retry)
+            stage="creative_guide", account_id=account_id, on_retry=on_retry, on_text=feed)
         reply = Reply.model_validate_json(raw).model_dump()
     else:
         reply = _respond_with_tools(client, brain, config, contents, tools, run_tool,
-                                    account_id=account_id, on_retry=on_retry)
+                                    account_id=account_id, on_retry=on_retry, feed=feed)
     if links:
         reply["sheet"] = assistant_brain.merge_sheets(links, reply.get("sheet"))
     if assistant is not None:
@@ -229,7 +258,7 @@ MAX_TOOL_CALLS = 6
 
 
 def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
-                        account_id=None, on_retry=None):
+                        account_id=None, on_retry=None, feed=None):
     from . import guide_tools
 
     # Gemini refuses a JSON response schema alongside function
@@ -243,9 +272,12 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
     runs: list[dict] = []
     proposal = None
     for _ in range(MAX_TOOL_CALLS + 1):
+        if feed is not None:
+            feed("")          # a tool round starts over: nothing it said stands
         response = gemini_utils.generate_with_retry(
             client, brain["model"], contents, config=config, fallbacks=brain["fallbacks"],
-            stage="creative_guide", account_id=account_id, on_retry=on_retry, raw=True)
+            stage="creative_guide", account_id=account_id, on_retry=on_retry, raw=True,
+            on_text=feed)
         calls = list(response.function_calls or [])
         if not calls:
             text = (response.text or "").strip()
@@ -297,10 +329,91 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
             text="Answer now as the JSON described, using what the tools returned.")]))
         raw = gemini_utils.generate_with_retry(
             client, brain["model"], contents, config=config, fallbacks=brain["fallbacks"],
-            stage="creative_guide", account_id=account_id, on_retry=on_retry)
+            stage="creative_guide", account_id=account_id, on_retry=on_retry, on_text=feed)
         reply = Answer.model_validate_json(raw)
     return Reply(**reply.model_dump(), tool_runs=[ToolRun(**r) for r in runs],
                  sheet=sheet).model_dump()
+
+
+# The `message` string of a JSON answer still being written, opened by
+# its key: the first one, which is the reply's own (Answer puts it first).
+_MESSAGE_OPEN = re.compile(r'"message"\s*:\s*"')
+_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n",
+            "r": "\r", "t": "\t"}
+
+
+def partial_message(raw: str) -> str:
+    """How much of the answer's `message` has been written so far, decoded.
+
+    `raw` is the model's JSON as far as it has come -- fenced or not, the
+    closing quote maybe not written yet, an escape maybe cut in half. The
+    string is read up to its closing quote or to the last character that
+    can be decoded; an escape not finished yet is left for the next chunk.
+    "" until the key has appeared. Pure, never raises."""
+    opened = _MESSAGE_OPEN.search(raw or "")
+    if opened is None:
+        return ""
+    out, i, n = [], opened.end(), len(raw)
+    while i < n:
+        c = raw[i]
+        if c == '"':
+            break
+        if c != "\\":
+            out.append(c)
+            i += 1
+            continue
+        if i + 1 >= n:
+            break
+        e = raw[i + 1]
+        if e != "u":
+            out.append(_ESCAPES.get(e, e))
+            i += 2
+            continue
+        code = _hex4(raw, i + 2)
+        if code is None:
+            break
+        if 0xD800 <= code < 0xDC00:              # the high half of a pair
+            after = raw[i + 6:i + 8]
+            if after != "\\u":
+                if len(after) < 2 and "\\u".startswith(after):
+                    break                        # its low half is not written yet
+                i += 6                           # a lone high half is dropped
+                continue
+            low = _hex4(raw, i + 8)
+            if low is None:
+                break
+            if 0xDC00 <= low < 0xE000:
+                out.append(chr(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)))
+            i += 12
+            continue
+        if not 0xDC00 <= code < 0xE000:          # a lone low half is dropped
+            out.append(chr(code))
+        i += 6
+    return "".join(out)
+
+
+def _hex4(raw: str, at: int):
+    digits = raw[at:at + 4]
+    if len(digits) < 4:
+        return None
+    try:
+        return int(digits, 16)
+    except ValueError:
+        return None
+
+
+class _Partial:
+    """Tells `on_text` the message so far, only when it changed -- a chunk
+    that only extends `choices` is not news."""
+
+    def __init__(self, on_text):
+        self.on_text, self.told = on_text, ""
+
+    def __call__(self, raw: str) -> None:
+        message = partial_message(raw)
+        if message != self.told:
+            self.told = message
+            self.on_text(message)
 
 
 def _parse_reply(text: str):

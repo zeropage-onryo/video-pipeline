@@ -4,11 +4,13 @@
    row — one component every studio page sits inside, so the product
    has one navigation instead of a rail per screen.
 
-   The rail is the design's: Studio, Assets, Pipeline, Director,
-   Elements, Queue. Analytics is gone in favour of Elements (Mike's
-   call, 2026-09-11): the thing you @ in a prompt is a page, the charts
-   were not. Every rail entry is a React page now (Assets, Pipeline
-   and Queue landed 2026-09-12). */
+   The rail (2026-10-07, Mike's call): Projects first, as the home, then
+   Create, Assets, Edit, Elements and the Queue. Pipeline and Director are
+   gone from it -- a concept is one scene and a project holds scenes, so
+   the board of projects replaced the board of concepts, and the Director
+   canvas lives inside each project's workspace (or, for a scene made
+   outside any project, on /studio/scene/<id>). Their old URLs redirect.
+   Analytics went in favour of Elements on 2026-09-11. */
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
@@ -23,7 +25,6 @@ import {
 } from "react";
 import {
   AtSign,
-  Clapperboard,
   ChevronsUpDown,
   FolderKanban,
   House,
@@ -31,9 +32,9 @@ import {
   ListVideo,
   LogOut,
   PanelLeft,
+  Plug,
   Scissors,
   Settings,
-  Workflow,
 } from "lucide-react";
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
 import {
@@ -48,18 +49,17 @@ import {
   type Me,
 } from "@/lib/studio-api";
 import { CreditPill } from "@/components/studio/credit-pill";
+import { ConnectClaude } from "@/components/studio/connect-claude";
 import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
 
-export type ViewId = "studio" | "projects" | "assets" | "pipeline" | "director" | "cut" | "elements" | "queue" | "settings";
+export type ViewId = "studio" | "projects" | "assets" | "cut" | "elements" | "queue" | "settings";
 
 const NAV: { id: ViewId; label: string; href: string; icon: typeof House; external?: boolean }[] = [
-  { id: "studio", label: "Studio", href: "/studio", icon: House },
   { id: "projects", label: "Projects", href: "/studio/projects", icon: FolderKanban },
+  { id: "studio", label: "Create", href: "/studio", icon: House },
   { id: "assets", label: "Assets", href: "/studio/assets", icon: Layers },
-  { id: "pipeline", label: "Pipeline", href: "/studio/pipeline", icon: Workflow },
-  { id: "director", label: "Director", href: "/studio/flows", icon: Clapperboard },
   { id: "cut", label: "Edit", href: "/studio/cut", icon: Scissors },
   { id: "elements", label: "Elements", href: "/studio/elements", icon: AtSign },
   { id: "queue", label: "Queue", href: "/studio/queue", icon: ListVideo },
@@ -69,6 +69,7 @@ const NAV: { id: ViewId; label: string; href: string; icon: typeof House; extern
    mock): Create is the box, Library the Assets wall, Timeline the editor.
    The rail still carries every page; these are the three the mock names. */
 const TABS: { label: string; href: string; view: ViewId }[] = [
+  { label: "Projects", href: "/studio/projects", view: "projects" },
   { label: "Create", href: "/studio", view: "studio" },
   { label: "Library", href: "/studio/assets", view: "assets" },
   { label: "Timeline", href: "/studio/cut", view: "cut" },
@@ -79,11 +80,11 @@ const VIEW_BY_PATH: [string, ViewId][] = [
   // its own view id so no rail entry lights up while it is open
   ["/studio/settings", "settings"],
   ["/studio/projects", "projects"],
-  ["/studio/flows", "director"],
+  // a scene's canvas belongs to the Projects side of the studio
+  ["/studio/scene", "projects"],
   ["/studio/cut", "cut"],
   ["/studio/elements", "elements"],
   ["/studio/assets", "assets"],
-  ["/studio/pipeline", "pipeline"],
   ["/studio/queue", "queue"],
   ["/studio", "studio"],
 ];
@@ -131,13 +132,41 @@ const readPin = () => {
   }
 };
 
+/* The end of both account menus -- the rail's profile row and the header's
+   avatar -- as ONE component, so the two menus cannot drift apart. */
+function MenuTail({ close, onConnect }: { close: () => void; onConnect: () => void }) {
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onConnect();
+        }}
+      >
+        <Plug strokeWidth={1.6} /> Connect to Claude
+      </button>
+      <Link href="/studio/settings" role="menuitem" onClick={close}>
+        <Settings strokeWidth={1.6} /> Settings
+      </Link>
+      <button type="button" role="menuitem" onClick={signOut}>
+        <LogOut strokeWidth={1.6} /> Sign out
+      </button>
+    </>
+  );
+}
+
 export function StudioShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/studio";
   const view = VIEW_BY_PATH.find(([p]) => pathname.startsWith(p))?.[1] ?? "studio";
   // an open project (/studio/cut/<id>) is the editor: it takes the whole
   // stage and draws its own top bar, so the shell's bar steps aside
   const editor = /^\/studio\/cut\/[^/]+/.test(pathname);
-  const stage = view === "director" || editor;
+  // a project's workspace and a scene's canvas fill the stage the way the
+  // Director tab did: the canvas needs every pixel and scrolls itself
+  const canvas = /^\/studio\/(projects\/\d+|scene\/[^/]+)/.test(pathname);
+  const stage = canvas || editor;
   const [me, setMe] = useState<Me | null>(null);
   const [signedOut, setSignedOut] = useState(false);
   const pinned = useSyncExternalStore(subscribePin, readPin, () => false);
@@ -145,6 +174,8 @@ export function StudioShell({ children }: { children: ReactNode }) {
   // the header's avatar menu (accounts, sign out) -- its own flag, so the
   // rail's account row and the avatar never open each other's
   const [hmenu, setHmenu] = useState(false);
+  // the Connect to Claude panel, opened from either menu
+  const [connect, setConnect] = useState(false);
   const [pending, setPending] = useState(0);
   // keyed by the account it was read for, so a switch never shows the
   // previous account's number while the new one is being asked
@@ -294,12 +325,18 @@ export function StudioShell({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{ me, signedOut, brand, balance, toast, setBar }}>
-      <div className="zps" data-view={view} data-stage={stage ? "1" : undefined} data-editor={editor ? "1" : undefined}>
+      <div
+        className="zps"
+        data-view={view}
+        data-stage={stage ? "1" : undefined}
+        data-editor={editor ? "1" : undefined}
+        data-canvas={canvas ? "1" : undefined}
+      >
         <div className="zps-field" aria-hidden />
 
         <nav className={`rail${pinned ? " pinned" : ""}`} aria-label="Primary">
           <div className="rhead">
-            <Link href="/studio" className="mark" title="Studio">
+            <Link href="/studio/projects" className="mark" title="Projects">
               ZP
             </Link>
             <span className="rl rtitle">Studio</span>
@@ -374,12 +411,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                       {a.label}
                     </button>
                   ))}
-                  <Link href="/studio/settings" role="menuitem" onClick={() => setMenu(false)}>
-                    <Settings strokeWidth={1.6} /> Settings
-                  </Link>
-                  <button type="button" onClick={signOut}>
-                    <LogOut strokeWidth={1.6} /> Sign out
-                  </button>
+                  <MenuTail close={() => setMenu(false)} onConnect={() => setConnect(true)} />
                 </span>
               ) : null}
             </button>
@@ -394,7 +426,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
               open conversation (lib/assistant.ts requestNewSession, taken by
               AssistantThreadProvider), the avatar opens the account menu. */}
           <header className="bar hdr">
-            <Link href="/studio" className="hbrand" title="Studio">
+            <Link href="/studio/projects" className="hbrand" title="Projects">
               <span className="hdot" aria-hidden />
               <b>Zero Page Studio</b>
             </Link>
@@ -447,12 +479,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                         {a.label}
                       </button>
                     ))}
-                    <Link href="/studio/settings" role="menuitem" onClick={() => setHmenu(false)}>
-                      <Settings strokeWidth={1.6} /> Settings
-                    </Link>
-                    <button type="button" onClick={signOut}>
-                      <LogOut strokeWidth={1.6} /> Sign out
-                    </button>
+                    <MenuTail close={() => setHmenu(false)} onConnect={() => setConnect(true)} />
                   </span>
                 ) : null}
               </span>
@@ -460,6 +487,8 @@ export function StudioShell({ children }: { children: ReactNode }) {
           </header>
           {stage ? <div className="stage">{children}</div> : children}
         </div>
+
+        {connect ? <ConnectClaude me={me} onClose={() => setConnect(false)} toast={toast} /> : null}
 
         {toastState ? (
           <div className={`ztoast${toastState.kind === "err" ? " err" : ""}`} role="status">

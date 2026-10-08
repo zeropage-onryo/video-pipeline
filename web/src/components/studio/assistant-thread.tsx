@@ -25,7 +25,16 @@
    until "Write another"); the pill's button clears it the same way
    (`clearProject`). Nothing is ever archived -- the server DELETES the row.
    What the talk produced lives on the concept and, once rendered, on the
-   asset with its prompt. Nothing here calls a model or spends. */
+   asset with its prompt. Nothing here calls a model or spends.
+
+   INSIDE A PROJECT IT IS THE PROJECT'S (2026-10-07, Mike's call). On a
+   project's workspace (/studio/projects/<id>) the thread this provider
+   hands out is that project's chat history instead: loaded from
+   GET /projects/<id>/messages (the newest page, `loadOlder` for the rest),
+   written by the server as each turn happens (the pill sends remember=1),
+   and kept until the project is deleted -- never cleared from here. The
+   studio-wide thread above is untouched while a project is open, and is
+   back the moment the person leaves it. */
 import {
   createContext,
   useCallback,
@@ -38,7 +47,9 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
+import { usePathname } from "next/navigation";
 import { useShell } from "@/components/studio/shell";
+import { projectMessages, type GuideReply, type ProjectMessage } from "@/lib/studio-api";
 import {
   EMPTY_DRAFT,
   NEW_SESSION_EVENT,
@@ -70,6 +81,11 @@ export type AssistantThread = {
   clearProject: () => Promise<void>;
   /** the scene was created: the conversation is done, only its card remains */
   finishProject: (written: ComposerDraft["written"]) => void;
+  /** set on a project's workspace: `turns` are that project's saved history */
+  projectId: number | null;
+  /** the project's history has turns older than the ones loaded */
+  hasOlder: boolean;
+  loadOlder: () => Promise<void>;
 };
 
 const Ctx = createContext<AssistantThread>({
@@ -83,6 +99,9 @@ const Ctx = createContext<AssistantThread>({
   setDraft: () => {},
   clearProject: async () => {},
   finishProject: () => {},
+  projectId: null,
+  hasOlder: false,
+  loadOlder: async () => {},
 });
 export const useAssistantThread = () => useContext(Ctx);
 
@@ -113,9 +132,31 @@ function loadLocal(account: string): Local {
 const snapshot = (turns: Turn[], stage: string, draft: ComposerDraft) =>
   JSON.stringify({ turns: turns.filter((t) => !t.failed), stage, draft });
 
+/* One saved turn of a project's history, as a thread turn. A proposal is
+   not restored: whether it was confirmed is not in the history, and a card
+   drawn again could bank the same thing twice -- its words still say what
+   was offered. */
+function fromMessage(m: ProjectMessage): Turn & { messageId: number } {
+  if (m.role === "user") return { role: "user", content: m.content, messageId: m.id };
+  const extras = { ...(m.tool_calls || {}) } as Partial<GuideReply>;
+  delete extras.proposal;
+  return { role: "assistant", content: m.content, reply: { ...extras, message: m.content }, messageId: m.id };
+}
+const PROJECT_PATH = /^\/studio\/projects\/(\d+)/;
+
 export function AssistantThreadProvider({ children }: { children: ReactNode }) {
   const { me, brand } = useShell();
   const account = brand || me?.account?.slug || "";
+  const pathname = usePathname() || "";
+  const projectId = Number(PROJECT_PATH.exec(pathname)?.[1]) || null;
+  // the open project's history: keyed by the project it was read for, so
+  // moving between two projects never shows the first one's talk
+  const [projectThread, setProjectThread] = useState<{
+    id: number;
+    turns: (Turn & { messageId?: number })[];
+    stage: Stage | "";
+    hasOlder: boolean;
+  } | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [stage, setStage] = useState<Stage | "">("");
   const [draft, setDraftState] = useState<ComposerDraft>(EMPTY_DRAFT);
@@ -193,6 +234,53 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [turns, stage, draft, account, loadedFor]);
 
+  useEffect(() => {
+    if (!projectId || !account) return;
+    let live = true;
+    projectMessages(projectId)
+      .then((r) => {
+        if (!live) return;
+        const turns = r.items.map(fromMessage);
+        const last = [...turns].reverse().find((t) => t.reply?.stage);
+        setProjectThread({
+          id: projectId,
+          turns,
+          stage: isStage(last?.reply?.stage) ? (last!.reply!.stage as Stage) : "",
+          hasOlder: r.has_more,
+        });
+      })
+      // unreadable (gone, not this account's): an empty thread, never
+      // the studio-wide one under the project's name
+      .catch(() => live && setProjectThread({ id: projectId, turns: [], stage: "", hasOlder: false }));
+    return () => {
+      live = false;
+    };
+  }, [projectId, account]);
+  const scoped = projectId && projectThread?.id === projectId ? projectThread : null;
+  const setProjectTurns = useCallback<Dispatch<SetStateAction<Turn[]>>>(
+    (update) =>
+      setProjectThread((pt) =>
+        pt ? { ...pt, turns: typeof update === "function" ? update(pt.turns) : update } : pt,
+      ),
+    [],
+  );
+  const setProjectStage = useCallback(
+    (st: Stage | "") => setProjectThread((pt) => (pt ? { ...pt, stage: st } : pt)),
+    [],
+  );
+  const loadOlder = useCallback(async () => {
+    const pt = projectThread;
+    if (!pt || !pt.hasOlder) return;
+    const oldest = pt.turns.find((t) => t.messageId)?.messageId;
+    if (!oldest) return;
+    const r = await projectMessages(pt.id, oldest);
+    setProjectThread((now) =>
+      now && now.id === pt.id
+        ? { ...now, turns: [...r.items.map(fromMessage), ...now.turns], hasOlder: r.has_more }
+        : now,
+    );
+  }, [projectThread]);
+
   const setDraft = useCallback((update: DraftUpdate) => {
     setDraftState((d) => (typeof update === "function" ? update(d) : { ...d, ...update }));
   }, []);
@@ -236,17 +324,21 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AssistantThread>(
     () => ({
       account,
-      ready: !!account && loadedFor === account,
-      turns,
-      setTurns,
-      stage,
-      setStage,
+      // inside a project the thread is ready once its history is read
+      ready: projectId ? !!scoped : !!account && loadedFor === account,
+      turns: projectId ? (scoped?.turns ?? []) : turns,
+      setTurns: projectId ? setProjectTurns : setTurns,
+      stage: projectId ? (scoped?.stage ?? "") : stage,
+      setStage: projectId ? setProjectStage : setStage,
       draft,
       setDraft,
       clearProject,
       finishProject,
+      projectId,
+      hasOlder: !!scoped?.hasOlder,
+      loadOlder,
     }),
-    [account, loadedFor, turns, stage, draft, setDraft, clearProject, finishProject],
+    [account, loadedFor, turns, stage, draft, setDraft, clearProject, finishProject, projectId, scoped, setProjectTurns, setProjectStage, loadOlder],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

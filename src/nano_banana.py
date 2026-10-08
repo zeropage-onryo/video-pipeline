@@ -418,6 +418,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         except ledger.InsufficientCredit as e:
             return {"ok": False, "media_url": None, "generation_id": None,
                     "path": None, "error": charging.refusal(e, "this still")}
+        # the last line before the image call, as in every adapter: a hold
+        # marked submitted is one the reaper does not release blindly
+        charge.submitted()
         try:
             generate_image(framed, out_path, model=model,
                            reference_bytes=references, client=client,

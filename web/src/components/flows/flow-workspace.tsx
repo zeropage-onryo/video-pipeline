@@ -80,9 +80,10 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { apiFetch, API_URL, goToSignIn } from "@/lib/api";
-import { sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
+import { sceneHref, sceneMenu, uploadRefs, type SceneMenuRow } from "@/lib/studio-api";
 import { creditsText } from "@/lib/render-choice";
 import {
+  announceBalanceChange,
   announceQueueChange,
   getAssets,
   getCapabilities,
@@ -139,7 +140,7 @@ const notes: Record<Kind, string> = {
   reference: "One plate this shot starts from.",
   element: "Reference frames from the asset library. Keeps the face, the wardrobe or the room consistent across shots.",
   image: "Renders the keyframe the clip starts from — the enhanced prompt as a still, grounded on every reference wired in.",
-  video: "Takes every wire coming in and renders one clip, anchored on the keyframe. The only step that spends money.",
+  video: "Takes every wire coming in and renders one clip, anchored on the keyframe. Held in credits until the clip lands.",
 };
 const starterText =
   "A solitary rider crosses a sunlit field. Wind moves through the tall grass, warm afternoon light, subtle film grain. A quiet, unhurried moment.";
@@ -199,7 +200,9 @@ const Actions = createContext<{
   caps: Capabilities;
   /** what one still costs, and whether this account is charged (2026-09-29) */
   still: { credits: number; exempt: boolean } | null;
-}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null });
+  /** the operator's own account: prices show "not charged" beside them */
+  exempt: boolean;
+}>({ update: () => {}, addFrames: () => {}, remove: () => {}, duplicate: () => {}, run: () => {}, renderer: null, caps: {}, still: null, exempt: false });
 
 function KindIcon({ data, size, strokeWidth }: { data: CardData; size: number; strokeWidth: number }) {
   const props = { size, strokeWidth };
@@ -491,8 +494,8 @@ function StudioNode({ id, data, selected }: NodeProps<FlowNode>) {
           )}
           <footer className="node-footer nodrag">
             <span className="m">
-              {data.kind === "video" && rw?.estimate_usd != null
-                ? `est. $${Number(rw.estimate_usd).toFixed(2)}`
+              {data.kind === "video" && rw?.credits != null && !data.busy
+                ? creditsText(rw.credits, actions.exempt)
                 : data.kind === "image" && actions.still && !data.busy
                   ? creditsText(actions.still.credits, actions.still.exempt)
                   : data.busy
@@ -541,7 +544,7 @@ type Concept = {
 
 /* The scene switcher: the header chip is a menu of the brand's open scenes,
    so moving from one scene's graph to another does not mean a trip back to
-   Pipeline. The list is read when the menu opens, not on mount -- the
+   the Projects board. The list is read when the menu opens, not on mount -- the
    canvas has enough to load. Leaving goes through `go` (flushAndGo), so
    the canvas is saved against the scene it belongs to first. */
 function SceneSwitcher({
@@ -549,11 +552,13 @@ function SceneSwitcher({
   currentId,
   brand,
   go,
+  hrefFor,
 }: {
   label: ReactNode;
   currentId?: number;
   brand: string;
   go: (destination: string) => void;
+  hrefFor: (id: number, shot?: number) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<SceneMenuRow[] | null>(null);
@@ -604,7 +609,7 @@ function SceneSwitcher({
                 aria-current={c.id === currentId ? "true" : undefined}
                 onClick={() => {
                   setOpen(false);
-                  if (c.id !== currentId) go(`/studio/flows?concept=${c.id}&shot=1`);
+                  if (c.id !== currentId) go(hrefFor(c.id, 1));
                 }}
               >
                 <span className="scene-menu-n">{c.n}</span>
@@ -614,11 +619,11 @@ function SceneSwitcher({
             ))}
           </span>
           <span className="scene-menu-foot">
-            <button type="button" role="menuitem" onClick={() => go("/studio/pipeline")}>
-              All concepts on Pipeline
+            <button type="button" role="menuitem" onClick={() => go("/studio/projects")}>
+              All projects
             </button>
             {currentId ? (
-              <button type="button" role="menuitem" onClick={() => go("/studio/flows?draft=1")}>
+              <button type="button" role="menuitem" onClick={() => go("/studio/scene/draft")}>
                 Local draft canvas
               </button>
             ) : null}
@@ -629,8 +634,28 @@ function SceneSwitcher({
   );
 }
 
-function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number }) {
+/* Where the canvas sits decides where its links go (2026-10-07). On its own
+   page (/studio/scene/<id>) it is the whole stage, with a way back and a
+   scene switcher; inside a project's workspace the scene list is beside it,
+   so the switcher steps aside, `hrefFor` keeps a shot change inside the
+   workspace, and `go` lets the page navigate client-side once the canvas
+   has saved, so picking another
+   scene in the list never drops an edit still waiting on its autosave
+   (`registerLeave` hands the page that save-then-go). */
+export type CanvasNav = {
+  backHref?: string;
+  backLabel?: string;
+  hrefFor?: (id: number, shot?: number) => string;
+  embedded?: boolean;
+  go?: (destination: string) => void;
+  registerLeave?: (leave: ((destination: string) => Promise<void>) | null) => void;
+};
+
+function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?: number; nav?: CanvasNav }) {
   const shell = useShell();
+  const backHref = nav.backHref ?? "/studio/projects";
+  const backLabel = nav.backLabel ?? "Back to Projects";
+  const hrefFor = nav.hrefFor ?? sceneHref;
   const [initial] = useState(() => makeTemplate("variety"));
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
@@ -744,7 +769,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
           getAssets().catch(() => ({ items: [] })),
         ]);
         const shot = detail.shots.find((s) => s.n === (shotN ?? detail.shots[0]?.n));
-        if (!shot) throw new Error("This scene has no written shot yet. Write its prompt from Pipeline first.");
+        if (!shot) throw new Error("This scene has no written shot yet. Write its prompt from Studio first.");
         const saved = await apiFetch<{
           graph: LegacyGraph | null;
           states?: Record<string, NodeState>;
@@ -883,8 +908,16 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         return;
       }
     }
-    window.location.assign(destination);
+    if (nav.go && destination.startsWith("/")) nav.go(destination);
+    else window.location.assign(destination);
   };
+  // the page beside the canvas leaves through the same save
+  const registerLeave = nav.registerLeave;
+  useEffect(() => {
+    if (!registerLeave) return;
+    registerLeave(flushAndGo);
+    return () => registerLeave(null);
+  });
 
   const update = useCallback(
     (id: string, data: Partial<CardData>) =>
@@ -1147,6 +1180,9 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
             else if (["failed", "cancelled"].includes(job.status))
               update(n.id, { busy: false, jobId: undefined, error: job.error || job.status });
             else update(n.id, { busy: true });
+            // a still or a clip settles (or releases) its hold as its job
+            // ends: the header's balance re-reads then, not on the next page
+            if (!isText(n.data.kind) && !["queued", "running"].includes(job.status)) announceBalanceChange();
           } catch (error) {
             if (!cancelled)
               update(n.id, {
@@ -1237,6 +1273,8 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
           lastSaved.current = "";
           setSaveRevision((n) => n + 1);
           if (job.status === "done") announceQueueChange();
+          // however the run ended, its stills and clips settled or released
+          announceBalanceChange();
         }
       } catch (error) {
         if (!cancelled) {
@@ -1259,11 +1297,11 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const inQueue = !!(scene && (scene.picked || scene.parked || scene.media_url));
   const sendToQueue = async () => {
     if (!scene) {
-      notify("Open a concept first — the brief on Pipeline builds one");
+      notify("Open a scene first — Create on Studio writes one");
       return;
     }
     if (inQueue) {
-      void flushAndGo(`${API_URL}/ui?view=queue`);
+      void flushAndGo("/studio/queue");
       return;
     }
     try {
@@ -1309,7 +1347,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
   const gen = scene?.generate && !scene.generate.error ? scene.generate : null;
   const rw =
     scene?.renderer && gen
-      ? { ...scene.renderer, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd, resolution: gen.frame || scene.renderer.resolution }
+      ? { ...scene.renderer, model: gen.model, duration: gen.durations[0], estimate_usd: gen.estimate_usd, credits: gen.credits, resolution: gen.frame || scene.renderer.resolution }
       : (scene?.renderer ?? null);
 
   return (
@@ -1327,6 +1365,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
         renderer: rw,
         caps,
         still: shell.balance?.prices?.still != null ? { credits: shell.balance.prices.still, exempt: !!shell.balance.exempt } : null,
+        exempt: !!shell.balance?.exempt,
       }}
     >
       <main className={`flows-workspace ${showTemplates ? "templates-open" : ""} tool-${tool}${selectedNode ? " has-inspector" : ""}`}>
@@ -1334,14 +1373,21 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
           <div className="flow-breadcrumb">
             {/* the React board, not the API's legacy /ui (which only bounced
                 back here through a handoff) */}
-            <button aria-label="Back to Pipeline" title="Back to Pipeline" onClick={() => flushAndGo("/studio/pipeline")}>
-              <ArrowLeft size={16} />
-            </button>
-            {scene ? (
+            {nav.embedded ? null : (
+              <button aria-label={backLabel} title={backLabel} onClick={() => flushAndGo(backHref)}>
+                <ArrowLeft size={16} />
+              </button>
+            )}
+            {scene && nav.embedded ? (
+              <span className="chip" title={scene.title}>
+                <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
+              </span>
+            ) : scene ? (
               <SceneSwitcher
                 currentId={conceptId}
                 brand={shell.brand}
                 go={flushAndGo}
+                hrefFor={hrefFor}
                 label={
                   <>
                     <Clapperboard size={11} /> {scene.n.toLowerCase()} · {scene.title.toLowerCase().slice(0, 26)}
@@ -1355,6 +1401,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
                   <SceneSwitcher
                     brand={shell.brand}
                     go={flushAndGo}
+                    hrefFor={hrefFor}
                     label={
                       <>
                         <Clapperboard size={11} /> open a scene
@@ -1365,7 +1412,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               </>
             )}
             {scene && scene.shots.length > 1 && (
-              <select aria-label="Shot" value={activeShot} onChange={(e) => flushAndGo(`/studio/flows?concept=${conceptId}&shot=${e.target.value}`)}>
+              <select aria-label="Shot" value={activeShot} onChange={(e) => conceptId && flushAndGo(hrefFor(conceptId, Number(e.target.value)))}>
                 {scene.shots.map((s) => (
                   <option key={s.n} value={s.n}>
                     Shot {s.n}
@@ -1481,9 +1528,10 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
                 <div className="insp-sec">
                   <span className="m">spend</span>
                   <div className="insp-spend">
-                    <b>{rw?.estimate_usd != null ? `$${Number(rw.estimate_usd).toFixed(2)}` : "—"}</b>
+                    <b>{rw?.credits != null ? `${rw.credits.toLocaleString("en-US")} cr` : "—"}</b>
                     <span>
                       per {rw?.duration ?? 5}-second clip · {rw?.model ?? "video"}
+                      {rw?.credits != null && shell.balance?.exempt ? " · not charged" : ""}
                     </span>
                   </div>
                   {gateNote("video", caps) ? <span className="m gate">{gateNote("video", caps)}</span> : null}
@@ -1662,7 +1710,7 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
                   {/* the same sign-in every other page uses: it comes back here */}
                   <button onClick={() => goToSignIn()}>Sign in</button>
                   <button onClick={() => window.location.reload()}>Retry</button>
-                  <a href="/studio/pipeline">Back to Pipeline</a>
+                  <a href={backHref}>{backLabel}</a>
                 </div>
               )}
             </section>
@@ -1699,7 +1747,9 @@ function Workspace({ conceptId, shotN }: { conceptId?: number; shotN?: number })
               <h2 id="render-title">Run {nodes.find((n) => n.id === confirm)?.data.label}?</h2>
               <p>
                 {nodes.find((n) => n.id === confirm)?.data.kind === "video"
-                  ? "This renders a clip on fal and holds credits — the adapter's own gate still has the last word."
+                  ? rw?.credits != null
+                    ? `This renders a clip on fal — ${creditsText(rw.credits, !!shell.balance?.exempt)}, held until it lands.`
+                    : "This renders a clip on fal and holds credits — the adapter's own gate still has the last word."
                   : nodes.find((n) => n.id === confirm)?.data.kind === "image" && shell.balance?.prices?.still != null
                     ? `This draws one still — ${creditsText(shell.balance.prices.still, !!shell.balance.exempt)}.`
                     : "This is a billed model call."}
@@ -1753,7 +1803,7 @@ function validDraft(value: unknown): value is Draft {
   }
   return d.edges.every((e) => e && typeof e.id === "string" && ids.has(e.source) && ids.has(e.target));
 }
-export default function FlowWorkspace(props: { conceptId?: number; shotN?: number }) {
+export default function FlowWorkspace(props: { conceptId?: number; shotN?: number; nav?: CanvasNav }) {
   return (
     <ReactFlowProvider>
       <Workspace {...props} />

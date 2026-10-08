@@ -2,12 +2,14 @@
 // only. `useStill` is the one reduced-motion switch; `useRevealGroup` is
 // the one observer a staggered group shares.
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { useInView, useReducedMotion } from "motion/react";
+import { useInView } from "motion/react";
 
-/** Is the person asking for reduced motion? Boolean, never null. */
-export function useStill(): boolean {
-  return !!useReducedMotion();
-}
+/** Is the person asking for reduced motion? Boolean, never null. The
+ *  landing page's hydration-safe reading (components/motion/use-still.ts,
+ *  2026-10-06): false on the first client render, like the server, then the
+ *  real setting -- answering "reduce" straight away draws a different tree
+ *  from the server's and React throws a hydration mismatch. */
+export { useStill } from "@/components/motion/use-still";
 
 /**
  * One observer for a whole group: `ref` goes on the container, `show`

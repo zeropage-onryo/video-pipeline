@@ -117,7 +117,7 @@ def test_apply_sends_one_patch_with_exactly_what_was_asked(capsys):
     _, url, headers, body = request.calls[1]
     assert url.endswith("/projects/abcdefghijklmnop/config/auth")
     assert headers["Authorization"] == f"Bearer {TOKEN}"
-    assert body["smtp_host"] == "smtp.resend.com" and body["smtp_port"] == 465
+    assert body["smtp_host"] == "smtp.resend.com" and body["smtp_port"] == "465"
     assert body["smtp_pass"] == SMTP_PASS
     assert body["site_url"] == "https://zeropage-studio.fly.dev"      # no trailing slash
     assert body["rate_limit_email_sent"] == 100

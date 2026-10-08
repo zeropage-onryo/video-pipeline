@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import auth
 from app.main import app
-from src import creative_guide
+from src import charge, creative_guide
 from src import personal_models as pm
 
 
@@ -149,6 +149,9 @@ def test_personal_reply_validation_and_history(monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(auth, 'current_user', lambda request: {'id': 'alice'})
+    # the account here is a made-up id with no plan and no balance: the
+    # Create gate (tested in test_spend_gates.py) is held open
+    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
     app.dependency_overrides[auth.current_account_id] = lambda: 12
     return TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
 

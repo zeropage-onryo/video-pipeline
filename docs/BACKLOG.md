@@ -72,7 +72,9 @@ STATUS (2026-08-12): YouTube + Instagram half shipped. `src/refresh_metrics.py`
 sweeps every posted video per platform (never-raises) and then runs
 `promote_winners --auto`; it's wired as step 1 of `run_morning_prompts.sh`, so
 the nightly job now does refresh metrics → promote winners → generate grounded
-concepts, with no manual step. Still open:
+concepts, with no manual step. (2026-10-07: that script and `src/nightly.py` are
+deleted -- unscheduled since 2026-09-28 -- so `python -m src.refresh_metrics` is
+run by hand; it still runs `promote_winners --auto` itself.) Still open:
 
 - **Facebook** — no module yet. Needs a `facebook.py` wired into the same
   metrics/RAG loop (behind the `refresh_metrics` stub already in place), plus a
@@ -449,8 +451,10 @@ as what it was, plus the five raw sites and the research agent. `src/costs.py`
 answers the four questions; `/costs` (dev) and `GET /api/costs` show them. The
 honest check -- one real night of the graph, metered on a copy of the live
 database -- is in the shipping commit's message; compare it against the Google
-Cloud console for that window before trusting the price table. Embeddings are
-deliberately not metered. The original entry, for the record:
+Cloud console for that window before trusting the price table. Embeddings were
+deliberately not metered at first; they are since 2026-10-08, with the story
+judge, fal Whisper and Serper (`docs/tasks/task-spend-holes-and-credits.md`).
+The original entry, for the record:
 
 Full write-up: `docs/tasks/task-cost-tracker.md` — a 4–5 hour block. The two
 findings that shape it: `tool_scoreboard` and `attempts_to_keeper` already
@@ -1077,8 +1081,8 @@ hand-editing a single shot turns out to be what Mike actually reaches for. What 
 `workflow_runner` gains a `part` on the image and video nodes (today it has none — the
 runner renders the shot, full stop), `seedScene` takes a part and seeds from
 `timeline.render_prompt(part, tl)` with the part's refs and still, the dock lists the parts
-under the scene, and `FLOWS.md` says so. The vanilla `genspace.js` is the reference
-implementation and would follow.
+under the scene, and `FLOWS.md` says so. The vanilla `genspace.js` was deleted on
+2026-10-07, so only the React canvas needs it.
 
 ## 18. A render that fails at the provider submit leaves no `generations` row  (found 2026-09-18, FIXED 2026-09-21)
 
@@ -1228,3 +1232,34 @@ gpt"), from its fal page via search: medium quality is $0.053 at 1024x1024 and $
 portrait size -- confirm it on the page. `quality` is sent as `medium` on purpose (fal
 defaults to high, roughly four times the price). The exact `image_size` enum strings are
 what the page text named; the live /api schema is still the thing to glance at.
+
+
+## 24. A trial account can think forever  (found 2026-10-07, DEFERRED -- Mike, 2026-10-08: "skip 1b for now")
+
+Part 1b of `docs/tasks/task-spend-holes-and-credits.md`, the one part not built.
+Every route that spends model text now asks `charge.create_refusal`, which passes
+whenever an account has a plan OR `available > 0`. A new open sign-up gets 100
+trial credits, so it may run unlimited Creates and Guide turns on the studio's
+Gemini key until it spends those credits on a still -- which it never has to do.
+On 2026-10-07's numbers a Guide turn is ~0.4 cents on Flash and ~1.5 cents on
+Pro, a Create with its timeline ~4 cents; a script could spend dollars an hour.
+
+Two ways to close it, as planned:
+
+- **A. A daily "included thinking" allowance (recommended; keeps Create free
+  per click).** `Plan.included_llm_usd_day` -- suggested $0.25 with no plan,
+  $1 Starter, $2.50 Creator, $6 Studio, under 20% of each plan's price used
+  daily; `ZEROPAGE_INCLUDED_LLM_USD` for the no-plan default. `create_refusal`
+  refuses once `spend.spent_today(account_id=)` reaches it, with a 402
+  `daily_thinking_used` the UI words differently from "top up" ("resets at
+  midnight UTC · Upgrade"). Exempt and unowned accounts untouched, fails open on
+  a read error. Needs `CREATE INDEX IF NOT EXISTS idx_llm_calls_account_day ON
+  llm_calls (account_id, created_at)` in `spend.SCHEMA` (the only index today is
+  on `run_id`). The meter it would read now includes embeddings, the story
+  judge, Whisper and Serper (2026-10-08), so the allowance would see all of it.
+- **B. Charge credits for thinking.** Debit after each `record_call`. Reverses
+  the 2026-09-29 "Create is free" call, puts a price on every chat turn, and
+  needs a post-spend debit path the ledger does not have (holds are pre-spend
+  by design).
+
+Open: A or B, and the four numbers.

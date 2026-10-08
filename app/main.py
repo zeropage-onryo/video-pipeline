@@ -54,6 +54,7 @@ from src import (
     ledger,
     locations,
     manual_lane,
+    mcp_connections,
     preprod,
     rag,
     render_assets,
@@ -71,7 +72,7 @@ from src import (
 from src.cut import moments as cut_moments
 from src.cut import store as cut_store
 
-from . import api, auth, jobs, mcp_auth, mcp_mount, seo
+from . import api, auth, jobs, mcp_auth, mcp_mount, oauth_consent, seo
 from . import billing as billing_routes
 from .sparkline import render_sparkline
 
@@ -169,7 +170,10 @@ def retire_gold_standard():
 # served open when ZEROPAGE_MCP_TOKEN is unset -- see app/mcp_mount.py.
 # jobs.start/jobs.get are injected because src/ never imports app/.
 MCP_APP, MCP_SESSIONS = mcp_mount.build(
-    dsn=None, start_job=jobs.start, job_status=jobs.get
+    dsn=None, start_job=jobs.start, job_status=jobs.get,
+    # the priced approves, as callables: the MCP `approve` tool runs the
+    # same bodies the Queue's buttons post to (2026-10-07)
+    approve_render=api.approve_render, approve_keyframes=api.approve_keyframes,
 )
 
 
@@ -196,6 +200,7 @@ async def lifespan(app: FastAPI):
         settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
         fal_requests.init()  # fal's queue receipts, persisted at submit
         assistant_store.init()  # the pill's persona, project and Keep clicks
+        mcp_connections.init()  # who connected Claude, for the account menus' panel
         # A deploy restarts this process mid-render and app/jobs.py's
         # threads die with it (2026-09-26: #121 and #135 orphaned). The
         # sweep reattaches to any fal job whose worker stopped beating and
@@ -334,6 +339,8 @@ if MCP_APP is not None:
         return JSONResponse(mcp_auth.protected_resource_metadata())
 app.include_router(api.router, dependencies=[Depends(auth.require_user_api)])
 app.include_router(auth.router)
+# the OAuth consent step Supabase's OAuth server sends a connector's user to
+app.include_router(oauth_consent.router)
 # Stripe's webhook: outside /api, because Stripe cannot sign in -- its
 # authentication is the signature over the raw body (app/billing.py)
 app.include_router(billing_routes.webhook)
@@ -367,11 +374,24 @@ def signin_showcase() -> list[dict]:
 # (web/src/content/landing-media.ts), under the landing hero's four steps
 # (hero-media.ts HERO_STEPS) -- so the door looks like the site the person
 # just left, and never shows stock or a mock-up.
-_R2_NANO = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/renders/nano"
+# They live under account 1's tenant prefix (`m/1/...`, the 2026-09-15
+# media migration); the flat `renders/nano/...` keys this pointed at are
+# gone from the bucket and 404'd on this page until 2026-10-07. Absolute
+# keys rather than media.url_for, so the door does not depend on which
+# rung of ZEROPAGE_MEDIA the serving machine is on.
+#
+# 2026-10-07 (Mike's pick off a contact sheet): two product ads first, then
+# two cinematic keyframes, so the door shows both kinds of work the studio
+# makes and opens on something bright rather than the creature. The ads are
+# the made-up products on the /make page's wall (SOLÈNE perfume, KUMO
+# matcha), served from the public site -- never the four real-brand stills
+# on that wall, which on a sign-in page would read as endorsements.
+_R2_NANO = "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/m/1/renders/nano"
+_ADS = "https://zeropage.studio/make/ai-product-ad-generator"
 SIGNIN_SHOWCASE_DEFAULT: list[dict] = [
-    {"label": "Bring a spark", "image": f"{_R2_NANO}/c361-20260911-161358.png"},
-    {"label": "Write the scene", "image": f"{_R2_NANO}/c351-20260910-135712.png"},
-    {"label": "Pick the frame", "image": f"{_R2_NANO}/c353-20260909-181442.png"},
+    {"label": "Bring a spark", "image": f"{_ADS}/fragrance.jpg"},
+    {"label": "Write the scene", "image": f"{_ADS}/matcha.jpg"},
+    {"label": "Pick the frame", "image": f"{_R2_NANO}/c361-20260911-161358.png"},
     {"label": "Render the clip", "image": f"{_R2_NANO}/c348-20260908-073120.png"},
 ]
 
@@ -389,7 +409,7 @@ def _site_origin(url: Optional[str]) -> Optional[str]:
 def signin(request: Request, error: Optional[str] = None,
            mode: Optional[str] = None, email: Optional[str] = None,
            next: Optional[str] = None, step: Optional[str] = None,
-           open: Optional[str] = None):
+           open: Optional[str] = None, notice: Optional[str] = None):
     """The one door (2026-09-24, InVideo's shape): Google / Discord /
     Apple, or an email that gets a one-time code. Logging in and signing
     up are the same form -- `mode=signup` only changes the heading -- and
@@ -404,8 +424,12 @@ def signin(request: Request, error: Optional[str] = None,
     it is never an open redirect."""
     if next:
         request.session["post_login_redirect"] = next
+    # A sign-in FOR an OAuth consent needs a fresh Supabase session even
+    # when our own cookie is good (app/oauth_consent.py), so it skips the
+    # already-signed-in shortcut and the page says why it is asking.
+    consenting = oauth_consent.pending(request) is not None
     user = auth.current_user(request)
-    if user:
+    if user and not consenting:
         # somebody who signed in while the door was invite-only has a
         # session and no workspace; walking through it now makes one
         auth._provision(user["id"], user.get("email"), user.get("display_name"))
@@ -429,7 +453,10 @@ def signin(request: Request, error: Optional[str] = None,
     return templates.TemplateResponse(
         request, "signin.html",
         {"error": error, "mode": mode if mode in ("signin", "signup") else "signin",
-         "email": email, "step": screen,
+         "email": email, "step": screen, "consenting": consenting,
+         # the code step's own line, when the door that sent the code has
+         # something to say about it (a sign-up: the code confirms the address)
+         "notice": notice if screen == "code" else None,
          # the terms and privacy pages live on the public site (web/), the
          # origin STUDIO_URL names; no front end, no legal line
          "site_url": _site_origin(auth.studio_url()),
@@ -690,8 +717,8 @@ def _week_starts(weeks: int = DISTRIBUTION_WEEKS) -> list:
 
 
 def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) -> dict:
-    """Posts per week per brand per platform, cost per post, and last
-    night -- read-only, and every part of it degrades rather than 500s.
+    """Posts per week per brand per platform, and cost per post --
+    read-only, and every part of it degrades rather than 500s.
 
     Only PIPELINE posts count. `videos.legacy` marks the hand-made
     uploads that predate the loop (db.add_legacy_column), and counting
@@ -699,17 +726,13 @@ def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) ->
     so the query carries db.excludes_legacy's predicate, the same one
     the teaching readers use, rather than a second hand-rolled filter
     that could disagree with it.
-
-    `nightly_runs` is queried through to_regclass because another agent
-    is landing that table in parallel: absent, the line is simply not
-    shown, and the page is correct either way.
     """
     starts = _week_starts(weeks)
     since = starts[0].isoformat()
     dist = {
         "weeks": [{"start": s.isoformat(), "label": s.strftime("%b %-d")} for s in starts],
         "rows": [], "posts": 0, "since": since,
-        "spend_usd": 0.0, "cost_per_post": None, "nightly": None,
+        "spend_usd": 0.0, "cost_per_post": None,
         "available": True,
     }
 
@@ -732,11 +755,6 @@ def _distribution(account_id: Optional[int], weeks: int = DISTRIBUTION_WEEKS) ->
                     if start.isoformat() <= r["day"] < end.isoformat():
                         bucket[i] += 1
                         break
-            if db.table_exists(conn, "nightly_runs"):
-                night = conn.execute(
-                    "SELECT * FROM nightly_runs ORDER BY started_at DESC LIMIT 1"
-                ).fetchone()
-                dist["nightly"] = dict(night) if night else None
     except Exception:
         dist["available"] = False
         return dist

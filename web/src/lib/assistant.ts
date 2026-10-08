@@ -32,10 +32,12 @@ export const STAGE_LABEL: Record<Stage, string> = {
 const PAGE_STAGE: [string, Stage][] = [
   ["/studio/queue", "clips"],
   ["/studio/assets", "stills"],
-  ["/studio/flows", "shots"],
+  // a project's workspace and a scene's canvas: the shot tree is open
+  ["/studio/projects/", "shots"],
+  ["/studio/scene", "shots"],
   ["/studio/references", "references"],
   ["/studio/elements", "cast"],
-  ["/studio/pipeline", "story"],
+  ["/studio/projects", "story"],
   ["/studio", "brief"],
 ];
 export const pageStage = (path: string): Stage =>
@@ -43,10 +45,11 @@ export const pageStage = (path: string): Stage =>
 export const PAGE_NAME: [string, string][] = [
   ["/studio/queue", "Queue"],
   ["/studio/assets", "Assets"],
-  ["/studio/flows", "Director"],
+  ["/studio/projects/", "Project"],
+  ["/studio/scene", "Scene"],
   ["/studio/references", "References"],
   ["/studio/elements", "Elements"],
-  ["/studio/pipeline", "Pipeline"],
+  ["/studio/projects", "Projects"],
   ["/studio", "Studio"],
 ];
 export const pageName = (path: string) => PAGE_NAME.find(([p]) => path.startsWith(p))?.[1] ?? "Studio";
@@ -306,4 +309,28 @@ export function takePendingFill(): Fill | null {
   } catch {
     return null;
   }
+}
+
+
+/* ── save_as_project (2026-10-07) ──
+   "Make this a project" turns the conversation into one: the server copies
+   these turns into the new project's chat history and files the scenes the
+   thread's sends made under it. A turn is {role, content, tool_calls?}; the
+   box's own sends are user turns like any other (their words were said),
+   and what each made is its concept id. A failed turn was never answered,
+   so it is left out. */
+const KEPT_EXTRAS = ["choices", "questions", "directions", "nudge", "stage", "brief"] as const;
+export function asProjectConversation(turns: Turn[]) {
+  const conversation = turns
+    .filter((t) => !t.failed && t.content.trim())
+    .map((t) => {
+      const extras: Record<string, unknown> = {};
+      for (const k of KEPT_EXTRAS) {
+        const v = t.reply?.[k];
+        if (v && (!Array.isArray(v) || v.length)) extras[k] = v;
+      }
+      return { role: t.role, content: t.content, ...(Object.keys(extras).length ? { tool_calls: extras } : {}) };
+    });
+  const scenes = [...new Set(turns.map((t) => t.made?.conceptId).filter((id): id is number => typeof id === "number"))];
+  return { conversation, scenes };
 }

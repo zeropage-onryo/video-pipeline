@@ -89,22 +89,27 @@ venv/bin/python -m ops.ig_tokens refresh|publish
 venv/bin/python -m ops.ig_tokens keep [--days 30]
 venv/bin/python -m ops.ig_tokens research --app-id <research app id>
 
-# THE NIGHTLY WALK IS NOT SCHEDULED (2026-09-28, Mike's call). The Mac's
+# THE NIGHTLY WALK IS GONE. Unscheduled 2026-09-28 (Mike's call: the Mac's
 # com.zeropage.morningprompts and com.zeropage.shadowrun agents were unloaded
-# and renamed .disabled.20260928 in ~/Library/LaunchAgents (nothing in the
-# repo installs a LaunchAgent any more), and the Fly cron line that called
-# run_morning_prompts.sh -- which never once ran there: its first line cds
-# into the Mac's folder -- was replaced by the token keeper. Concept walks,
-# the research agent, the scout crawl and the metrics sweep now run only by
-# hand: `src.nightly walk`, `src.research_agent`, `src.scout run`,
-# `src.refresh_metrics`. Everything below that says "the nightly" or "the
-# night" describes those commands, not a schedule.
+# and renamed .disabled.20260928 in ~/Library/LaunchAgents, and the Fly cron
+# line that called run_morning_prompts.sh was replaced by the token keeper),
+# then DELETED 2026-10-07 (Mike's call): src/nightly.py, run_morning_prompts.sh,
+# ops/fly/run-nightly.sh + nightly.md, the db.nightly_runs receipt and its
+# "Last night" line on the Dev Studio, costs.spent_since. The live Postgres
+# nightly_runs table (18 rows, 2026-09-08..09-27) was dropped the same day,
+# after the deploy that stopped creating it. classify_error
+# (SYSTEMIC / CONTENT) moved to src/trigger.py, its one remaining caller.
+# The research agent, the scout crawl and the metrics sweep run only by hand:
+# `src.research_agent`, `src.scout run`, `src.refresh_metrics`. Everything
+# below that says "the nightly" or "the night" is history, or means a graph
+# run nobody is watching (`src.trigger`, the MCP `generate`).
 
 # THE SHADOW RUN — one run, spark rotated from prompts/sparks.txt. MANUAL
 # ONLY: nothing schedules this. The 03:30 launchd job was removed
 # 2026-09-14 because it took neither the nightly lock nor the budget, so it
-# ran an eleventh time beside the 22:00 walk. `src.nightly walk` is the
-# batch door; this is the one-run door into the same graph.
+# ran an eleventh time beside the 22:00 walk. With the walk deleted
+# (2026-10-07) this is the CLI door into the graph; exit 2 means the crash
+# was systemic (trigger.classify_error), 1 that it was about the concept.
 # Grading happens on /holds each morning. --scout takes the direction from
 # the scout's bank instead, falling back to the rotation when the bank is
 # empty or under scout.SCORE_FLOOR.
@@ -551,7 +556,11 @@ key scheme and of the read-time mint; `storage.py` stays the boto3 layer and
   works on a card it has already drawn. The way to get both is a Worker on the custom domain
   validating a token against an R2 binding — deliberately not built until a bill says to.
 - **Migrated 2026-09-15**: 303 objects copied (139 to account 1, 164 to the shared bin), 185
-  derivatives built, all 364 legacy keys left in place, `ZEROPAGE_MEDIA=tenant` locally. 61
+  derivatives built, all 364 legacy keys left in place at the time, `ZEROPAGE_MEDIA=tenant`
+  locally. **The legacy keys did NOT stay:** on 2026-10-07 every flat `renders/nano/c<id>-...png`
+  404'd while the same still answered under `m/1/renders/nano/`, so anything hard-coding a flat
+  key (the sign-in showcase, `web/src/content/landing-media.ts`) had to move to the tenant
+  prefix. Never write a new flat-key URL; ask `media.url_for`, or use the `m/<account>/` key. 61
   objects were left where they are because NOTHING in the database references them — three prop
   folders whose rows are gone, and superseded nano keyframes. Verified by fetching: a 2,258,681
   byte location photo now draws as a 33,533 byte tile.
@@ -623,7 +632,9 @@ a tighten-don't-summarise instruction that names those four categories as untouc
 the output constraints → style → texture → blocking, and forbids "cinematic"/"masterpiece"
 padding. The test asserts what it protects, not its wording.
 
-**One idea box, one board, one spend gate (2026-08-28, Mike's call.)** Scenes and
+**One idea box, one board, one spend gate (2026-08-28, Mike's call.)** *(The board half is
+superseded since 2026-10-07: the Pipeline and Director tabs were folded into ONE PROJECTS BOARD,
+below. The Queue as the one spend gate is unchanged.)* Scenes and
 concepts were never two things — a concept IS one scene IS one prompt, one
 `shoot_concepts` row — so keeping them as two Pipeline tabs meant two places to look for
 the same card. The three surfaces are now split by *what you are doing*, not by what the
@@ -724,7 +735,12 @@ one, both survive — but with approval *as* the pick, approving take 1 archives
 out from under you, and racily, since it ran after Runway returned ~90s later.
 `preprod.archive_batch` stays as a tested helper with no caller.
 
-**The night does the rest (2026-08-29, Mike's call.)** Enhancing, keyframing and
+**The night does the rest (2026-08-29, Mike's call.)** *(Read as history: NOTHING IS SCHEDULED
+since 2026-09-28, and the walk itself was deleted 2026-10-07 -- "the nightly graph" is now
+`src.trigger` run by hand -- the
+night draws no stills since 2026-09-08 and posts nothing, `autopilot.AUTO_POST_BRANDS` being
+empty. The Fly image's one cron line is the Instagram token keeper; keep it that way unless Mike
+asks for a walk back.)* Enhancing, keyframing and
 rendering happen in the **Director canvas** when Michael is steering a scene, and in the
 **nightly graph** when nobody is. `src/scene_chain.py` holds one implementation of each
 stage — `ground`, `write_scenes`, `plan_timeline`, `persist_prompt`, `keyframe_scene`,
@@ -768,8 +784,9 @@ already has a `reference_image` (re-picking must not re-bill, and Director's own
 the one a person chose) and `ZEROPAGE_KEYFRAME_ON_PICK=0` turns it off. `NANO_DAILY_CAP` is
 60: a pick draws one still per SHOT of a timed scene (one per beat of a one-window scene),
 not one per scene.
-**A walk is 5 sparks × 2 brands = 10 runs** (`NIGHTLY_SPARKS`, cut from every line of
-sparks.txt — 20 — on the same day, "we'll increase it once I see it gets better").
+**A walk was 5 sparks × 2 brands = 10 runs** (`NIGHTLY_SPARKS`, cut from every line of
+sparks.txt — 20 — on the same day, "we'll increase it once I see it gets better"; the walk
+was deleted 2026-10-07).
 The historical note: while the night did draw, only a scene whose prompt cleared the judge
 (`score_prompts`, bar `prompt_gate_min`, fails closed) earned an image, and a keyframe that
 failed parked the scene as text-to-video with the reason on its card.
@@ -886,7 +903,7 @@ a spark (typed, or scouted)  +  reference IMAGES  +  RAG library  +  brand brief
                                                   |
                         no refs? -> archived immediately (preprod.NO_REFERENCE, never boards)
                                                   |
-              Pipeline board: Pick (draws the keyframe) / Not this one (archives + reason)
+     a project's workspace (or a solo scene's canvas): Pick / Not this one (archives + reason)
                                                   |
                           Queue: Approve -> THE ONLY PLACE MONEY IS SPENT
                                                   |
@@ -1227,6 +1244,12 @@ is yours, in Resolve, by hand.
   survives. `refine_shot_prompt` is per-shot technique polish via `promptgen.
   refine_prompt` against the `ai_prompting` shelf; the template is
   `prompts/direct_prompt.txt`.
+- **The vanilla Gen Space was DELETED on 2026-10-07 (Mike's call).** `genspace.js`, the
+  `/ui` shell's Director view, its bar controls, its node-editor modal and their CSS are gone;
+  the Director is the React studio's (`web/`, inside each project's workspace), and every "Open
+  in Director" on `/ui` goes through `shared.openConceptInDirector`, which hands the scene to
+  `DIRECTOR_FRONTEND_URL`. The backend it drove (`app/workflow_runner.py`, the `/api/workflows`
+  routes, the LiteGraph-shaped JSON) stays: the React canvas uses it. The history follows.
 - **The Director canvas is the Gen Space (2026-09-10, from the "ZPF Gen Space" design;
   the shape LTX Studio's gen space has).** `app/static/zpf/genspace.js` replaced
   `workflows.js` and the vendored LiteGraph: ONE shot's chain drawn as DOM cards on an
@@ -1311,7 +1334,8 @@ is yours, in Resolve, by hand.
   `/api/scene-lengths`, `/api/render-choices`, `/api/creative-guide` and the guide mode
   exist only as uncommitted work in the main checkout's overnight branch, and the Next
   composer shows those pills only when the routes answer. The vanilla Gen Space on `/ui`
-  stays as the reference implementation the React one was ported from.
+  stayed as the reference implementation the React one was ported from until it was deleted
+  on 2026-10-07.
 - **The overnight session's working tree landed on main (2026-09-12, second
   reconcile).** Everything that had sat uncommitted in the main checkout on
   `claude/overnight-20260907` -- the creative guide (`src/creative_guide.py`,
@@ -1335,8 +1359,9 @@ is yours, in Resolve, by hand.
   `/ui` hands a PLANNED concept to the React Director: `DIRECTOR_FRONTEND_URL`
   (fly.toml points it at `zeropage-web.fly.dev/studio/flows`; locally it
   defaults to `:3000`) reaches the body as `data-director-url`, and
-  `genspace.openConceptInDirector` redirects there unless `?legacy=1` asks for
-  the vanilla canvas -- ported from the `workflows.js` edit, since that file
+  `genspace.openConceptInDirector` redirected there unless `?legacy=1` asked for
+  the vanilla canvas (since 2026-10-07 `shared.openConceptInDirector` always hands over; the
+  vanilla canvas is deleted) -- ported from the `workflows.js` edit, since that file
   no longer exists. The Generate node's gate note reads `video.generate`
   (any keyed renderer), not Runway's key alone.
 - **Assets and Elements are two things, not four chips on one wall (2026-09-18, Mike's
@@ -1514,6 +1539,50 @@ is yours, in Resolve, by hand.
   (the operator's key), and the end-to-end test drives the REAL streamable-HTTP
   app with two callers and asserts each resolved its own id. Deleting the
   ContextVar branch makes exactly that test fail, which is the point of it.
+  **THE LISTED SERVER (2026-10-07, Mike's calls; docs/directory/).** For the
+  Claude directory listing the mount builds TWO servers and `guarded` routes
+  by door: the operator's static key reaches the full server exactly as
+  before, a signed-in person reaches `build_server(listed=True)`, which
+  registers `mcp_server.LISTED_TOOLS` only -- `board`, `idea`, `search`,
+  `capture`, `pick`, `shoot`, `archive`, `stats`, `elements`, `write_scene`,
+  `quote`, `approve`, `job`. Never the engine tools (whatever the flag says),
+  never the spark bank (`scout_findings` / `scout_bin` are SHARED tables and
+  one person's directions must not be listed to another), never
+  `images_for` / `reference` / `imagine_reference`. **Claude does the ideation
+  in the chat and the MCP renders**: `elements` lists the account's
+  characters/props/places with photo refs; `write_scene` saves a chat-written
+  prompt onto an idea as the one AI shot every reader already understands,
+  accepts only refs `elements` issued (a URL, a guess, another account's photo
+  are all refused), asks `preprod.reference_gate` BEFORE writing, and turns
+  timed windows into the timeline through `timeline.fallback` -- the split
+  with no model call, stamped `source` so `ensure` never re-plans it; `quote`
+  is `pricing.display` for the clip plus `scene_chain.keyframe_quote` for the
+  stills beside the balance; `approve` (`what` = keyframes | clip, the quote's
+  tokens, the renderer choice; `destructiveHint: true`) runs the Queue's OWN
+  approve bodies, lifted into `app.api.approve_keyframes` / `approve_render`
+  (the routes wrap them; `src/approvals.ApproveRefused` is what both doors
+  raise) and injected into the mount like `start_job` -- so the chat and the
+  Queue card are one body and cannot drift. Every tool is published from
+  constants (`TITLES` / `DESCRIPTIONS` / `HINTS`, screened for operator
+  vocabulary by a test), the mount carries a per-account fixed-window rate
+  limit (`ZEROPAGE_MCP_RATE` 120/min, `ZEROPAGE_MCP_RATE_OPERATOR` 1200/min,
+  in-process: one Fly machine), `mcp_auth.verify` checks `iss`, and a sign-in
+  with no workspace is told to sign in once at `ZEROPAGE_SIGNUP_URL` (the
+  connector never creates one). **The consent page is ours** (same day,
+  `app/oauth_consent.py`): Supabase's OAuth server redirects the person to
+  `<Site URL>/oauth/consent?authorization_id=` (the dashboard's
+  Authorization Path) and waits for the app to answer AS THE PERSON; this
+  app keeps no Supabase token, so the page sends them through `/signin`
+  and `auth._finish` hands back to it holding that sign-in's token for the
+  one decision (`oauth_consent.resume`, a CSRF value beside it, a pending
+  consent forgotten after 15 minutes). The page names the client and the
+  redirect HOST, warns on a loopback one, and 303s only to an http(s)
+  `redirect_url`. Signing in there creates the workspace, which is how
+  "sign in once on the web" is met on the way. **The one thing the listing
+  still risks:** the directory's checklist refuses connectors that
+  "generate images, video, or audio through AI models", which `approve`
+  does on purpose (Mike's call; `docs/directory/RENDER_DESIGN.md`). The public plugin bundle lives in its own repo beside
+  the main checkout (`../zeropage-studio-plugin`, five skills, MIT).
   **The audience is checked, twice over**: a token minted for another resource
   server must not work here, so `verify` accepts only `aud` = this server's
   canonical URI (`ZEROPAGE_MCP_RESOURCE`, set in fly.toml because `SITE_URL` is
@@ -1521,6 +1590,32 @@ is yours, in Resolve, by hand.
   document is built off that same resource URI rather than `SITE_URL`, or the
   deployed document would publish a localhost resource and discovery would fail
   with nothing to read.
+  **"Connect to Claude" in the account menus (2026-10-08, Mike: "access the MCP
+  from the studio page at the bottom near profile").** Both menus (the rail's
+  profile row and the header avatar) share one `MenuTail` in `shell.tsx`, so
+  they cannot drift; the item opens `components/studio/connect-claude.tsx`.
+  NOTHING ON OUR SIDE CONNECTS ANYBODY: a connector is added from claude.ai,
+  which starts the OAuth flow, and the consent page is where the person says
+  yes. The panel is the address to paste (`/api/me`'s `mcp_url` =
+  `mcp_auth.connector_url()`, i.e. `resource_url()` when the mount is on AND
+  Supabase is configured, else null and the panel says the connector is off),
+  three steps, and a button to `claude.ai/customize/connectors`. claude.ai has
+  no documented deep link that pre-fills a custom connector (checked
+  2026-10-08), so it is copy and paste; once listed, set
+  `ZEROPAGE_CLAUDE_DIRECTORY_URL` (only `https://claude.ai/...` is published)
+  and the steps collapse to one button at the listing. **Connected** comes
+  from `src/mcp_connections.py` (OWNED `mcp_connections`, one row per account
+  × person × client, Mike's call over two columns on `accounts`): the consent
+  page records `client_name` + redirect host on Allow (the GET parks them in
+  the grant; a failed write never blocks the redirect), and `mcp_mount.guarded`
+  stamps `last_used_at` on the LISTED door only -- at most once per account ×
+  person per 10 minutes (`UseStamps`, in-process; a failed write is logged,
+  never the call's error), and never for the operator's static key. A use with no
+  approval on file writes a client-less row (a working token proves a
+  connection). `GET /api/mcp/connection` answers for the caller's tenant and
+  person only. Disconnect is claude.ai's -- Supabase's grant list needs the
+  person's own token, which this app never keeps -- so the panel says where to
+  remove it and nothing here deletes a row.
   `.claude/skills/idea-agent/` is the agent that drives these tools — and its first move is
   reading the board, not generating: a run that adds four concepts to eleven unreviewed ones
   buried the decision that was already the bottleneck.
@@ -1662,11 +1757,11 @@ is yours, in Resolve, by hand.
   insight metric names shift between Graph versions, so verify on bump. A `/reel/<shortcode>`
   permalink does **not** contain the numeric media id; store `ig://<media_id>` (or the raw id) in
   a video's url for refresh to work, or pass a `media_id` key. Token refresh (long-lived tokens
-  expire ~60 days) is built (2026-09-21, BACKLOG #4), and since 2026-09-26 the nightly
-  preflight also checks BOTH tokens read-only (`instagram.token_health`: IG_ACCESS_TOKEN by
-  `/me`, IG_GRAPH_TOKEN by `debug_token`) and logs `!!! INSTAGRAM TOKEN NEEDS YOU` naming the
-  token and the fix -- never a reason to stop the walk. The nightly sweep's Instagram pass calls
-  `refresh_token_step` first and prints the days left, loudly on stderr when it needs a person.
+  expire ~60 days) is built (2026-09-21, BACKLOG #4). `instagram.token_health` checks BOTH
+  tokens read-only (IG_ACCESS_TOKEN by `/me`, IG_GRAPH_TOKEN by `debug_token`); its caller is
+  `ops.ig_tokens check` (the nightly preflight that also logged it went with the walk,
+  2026-10-07). `src.refresh_metrics`'s Instagram pass calls `refresh_token_step` first and
+  prints the days left, loudly on stderr when it needs a person.
   `.env` is never written -- a NEW token Meta issues is kept in `data/ig_token.json`
   (`IG_TOKEN_STORE` overrides) beside a fingerprint of the `.env` token it replaced, and
   `access_token()`, the one reader, serves it from there exactly while `.env` still holds that
@@ -1751,6 +1846,44 @@ is yours, in Resolve, by hand.
   a bare `scout run` (as the bootstrap account) all ask it; an explicit lane list is honoured
   either way. The MCP tool used to default to its own `LANES`, which ran Instagram for every
   caller and had drifted (named `feeds`, missed `pinterest`); it is `scout.KNOWN_LANES` now.
+- **ONE PROJECTS BOARD (2026-10-07, Mike's calls; `docs/tasks/task-projects-board.md`).** A
+  concept is one scene and a project holds scenes, so the board of PROJECTS replaced both the
+  Pipeline tab and the standalone Director tab. `/studio/projects` is the home (first in the
+  rail, the brand mark and the header's first tab): one card per project -- cover (the newest
+  scene's still, else its first reference, minted through `media.url_for` in `GET /api/projects`),
+  title, one line of brief, scenes / picked / rendered, last touched -- with Archive (hide, keep
+  everything) and **Delete**. **There is no "New project" form**: a project is made only through
+  the Guide -- `guide_tools.PROJECT_TOOLS` (`create_project`, `save_as_project`), write tools in
+  the proposal sense, offered on every local turn, confirmed on a card in the pill or the
+  composer and run by `/creative-guide/act` (`guide_tools.run_project_tool`), which for
+  `save_as_project` takes the client's thread and the concept ids its sends made
+  (`lib/assistant.asProjectConversation`) and files both under the new project. A turn inside a
+  project is told so (`creative_guide.project_note`) and not to propose either.
+  **The workspace** (`/studio/projects/<id>?scene=&shot=`, `components/studio/project-workspace`):
+  the project's scenes on the left (the board's cards narrowed to it: Pick, Not this one, the
+  drawer -- `components/studio/scene-drawer`, moved out of the old Pipeline page), the Director
+  canvas for the selected scene in the centre (the SAME `FlowWorkspace`, told it is embedded
+  through `CanvasNav`: its links stay in the workspace and a scene change goes through its own
+  save first, `registerLeave`), and the brief / look / memory on the right. No second chat: the
+  floating pill IS the Guide, and on a workspace it is scoped to the project
+  (`assistant-thread.tsx`: `turns` are the project's history, each turn posts `project_id` +
+  `remember=1`). **Chat history** is the OWNED `project_messages` table (`src/projects.py`:
+  `append_message`, `messages` paged by id, `copy_messages`), written by the `/creative-guide`
+  route as each turn happens, read by `GET /api/projects/{id}/messages`, never fed to a RAG shelf,
+  kept until the project is deleted. **Delete** (`DELETE /api/projects/{id}`, guarded,
+  `projects.delete`) removes the project, brief, look, memory and history in one transaction and
+  DETACHES its scenes (`project_id` NULL) -- never deletes them, so a rendered clip stays on the
+  Assets wall; the confirm (`components/studio/project-delete`) lists the unrendered scenes
+  that will be left on no board (`GET /api/projects/{id}/scenes`). **A project is not
+  required**: a video made outside one is written with `project_id NULL`, opens on its own canvas
+  at `/studio/scene/<id>` (which redirects into the workspace when the scene IS filed), is picked
+  with the composer's Send to Queue, and once rendered lands on the Assets wall, whose rows now
+  carry `project_id` / `project_title` ("no project" on the detail rail). It never gets a board
+  card. **The old doors redirect** (`web/src/lib/legacy-routes.ts`, tested): `/studio/pipeline`
+  and `/studio/flows` go to the board, `?concept=` to that scene, `?draft` to
+  `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
+  `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
+  still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
 - **`src/projects.py`** + **`src/project_context.py`** — studio PROJECTS (2026-09-28, Mike's
   call, the day ANTIHERO was merged into Zero Page): one brief and one memory per piece of
   work (a client's ad, a short). `projects` is OWNED; `shoot_concepts.project_id` files a
@@ -2164,8 +2297,12 @@ is yours, in Resolve, by hand.
   never raises.** No usage counts = UNPRICED (NULL), never $0; a render with `cost_usd` NULL
   is FREE (subscription), never backfilled. `costs.summary` is the four numbers on `/costs`
   and `GET /api/costs`: cost per kept clip per tool, cost per stage per night, wasted spend,
-  today against the caps. Every figure is an estimate and the page says so; embeddings are
-  not metered.
+  today against the caps. Every figure is an estimate and the page says so. **Since
+  2026-10-08 the meter also covers** embeddings (`rag.embed_texts`, stage `embed`, estimated at
+  four characters a token when the API reports none), the story judge's two raw calls, fal
+  Whisper (priced per AUDIO MINUTE at an unverified third-party rate, `cut/index.
+  WHISPER_USD_PER_MIN`, since fal publishes none) and Serper (per query): the last two hand
+  `record_call` an explicit `cost_usd`, which `reprice` leaves alone.
 - **`src/gemini_utils.py`** — shared `generate_with_retry` (retries on `RESOURCE_EXHAUSTED`/
   `UNAVAILABLE`, falls through to `FALLBACK_MODELS` if the primary model stays down for the whole
   retry budget) and `strip_fences` (strips markdown code fences from model JSON output).
@@ -2321,7 +2458,12 @@ buttons say so and nothing else changes.
 charged the still that drew it, since 2026-09-29); a **Create costs 0** --
 included in the subscription, priced into the plans -- but `charge.create_refusal` refuses
 it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and the MCP
-`research` / `generate` tools ask the same predicate; a new open sign-up gets a one-time
+`research` / `generate` tools ask the same predicate. **Since 2026-10-08 every route that
+spends model text asks it too** (`api._create_gate`: the Guide, the brief draft, an element's
+describe, Direct / Polish, the canvas's Ground / Enhance / Run all, the scout, the evals, the
+cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`); a trial account can
+still think without limit until its credits go (BACKLOG #24, deferred). **The studio shows
+credits, never dollars** (`tests/test_studio_shows_credits.py` guards it); a new open sign-up gets a one-time
 **100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
 everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
 

@@ -54,7 +54,7 @@
    send left running is picked up again on return (its job id is on the turn). */
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowUp,
@@ -81,6 +81,8 @@ import {
   getConceptDetail,
   getPresets,
   getProject,
+  isProjectTool,
+  pickConcept,
   recallActiveProject,
   rememberActiveProject,
   runCreativeGuide,
@@ -89,6 +91,7 @@ import {
   runScenes,
   uploadRefs,
   waitForJob,
+  workspaceHref,
   type Asset,
   type AssetHit,
   type Capabilities,
@@ -107,6 +110,7 @@ import { ELEMENT_KINDS, displayPhoto, drawable, elementKind, isElement, kindLabe
 import {
   FILL_EVENT,
   NEW_SESSION_EVENT,
+  asProjectConversation,
   keepReferences,
   takePendingFill,
   type ContactSheet,
@@ -133,6 +137,7 @@ import {
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
 import "@/components/studio/composer/composer.css";
+import { AssistantAvatar } from "@/components/studio/assistant-avatar";
 
 /* an upload on its way to the bin: drawn from its object URL until the
    server answers with the URL the draft keeps */
@@ -232,7 +237,8 @@ function Composer() {
   const sparkParam = params.get("spark");
   // The thread and the box are the studio's (assistant-thread.tsx): the
   // same turns the pill shows, and a draft that survives leaving the page.
-  const { turns: thread, setTurns: setThread, draft, setDraft, ready, finishProject } = useAssistantThread();
+  const { turns: thread, setTurns: setThread, draft, setDraft, ready, finishProject, clearProject } = useAssistantThread();
+  const router = useRouter();
   const { idea, picked, brief, uploads } = draft;
   const setIdea = useCallback(
     (v: string | ((s: string) => string)) => setDraft((d) => ({ ...d, idea: typeof v === "function" ? v(d.idea) : v })),
@@ -842,6 +848,21 @@ function Composer() {
   }
   const select = (madeId: string, n: number) => patchMade(madeId, { shot: n });
 
+  /* Send to Queue, off a written scene's tiles: the PICK, which is all it
+     is -- approving in the Queue is what renders (2026-10-07). It replaced
+     "Pick on Pipeline": a scene made outside any project has no board, and
+     one inside a project is picked in its workspace or here. */
+  async function sendMadeToQueue(m: Made) {
+    if (!m.conceptId || busy) return;
+    try {
+      await pickConcept(m.conceptId, true);
+      announceQueueChange();
+      toast("In the Queue — approving there renders it");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "That did not go through.", "err");
+    }
+  }
+
   /* The confirm card. Nothing has run until this: the guide's turn
      ended on the proposal, and the click is what posts it. The result
      goes into the thread as the guide's own words, so the next turn's
@@ -856,7 +877,20 @@ function Composer() {
     }
     setBusy(true);
     try {
-      const done = await runGuideAction(proposal);
+      // save_as_project files this conversation and the scenes its sends
+      // made into the new project (2026-10-07); the thread is the project's
+      // history after that, so it is cleared here and opened there
+      const done = await runGuideAction(
+        proposal,
+        proposal.tool === "save_as_project" ? asProjectConversation(thread.slice(0, i)) : undefined,
+      );
+      if (done.project && isProjectTool(proposal.tool)) {
+        setThread((t) => t.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)));
+        toast(`“${done.project.title}” is on the Projects board`);
+        if (proposal.tool === "save_as_project") await clearProject().catch(() => {});
+        router.push(workspaceHref(done.project.id));
+        return;
+      }
       setThread((t) => [
         ...t.map((m, j) => (j === i ? { ...m, decided: "done" as const } : m)),
         { role: "assistant", content: `Done — ${done.result}` },
@@ -1061,6 +1095,7 @@ function Composer() {
                   textarea.current?.focus();
                 },
                 onDecide: decide,
+                onPick: sendMadeToQueue,
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
               }}
@@ -1346,7 +1381,8 @@ function Composer() {
               <span className="spacer" />
               {filledBy && idea.trim() ? (
                 <span className="zpa-filled">
-                  {filledBy.avatar ? `${filledBy.avatar} ` : ""}Filled by {filledBy.name}
+                  {filledBy.avatar ? <AssistantAvatar avatar={filledBy.avatar} size="xs" className="zpa-filled-face" /> : null}
+                  Filled by {filledBy.name}
                 </span>
               ) : null}
               {liveRun ? (

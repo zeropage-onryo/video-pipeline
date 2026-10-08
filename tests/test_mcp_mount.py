@@ -15,7 +15,9 @@ env set the way a real deployment sets it, build() returns an app
 rather than the pair of Nones it returns for every failure.
 """
 import asyncio
+import time
 
+import jwt as pyjwt
 import pytest
 
 from app import mcp_auth, mcp_mount
@@ -175,11 +177,83 @@ def test_a_signed_in_caller_acts_as_their_own_account():
     assert mcp_server.CALLER_ACCOUNT.get() is None
 
 
+# ---------- the last-used stamp (the studio's Connect to Claude panel) ----------
+
+def _person_token(sub="uid-ana"):
+    # the guard reads `sub` only after `resolve` has verified the token,
+    # so an unverified decode is all the stamp needs
+    return pyjwt.encode({"sub": sub}, "k" * 32, algorithm="HS256")
+
+
+def _stamping(resolve, clock):
+    inner, seen = _capturing()
+    stamped = []
+    app = mcp_mount.guarded(inner, "static", resolve=resolve,
+                            limiter=mcp_mount.RateLimiter(),
+                            stamp=lambda account_id, user_id: stamped.append((account_id, user_id)),
+                            stamps=mcp_mount.UseStamps(window_s=600, clock=clock))
+    return app, seen, stamped
+
+
+def test_calls_through_the_listed_door_stamp_once_per_window():
+    now = [1000.0]
+    app, seen, stamped = _stamping(lambda t: (7, "ok"), lambda: now[0])
+    header = f"Bearer {_person_token()}"
+    for _ in range(5):
+        assert _drive(app, header) == 200
+    assert stamped == [(7, "uid-ana")] and seen == [7] * 5
+    now[0] += 601
+    assert _drive(app, header) == 200
+    assert stamped == [(7, "uid-ana"), (7, "uid-ana")]
+    # a second person on the same account has their own window
+    assert _drive(app, f"Bearer {_person_token('uid-cleo')}") == 200
+    assert stamped[-1] == (7, "uid-cleo")
+
+
+def test_the_operator_key_stamps_nothing():
+    app, seen, stamped = _stamping(lambda t: (7, "ok"), lambda: 0.0)
+    for _ in range(3):
+        assert _drive(app, "Bearer static") == 200
+    assert stamped == [] and seen == [None] * 3
+
+
+def test_a_refused_caller_stamps_nothing():
+    app, seen, stamped = _stamping(lambda t: (None, "invalid_token"), lambda: 0.0)
+    assert _drive(app, f"Bearer {_person_token()}") == 401
+    app, seen, stamped2 = _stamping(lambda t: (None, "no_account"), lambda: 0.0)
+    assert _drive(app, f"Bearer {_person_token()}") == 403
+    assert stamped == stamped2 == []
+
+
+def test_a_stamp_that_fails_never_fails_the_call():
+    inner, seen = _capturing()
+
+    def broken(account_id, user_id):
+        raise RuntimeError("database is down")
+
+    app = mcp_mount.guarded(inner, "static", resolve=lambda t: (7, "ok"),
+                            limiter=mcp_mount.RateLimiter(), stamp=broken,
+                            stamps=mcp_mount.UseStamps())
+    assert _drive(app, f"Bearer {_person_token()}") == 200
+    assert seen == [7]
+
+
 def test_a_sign_in_with_no_membership_is_403_not_somebody_elses_board():
     inner, seen = _capturing()
     app = mcp_mount.guarded(inner, "static", resolve=lambda t: (None, "no_account"))
     assert _drive(app, "Bearer valid-but-unaffiliated") == 403
     assert seen == []
+
+
+def test_the_403_says_to_sign_in_once_on_the_web(monkeypatch):
+    """Mike's call (2026-10-07): the connector never creates a workspace;
+    one web sign-in does. The refusal has to say that, with the address,
+    rather than 'ask to be invited' (wrong under open sign-up)."""
+    monkeypatch.delenv(mcp_mount.SIGNUP_ENV, raising=False)
+    assert "https://zeropage.studio" in mcp_mount.no_account_detail()
+    assert "invited" not in mcp_mount.no_account_detail()
+    monkeypatch.setenv(mcp_mount.SIGNUP_ENV, "https://studio.example.com")
+    assert "https://studio.example.com" in mcp_mount.no_account_detail()
 
 
 def test_an_unverifiable_token_is_401_and_never_reaches_the_server():
@@ -277,3 +351,554 @@ def test_the_document_is_built_off_the_resource_not_off_site_url(monkeypatch):
     assert doc["resource"] == "https://zeropage-studio.fly.dev/mcp"
     assert "127.0.0.1" not in mcp_auth.metadata_url()
     assert "127.0.0.1" not in doc["resource_documentation"]
+
+
+# --------------------------------------------------------------------------
+# THE DIRECTORY LISTING (2026-10-07, docs/tasks/task-directory-listing.md)
+#
+# A listed connector is reached by strangers. Three things have to be true
+# that one operator never needed: a token minted for somebody else's
+# resource, or by somebody else's issuer, or yesterday, is refused; one
+# caller cannot flood the process that serves everybody; and user A cannot
+# read, write or even confirm the existence of user B's rows, through the
+# REAL transport, tool by tool.
+# --------------------------------------------------------------------------
+
+JWT_SECRET = "test-secret-" * 4
+RESOURCE = "https://zeropage-studio.fly.dev/mcp"
+ISSUER = "https://proj.supabase.co/auth/v1"
+
+
+@pytest.fixture
+def hs256(site):
+    """The HS256 path: the project's shared JWT secret is configured."""
+    site.setenv("SUPABASE_JWT_SECRET", JWT_SECRET)
+    return site
+
+
+def _token(secret=JWT_SECRET, alg="HS256", **claims):
+    body = {"sub": "user-a", "aud": RESOURCE, "iss": ISSUER,
+            "exp": int(time.time()) + 300}
+    body.update(claims)
+    return pyjwt.encode(body, secret, algorithm=alg)
+
+
+def test_a_token_for_this_resource_verifies(hs256):
+    assert mcp_auth.verify(_token())["sub"] == "user-a"
+
+
+def test_an_ordinary_session_token_still_verifies(hs256):
+    """`aud: authenticated` is what a zp_session sign-in carries; it is
+    accepted so a token pasted from the app's own console works."""
+    assert mcp_auth.verify(_token(aud="authenticated"))["sub"] == "user-a"
+
+
+def test_a_token_minted_for_another_resource_is_refused(hs256):
+    """MCP authorization spec, Token Handling: a token for some other
+    server, signed by the same authorization server, must not work here."""
+    assert mcp_auth.verify(_token(aud="https://other.example.com/mcp")) is None
+
+
+def test_an_expired_token_is_refused(hs256):
+    assert mcp_auth.verify(_token(exp=int(time.time()) - 60)) is None
+
+
+def test_a_token_from_an_unknown_issuer_is_refused(hs256):
+    """Right audience, right signature, wrong `iss`: refused. The issuer
+    is the one claim that names the project, and the JWKS path trusts
+    whatever key that document vouches for."""
+    assert mcp_auth.verify(_token(iss="https://evil.example.com/auth/v1")) is None
+    # and a token with no issuer at all does not slip through either
+    tok = pyjwt.encode({"sub": "u", "aud": RESOURCE, "exp": int(time.time()) + 60},
+                       JWT_SECRET, algorithm="HS256")
+    assert mcp_auth.verify(tok) is None
+
+
+def test_a_forged_signature_is_refused(hs256):
+    assert mcp_auth.verify(_token(secret="x" * 48)) is None
+    assert mcp_auth.verify("not.a.jwt") is None
+
+
+def test_the_jwks_path_verifies_the_projects_key_and_nobody_elses(site, monkeypatch):
+    """No shared secret configured: the token is checked against the
+    project's JWKS. The fetch is stood in for at `jwt.PyJWKClient` (the
+    network is blocked in tests), answering the project's public key for
+    every kid -- so a token signed by another key fails on the signature,
+    which is the only way it can fail once the key lookup is stubbed."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    site.delenv("SUPABASE_JWT_SECRET", raising=False)
+    project_key = ec.generate_private_key(ec.SECP256R1())
+    other_key = ec.generate_private_key(ec.SECP256R1())
+    public_pem = project_key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    class _Key:
+        key = public_pem
+
+    class _Client:
+        def __init__(self, url):
+            assert url == "https://proj.supabase.co/auth/v1/.well-known/jwks.json"
+
+        def get_signing_key_from_jwt(self, token):
+            return _Key()
+
+    monkeypatch.setattr(pyjwt, "PyJWKClient", _Client)
+
+    def pem(k):
+        return k.private_bytes(serialization.Encoding.PEM,
+                               serialization.PrivateFormat.PKCS8,
+                               serialization.NoEncryption())
+
+    assert mcp_auth.verify(_token(secret=pem(project_key), alg="ES256"))["sub"] == "user-a"
+    assert mcp_auth.verify(_token(secret=pem(other_key), alg="ES256")) is None
+    assert mcp_auth.verify(_token(secret=pem(project_key), alg="ES256",
+                                  aud="https://other.example.com/mcp")) is None
+    assert mcp_auth.verify(_token(secret=pem(project_key), alg="ES256",
+                                  exp=int(time.time()) - 5)) is None
+
+
+def test_account_for_token_is_the_oldest_membership_or_a_named_refusal(hs256, pg):
+    """The resolver end to end on a real schema: an unverifiable token is
+    `invalid_token`, a verified stranger is `no_account` (never a
+    fall-through to the operator), and a member resolves to min(id) --
+    the same rule auth.current_account_id uses."""
+    from conftest import seed_two
+
+    from src import accounts
+
+    seeded = seed_two("mike@example.com", dsn=pg)
+    uid = seeded["user_id"]
+    assert mcp_auth.account_for_token("garbage", dsn=pg) == (None, "invalid_token")
+    assert mcp_auth.account_for_token(_token(sub="nobody-yet"), dsn=pg) == (None, "no_account")
+    account_id, reason = mcp_auth.account_for_token(_token(sub=uid), dsn=pg)
+    assert reason == "ok"
+    assert account_id == min(a["id"] for a in accounts.memberships(uid, dsn=pg))
+
+
+# ---------- the rate limit ----------
+
+def _limited_app(limiter, resolve, secret="static"):
+    inner, seen = _capturing()
+    return mcp_mount.guarded(inner, secret, resolve=resolve, limiter=limiter), seen
+
+
+def _status(app, header):
+    return _drive(app, header)
+
+
+def _drive_full(app, header):
+    """(status, headers) for one request."""
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    asyncio.run(app({"type": "http", "method": "POST", "path": "/",
+                     "headers": [(b"authorization", header.encode())]},
+                    receive, send))
+    start = sent[0]
+    return start["status"], {k.decode(): v.decode() for k, v in start.get("headers", [])}
+
+
+def test_a_caller_over_the_limit_gets_429_with_retry_after(monkeypatch):
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "3")
+    limiter = mcp_mount.RateLimiter(clock=lambda: 1000.0)
+    app, seen = _limited_app(limiter, resolve=lambda t: (4, "ok"))
+    for _ in range(3):
+        assert _status(app, "Bearer alice") == 200
+    status, headers = _drive_full(app, "Bearer alice")
+    assert status == 429
+    assert int(headers["retry-after"]) >= 1
+    # the refused call never reached the server
+    assert seen == [4, 4, 4]
+
+
+def test_another_account_is_unaffected(monkeypatch):
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "2")
+    limiter = mcp_mount.RateLimiter(clock=lambda: 1000.0)
+    people = {"alice": 4, "bob": 9}
+    app, seen = _limited_app(limiter, resolve=lambda t: (people[t], "ok"))
+    assert [_status(app, "Bearer alice") for _ in range(3)] == [200, 200, 429]
+    assert [_status(app, "Bearer bob") for _ in range(2)] == [200, 200]
+    assert seen == [4, 4, 9, 9]
+
+
+def test_the_window_resets(monkeypatch):
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "1")
+    now = [1000.0]
+    limiter = mcp_mount.RateLimiter(clock=lambda: now[0])
+    app, _ = _limited_app(limiter, resolve=lambda t: (4, "ok"))
+    assert _status(app, "Bearer alice") == 200
+    assert _status(app, "Bearer alice") == 429
+    now[0] += mcp_mount.RATE_WINDOW_S
+    assert _status(app, "Bearer alice") == 200
+
+
+def test_the_operator_key_has_its_own_higher_bucket(monkeypatch):
+    """Subject to the limit too -- a leaked key must not be unlimited --
+    but counted apart from any account and at the operator default."""
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "1")
+    monkeypatch.setenv(mcp_mount.RATE_OPERATOR_ENV, "2")
+    limiter = mcp_mount.RateLimiter(clock=lambda: 1000.0)
+    app, _ = _limited_app(limiter, resolve=lambda t: (4, "ok"))
+    assert _status(app, "Bearer alice") == 200
+    assert _status(app, "Bearer alice") == 429
+    assert [_status(app, "Bearer static") for _ in range(3)] == [200, 200, 429]
+
+
+def test_a_bad_limit_setting_falls_back_to_the_default_never_to_unlimited(monkeypatch):
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "lots")
+    assert mcp_mount._rate(mcp_mount.RATE_ENV, 7) == 7
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "0")
+    assert mcp_mount._rate(mcp_mount.RATE_ENV, 7) == 7
+    monkeypatch.setenv(mcp_mount.RATE_ENV, "42")
+    assert mcp_mount._rate(mcp_mount.RATE_ENV, 7) == 42
+
+
+def test_an_unauthenticated_caller_is_refused_before_any_bucket_is_touched():
+    limiter = mcp_mount.RateLimiter(clock=lambda: 1000.0)
+    app, _ = _limited_app(limiter, resolve=lambda t: (None, "invalid_token"))
+    assert _status(app, "Bearer nonsense") == 401
+    assert limiter._windows == {}
+
+
+# ---------- isolation, tool by tool, through the real transport ----------
+
+def _listed_names(body: str) -> list:
+    """Tool names off the SSE reply of one tools/list."""
+    import json
+
+    for line in body.splitlines():
+        if line.startswith("data:"):
+            result = json.loads(line[len("data:"):]).get("result") or {}
+            return [t["name"] for t in result.get("tools", [])]
+    return []
+
+
+def _reply(body: str):
+    """(is_error, payload) off the SSE reply of one tools/call."""
+    import json
+
+    for line in body.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = json.loads(line[len("data:"):])
+        if "error" in payload:
+            return True, payload["error"]
+        result = payload.get("result") or {}
+        text = next((c["text"] for c in result.get("content") or []
+                     if c.get("type") == "text"), "")
+        if result.get("isError"):
+            return True, text
+        try:
+            return False, json.loads(text)
+        except ValueError:
+            return False, text
+    return True, body
+
+
+@pytest.fixture
+def two_people(pg, env, monkeypatch):
+    """Alice (account a) and Bob (account b), each with one concept and
+    one banked spark, behind the REAL mount: the resolver maps a bearer
+    token to the account the way account_for_token would after a
+    verified sign-in, and every tool runs against the throwaway schema."""
+    pytest.importorskip("mcp")
+    pytest.importorskip("httpx")
+    from app import mcp_auth as auth_module
+    from src import accounts, preprod, scout
+
+    preprod.init(pg)
+    scout.init(pg)
+    seeded = accounts.seed("alice@example.com", dsn=pg)
+    a = seeded["accounts"][0]
+    # Bob's own workspace, the way seed_two makes a second one (the open
+    # sign-up path is a separate test; what matters here is two tenants)
+    accounts.create_user("bob@example.com", "Bob", user_id="user-bob",
+                         claimed=True, dsn=pg)
+    b = accounts.upsert_account("bobs-studio", "Bob", "#000000", dsn=pg)
+    accounts.add_member(b, "user-bob", dsn=pg)
+    assert a != b
+    (a_concept,) = preprod.save_concept_ideas(
+        [{"title": "Alice's concept", "hook": "h", "logline": ""}],
+        brand="zeropage", dsn=pg, account_id=a)
+    (b_concept,) = preprod.save_concept_ideas(
+        [{"title": "Bob's concept", "hook": "h", "logline": ""}],
+        brand="zeropage", dsn=pg, account_id=b)
+    b_finding = scout.record("zeropage", {"spark": "Bob's private direction",
+                                          "rationale": "", "evidence": "",
+                                          "sources": [], "score": 1.0},
+                             lanes="human", dsn=pg)
+
+    monkeypatch.setenv(mcp_mount.TOKEN_ENV, "operator-key")
+    monkeypatch.setenv(mcp_mount.HOSTS_ENV, "*")
+    people = {"alice": a, "bob": b}
+    monkeypatch.setattr(
+        auth_module, "account_for_token",
+        lambda token, dsn=None: (people[token], "ok") if token in people
+        else (None, "invalid_token"))
+
+    jobs = {1: {"id": 1, "status": "done", "label": "bob's job", "account_id": b}}
+
+    def job_status(job_id, account_id=None):
+        job = jobs.get(job_id)
+        return job if job and job["account_id"] == account_id else None
+
+    approved: list = []
+
+    def fake_render(concept_id, account_id, body):
+        approved.append(("clip", concept_id, account_id, body))
+        return {"job_id": 42, "render": {"provider": "fal"}}
+
+    def fake_keyframes(concept_id, account_id):
+        approved.append(("keyframes", concept_id, account_id))
+        return {"ok": True, "job_id": 43}
+
+    app, sessions = mcp_mount.build(dsn=pg, job_status=job_status,
+                                    approve_render=fake_render,
+                                    approve_keyframes=fake_keyframes)
+    assert app is not None
+    return {"app": app, "sessions": sessions, "a": a, "b": b,
+            "a_concept": a_concept, "b_concept": b_concept,
+            "b_finding": b_finding, "approved": approved}
+
+
+def _calls(world, calls):
+    """Run [(token, tool, args), ...] through the transport in one
+    session-manager run; returns [(is_error, payload), ...]."""
+    import httpx
+
+    async def go():
+        out = []
+        async with world["sessions"].run():
+            transport = httpx.ASGITransport(app=world["app"])
+            async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="https://zeropage-studio.fly.dev") as client:
+                for n, (token, name, args) in enumerate(calls, 1):
+                    reply = await client.post("/", headers={
+                        "authorization": f"Bearer {token}",
+                        "content-type": "application/json",
+                        "accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "id": n, "method": "tools/call",
+                              "params": {"name": name, "arguments": args}})
+                    out.append(_reply(reply.text))
+        return out
+
+    return asyncio.run(go())
+
+
+def test_the_board_and_stats_are_each_persons_own(two_people):
+    w = two_people
+    (e1, alice), (e2, bob), (e3, a_stats), (e4, b_stats) = _calls(w, [
+        ("alice", "board", {}), ("bob", "board", {}),
+        ("alice", "stats", {}), ("bob", "stats", {})])
+    assert not (e1 or e2 or e3 or e4)
+    assert [c["title"] for c in alice["ideas"]] == ["Alice's concept"]
+    assert [c["title"] for c in bob["ideas"]] == ["Bob's concept"]
+    assert a_stats["board"]["open"] == 1 and b_stats["board"]["open"] == 1
+
+
+def test_another_persons_concept_is_indistinguishable_from_missing(two_people):
+    """`idea`, `pick`, `archive`, `shoot` on Bob's id, as Alice: the same
+    "no concept" a nonexistent id gets, never Bob's row, never a crash."""
+    w = two_people
+    bid = w["b_concept"]
+    results = _calls(w, [
+        ("alice", "idea", {"idea_id": bid}),
+        ("alice", "pick", {"idea_id": bid}),
+        ("alice", "archive", {"idea_id": bid, "reason": "seen it"}),
+        ("alice", "shoot", {"idea_id": bid}),
+        ("bob", "idea", {"idea_id": bid}),
+        ("bob", "board", {}),
+    ])
+    for is_error, payload in results[:4]:
+        assert is_error, payload
+        assert "Bob" not in str(payload)
+        assert f"no idea {bid}" in payload or f"no concept {bid}" in payload or \
+            f"no concept with id {bid}" in payload
+    is_error, own = results[4]
+    assert not is_error and own["title"] == "Bob's concept"
+    # and nothing Alice tried changed Bob's row
+    _, bob_board = results[5]
+    assert bob_board["ideas"][0]["status"] == "open"
+
+
+def test_search_and_capture_stay_inside_the_callers_account(two_people):
+    w = two_people
+    (_, hits), (_, made), (_, bob_board), (_, alice_board) = _calls(w, [
+        ("alice", "search", {"query": "concept"}),
+        ("alice", "capture", {"brand": "zeropage", "title": "Alice's second"}),
+        ("bob", "board", {}),
+        ("alice", "board", {}),
+    ])
+    assert [c["title"] for c in hits["ideas"]] == ["Alice's concept"]
+    assert made["title"] == "Alice's second"
+    assert [c["title"] for c in bob_board["ideas"]] == ["Bob's concept"]
+    assert {c["title"] for c in alice_board["ideas"]} == {"Alice's concept", "Alice's second"}
+
+
+def test_another_persons_job_is_no_job(two_people):
+    w = two_people
+    (e1, p1), (e2, p2) = _calls(w, [("alice", "job", {"job_id": 1}),
+                                    ("bob", "job", {"job_id": 1})])
+    assert e1 and "no job 1" in p1
+    assert not e2 and p2["label"] == "bob's job"
+
+
+def test_the_operator_key_still_reads_the_bootstrap_account(two_people):
+    """Alice's account is the seeded (oldest) one, which is what the
+    static key resolves to -- the pre-OAuth behaviour, unchanged."""
+    w = two_people
+    (e, board), = _calls(w, [("operator-key", "board", {})])
+    assert not e and [c["title"] for c in board["ideas"]] == ["Alice's concept"]
+
+
+def test_no_tool_reports_a_credit_balance(two_people):
+    """Noted rather than asserted away: nothing on this surface answers
+    "what can I spend" -- `pick` quotes a draw, `stats` counts the board.
+    A balance tool is Phase 3's to decide."""
+    import asyncio as _asyncio
+
+    from src import mcp_server
+
+    names = {t.name for t in _asyncio.run(mcp_server.build_server(dsn=":memory:").list_tools())}
+    assert not {"balance", "credits", "wallet"} & names
+
+
+def test_the_spark_bank_is_not_offered_to_a_signed_in_caller(two_people):
+    """scout_findings / scout_bin are SHARED tables by design
+    (db.SHARED_TABLES), so one person's directions would be listed to
+    another. Mike's call (2026-10-07): the bank stays off the listed
+    server. A signed-in caller is handed the listed set and `sparks`
+    is simply not a tool there; the operator's static key still has it."""
+    w = two_people
+    (e1, p1), (e2, p2), (e3, p3) = _calls(w, [
+        ("alice", "sparks", {}),
+        ("alice", "images", {"finding_id": w["b_finding"]}),
+        ("operator-key", "sparks", {}),
+    ])
+    assert e1 and "sparks" in str(p1)
+    assert e2 and "images" in str(p2)
+    assert "Bob's private direction" not in str(p1) + str(p2)
+    assert not e3 and any(r["spark"] == "Bob's private direction" for r in p3["sparks"])
+
+
+def test_a_signed_in_caller_lists_exactly_the_listed_set(two_people):
+    import httpx
+
+    w = two_people
+
+    async def names_for(token):
+        async with w["sessions"].run():
+            transport = httpx.ASGITransport(app=w["app"])
+            async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="https://zeropage-studio.fly.dev") as client:
+                out = {}
+                for tok in token:
+                    reply = await client.post("/", headers={
+                        "authorization": f"Bearer {tok}",
+                        "content-type": "application/json",
+                        "accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+                    out[tok] = _listed_names(reply.text)
+                return out
+
+    listed = asyncio.run(names_for(["alice", "operator-key"]))
+    assert listed["alice"] == list(mcp_server.LISTED_TOOLS)
+    assert set(listed["operator-key"]) > set(mcp_server.LISTED_TOOLS)
+    assert "sparks" in listed["operator-key"] and "imagine_reference" in listed["operator-key"]
+
+
+# ---------- what an external caller sees ----------
+
+def test_what_an_external_caller_sees_with_the_engine_off(env, monkeypatch):
+    """The exact tool set a signed-in, non-operator caller is offered by
+    the mount as deployed (engine off, job registry injected), and that
+    every one of them carries the annotations the directory checks."""
+    pytest.importorskip("mcp")
+    monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
+    app, _ = mcp_mount.build(dsn=":memory:", job_status=lambda i, account_id=None: None)
+    assert app is not None
+    server = mcp_server.build_server(dsn=":memory:", listed=True,
+                                     job_status=lambda i, account_id=None: None)
+    tools = asyncio.run(server.list_tools())
+    names = [t.name for t in tools]
+    # `approve` registers only when the approve bodies are injected, which
+    # the mount does and this bare build does not
+    assert names == [n for n in mcp_server.LISTED_TOOLS if n != "approve"]
+    for absent in ("research", "generate", "sparks", "tonight", "add_spark", "images",
+                   "reference", "imagine_reference", "images_for"):
+        assert absent not in names
+    # and the engine flag changes nothing on the listed server
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    again = mcp_server.build_server(dsn=":memory:", listed=True)
+    assert "generate" not in {t.name for t in asyncio.run(again.list_tools())}
+    for t in tools:
+        assert t.title, t.name
+        assert t.annotations is not None
+        assert t.annotations.read_only_hint in (True, False)
+        assert t.annotations.destructive_hint in (True, False)
+        assert t.annotations.idempotent_hint in (True, False)
+        assert t.annotations.open_world_hint in (True, False)
+        if not t.annotations.read_only_hint:
+            # a write says whether it can be undone
+            assert t.annotations.destructive_hint is not None
+
+
+def test_writing_pricing_and_approving_stay_in_the_callers_account(two_people, monkeypatch):
+    """The render path end to end through the real transport, as Alice:
+    elements -> write_scene -> pick -> quote -> approve, every step on her
+    own rows, the approve bodies handed HER account id; and the same calls
+    on Bob's idea refused as 'no idea'."""
+    from src import asset_shelf
+
+    w = two_people
+    monkeypatch.setenv("FAL_KEY", "OPERATOR-FAL")
+    monkeypatch.delenv("QUOTE_SIGNING_SECRET", raising=False)
+    # Alice owns one character with one photo; Bob owns nothing
+    monkeypatch.setattr(asset_shelf, "catalogue",
+                        lambda dsn=None, account_id=None:
+                        [{"category": "character", "name": "Sam", "text": "",
+                          "photos": ["/characters/sam/photo/face.jpg"]}]
+                        if account_id == w["a"] else [])
+    scene = ("Ultra-realistic grounded video in 9:16; the attached photo is the exact "
+             "face. Style: soft window light, true colour. (0-4s) Sam lifts the lid of "
+             "a dented tin and freezes. (4-10s) Hard cut to the hallway: Sam backs away "
+             "from the open door, the tin still in one hand. No background music. "
+             "Avoid: plastic sheen, cartoon reactions.")
+    aid, bid = w["a_concept"], w["b_concept"]
+    results = _calls(w, [
+        ("alice", "elements", {}),
+        ("alice", "write_scene", {"idea_id": aid, "prompt": scene, "seconds": 10,
+                                  "refs": ["/characters/sam/photo/face.jpg"]}),
+        ("alice", "write_scene", {"idea_id": bid, "prompt": scene, "seconds": 10,
+                                  "refs": ["/characters/sam/photo/face.jpg"]}),
+        ("alice", "pick", {"idea_id": aid}),
+        ("alice", "quote", {"idea_id": aid}),
+        ("alice", "quote", {"idea_id": bid}),
+        ("alice", "approve", {"idea_id": aid, "what": "clip", "provider": "fal"}),
+        ("alice", "approve", {"idea_id": aid, "what": "keyframes"}),
+        ("bob", "elements", {}),
+    ])
+    (e0, els), (e1, written), (e2, foreign), (e3, picked), (e4, quoted), (e5, qforeign), \
+        (e6, clip), (e7, stills), (e8, bob_els) = results
+    assert not e0 and els["elements"][0]["photos"][0]["ref"] == "/characters/sam/photo/face.jpg"
+    assert not e1 and written["shots_written"] == 2 and written["seconds"] == 10
+    assert e2 and f"no idea {bid}" in foreign
+    assert not e3 and picked["status"] == "picked"
+    assert not e4 and quoted["clip"]["timed"] is True and len(quoted["clip"]["renders"]) == 2
+    assert quoted["keyframes"]["stills"] == 2 and quoted["balance"] is not None
+    assert e5 and f"no idea {bid}" in qforeign
+    assert not e6 and clip["job_id"] == 42
+    assert not e7 and stills["job_id"] == 43
+    assert [(kind, cid, acct) for kind, cid, acct, *rest in w["approved"]] == \
+        [("clip", aid, w["a"]), ("keyframes", aid, w["a"])]
+    assert w["approved"][0][3]["provider"] == "fal"
+    assert not e8 and bob_els["count"] == 0 and "upload" in bob_els["note"]

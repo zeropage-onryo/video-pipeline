@@ -496,35 +496,23 @@ def test_api_exec_generate_carries_the_persons_approval(tmp_db, monkeypatch):
 def test_ui_shell_is_one_board_per_rail_view(tmp_db):
     """The 2026-08-28 merge: Pipeline has no tabs left. Scenes and
     concepts were always the same row, so they are one board; the idea
-    is typed on Studio and the spend is approved in Queue. The node
-    canvas stays its OWN rail view, Director -- the nodes must never be
-    buried behind a tab -- and the canvas (the Gen Space, 2026-09-10)
-    still ships with the shell. LiteGraph is gone with it: a bitmap
-    canvas could name a face but never show one."""
+    is typed on Studio and the spend is approved in Queue. LiteGraph is
+    long gone, and since 2026-10-07 (Mike's call) so is this shell's own
+    node canvas, the Gen Space: the Director lives in the React studio's
+    project workspaces, and an "Open in Director" here hands the scene
+    there (shared.openConceptInDirector, through DIRECTOR_FRONTEND_URL)."""
     html = client.get("/ui").text
     assert 'data-view="workflows"' not in html
-    assert 'data-view="director"' in html
+    assert 'data-view="director"' not in html
     assert 'data-view="queue"' in html
     assert "data-ptab=" not in html            # the tab strip is gone entirely
     assert 'data-view="evals"' not in html
     assert "vendor/litegraph.js" not in html
-    assert client.get("/static/zpf/genspace.js").status_code == 200
+    for gone in ('id="v-director"', 'id="gscanvas"', 'id="wfmodal"', 'class="dironly'):
+        assert gone not in html, gone
+    assert 'data-director-url=' in html         # where the hand-off goes
+    assert client.get("/static/zpf/genspace.js").status_code == 404
     assert client.get("/static/zpf/workflows.js").status_code == 404
-
-
-def test_the_gen_space_is_the_director_canvas(tmp_db):
-    """The ZPF Gen Space design (2026-09-10): DOM cards on an infinite
-    canvas, a floating prompt bar with @-mentions, a zoom cluster, a
-    minimap, an inspector, and Send to Queue in the bar -- which only
-    PICKS; approving in Queue is still the one spend gate."""
-    html = client.get("/ui").text
-    for marker in ('id="gscanvas"', 'id="gsworld"', 'id="gswires"', 'id="gsnodes"',
-                   'id="gsprompttext"', 'id="gsmentions"', 'id="gsinspect"',
-                   'id="gsmini"', 'id="gszoomlabel"', 'id="sendqueue"',
-                   'id="wfrunall"', 'id="wfpalette"', 'data-tool="cut"'):
-        assert marker in html, marker
-    assert "Send to Queue" in html
-    assert 'id="wfcanvas"' not in html          # the <canvas> element is gone
 
 
 def test_the_rail_carries_labels_a_badge_and_the_account(tmp_db):
@@ -532,7 +520,7 @@ def test_the_rail_carries_labels_a_badge_and_the_account(tmp_db):
     entry carries a pending-count badge, and the footer names who is
     signed in (the design's account row), opening the account picker."""
     html = client.get("/ui").text
-    assert '<span class="rl">Director</span>' in html
+    assert '<span class="rl">Director</span>' not in html
     assert 'id="qbadge"' in html
     assert 'id="racct"' in html
     assert 'id="railpin"' in html
@@ -1457,7 +1445,9 @@ def test_api_me_names_the_signed_in_user_and_the_active_account(tmp_db):
     Jinja shell reads, so the two shells cannot disagree about who is
     signed in. The test client's session is whatever conftest signs."""
     data = client.get("/api/me").json()
-    assert set(data) == {"user", "account", "accounts"}
+    # mcp_url / claude_directory_url: the account menus' Connect to Claude
+    # panel (2026-10-08), tested in tests/test_auth.py
+    assert set(data) == {"user", "account", "accounts", "mcp_url", "claude_directory_url"}
     assert data["user"]["id"]
     assert data["user"]["display_name"]
     for account in data["accounts"]:

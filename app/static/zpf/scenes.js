@@ -25,8 +25,7 @@
    forever and a prompt change could never be measured. So an archived
    concept stops being a card, keeps counting, and keeps sitting in the
    Dev Studio's ungraded pool until it is graded. */
-import { api, bus, esc, refreshQueueBadge, state, stateline } from './shared.js';
-import { openConceptInDirector } from './genspace.js';
+import { api, bus, esc, openConceptInDirector, refreshQueueBadge, state, stateline } from './shared.js';
 import { ICON, brandName, gateOf, heroMarkup, heroOf, partsOf, previewRefs,
          previewStills, refThumbs, shotsLabel, windowLabel } from './cards.js';
 import { hydrateImages, imgTag } from './preview.js';

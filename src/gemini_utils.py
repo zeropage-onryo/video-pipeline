@@ -199,9 +199,9 @@ def is_depleted(error) -> bool:
     """A 429 that says the money ran out rather than that we are early.
 
     Kept separate from is_retriable because the two need opposite
-    behaviour from the same status code, and because the nightly
-    breaker (src/nightly.py) asks the same question to decide whether
-    the whole walk is pointless -- one opinion, two callers.
+    behaviour from the same status code, and because
+    trigger.classify_error asks the same question to call a crash
+    systemic -- one opinion, two callers.
     """
     text = str(error).lower()
     return any(marker in text for marker in DEPLETED_MARKERS)
@@ -242,10 +242,52 @@ def retry_delay(error, attempt: int) -> float:
     return min(FIRST_RETRY_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
 
 
+def _streamed(generate, model: str, contents, config, on_text):
+    """One call through generate_content_stream, told to `on_text` as it
+    arrives (the text so far, thoughts left out), and handed back as ONE
+    response shaped like generate_content's -- every part of every chunk,
+    in order and unmerged (a thought signature rides on the part it came
+    with), the last usage seen, the last finish reason. So a caller that
+    reads .text, .function_calls or .candidates[0].content, and the meter
+    that reads .usage_metadata, cannot tell the two apart."""
+    kwargs = {"model": model, "contents": contents}
+    if config is not None:
+        kwargs["config"] = config
+    parts, usage, finish, version, text = [], None, None, None, ""
+    for chunk in generate(**kwargs):
+        usage = getattr(chunk, "usage_metadata", None) or usage
+        version = getattr(chunk, "model_version", None) or version
+        candidates = getattr(chunk, "candidates", None) or []
+        if not candidates:
+            continue
+        finish = candidates[0].finish_reason or finish
+        content = candidates[0].content
+        for part in (content.parts if content is not None and content.parts else []):
+            parts.append(part)
+            if part.text and not part.thought:
+                text += part.text
+                _tell(on_text, text)
+    return types.GenerateContentResponse(
+        candidates=[types.Candidate(content=types.Content(role="model", parts=parts),
+                                    finish_reason=finish)],
+        usage_metadata=usage, model_version=version)
+
+
+def _tell(listener, value) -> None:
+    """A listener (on_retry, on_text) is told; it never fails the call."""
+    if listener is None:
+        return
+    try:
+        listener(value)
+    except Exception:
+        pass
+
+
 def generate_with_retry(client: genai.Client, model: str, contents,
                         *, on_retry=None, stage: str = "unknown",
                         account_id=None, run_id=None,
-                        config=None, fallbacks=None, raw: bool = False):
+                        config=None, fallbacks=None, raw: bool = False,
+                        on_text=None):
     """Retries transient errors on `model`; if it stays unavailable for the
     whole retry budget, falls through to FALLBACK_MODELS in order rather
     than failing the run outright.
@@ -281,18 +323,24 @@ def generate_with_retry(client: genai.Client, model: str, contents,
     `raw=True` returns the response object instead of its text
     (2026-09-18): a function-calling turn may carry no text at all --
     `response.text` is None and `.strip()` on it is the crash -- and
-    the caller needs the parts. Metering is identical either way."""
+    the caller needs the parts. Metering is identical either way.
+
+    `on_text` streams the answer (2026-10-08, the assistant card): it is
+    called with the text so far as each chunk arrives, through
+    generate_content_stream, and the call still returns the whole answer
+    exactly as without it. A retry or a fallback starts the text again,
+    so the listener is told "" before the next attempt. A client with no
+    stream method (every fake in the suite) is called the old way and the
+    listener hears nothing."""
     chain = FALLBACK_MODELS if fallbacks is None else list(fallbacks)
     models_to_try = [model] + [m for m in chain if m != model]
     no_substitute = fallbacks is not None and not chain
+    stream = getattr(client.models, "generate_content_stream", None) if on_text else None
+    streamed_before = False
 
     def note(text: str) -> None:
         print(f"  {text}", file=sys.stderr)
-        if on_retry is not None:
-            try:
-                on_retry(text)
-            except Exception:
-                pass          # telling someone is never worth failing a run
+        _tell(on_retry, text)  # telling someone is never worth failing a run
 
     for model_index, current_model in enumerate(models_to_try):
         last = model_index == len(models_to_try) - 1
@@ -300,11 +348,17 @@ def generate_with_retry(client: genai.Client, model: str, contents,
         for attempt in range(budget):
             started = time.monotonic()
             try:
-                response = (
-                    client.models.generate_content(model=current_model, contents=contents)
-                    if config is None else
-                    client.models.generate_content(model=current_model,
-                                                   contents=contents, config=config))
+                if stream is not None:
+                    if streamed_before:
+                        _tell(on_text, "")
+                    streamed_before = True
+                    response = _streamed(stream, current_model, contents, config, on_text)
+                else:
+                    response = (
+                        client.models.generate_content(model=current_model, contents=contents)
+                        if config is None else
+                        client.models.generate_content(model=current_model,
+                                                       contents=contents, config=config))
                 if current_model != model:
                     print(f"  (used fallback model {current_model})", file=sys.stderr)
                 spend.record_call(stage=stage, model_asked=model, model_used=current_model,

@@ -230,10 +230,29 @@ def test_signup_with_email_confirmation_on_makes_no_session_yet(clean_slate, got
     gotrue.confirm_email = True
     response = signup()
     assert response.status_code == 303
-    assert "check%20your%20email" in response.headers["location"]
     assert auth_mod.SESSION_COOKIE not in response.cookies
     # and no mirror row: the person has not proved the address yet
     assert accounts.get_user_by_email("new@example.com", dsn=clean_slate) is None
+
+
+def test_signup_with_email_confirmation_on_lands_on_the_code_step(clean_slate, gotrue):
+    """The confirmation mail carries a CODE and says to type it on the page
+    you came from (2026-10-05). The route used to send the person back to
+    the password form, which has no code box."""
+    gotrue.confirm_email = True
+    response = signup()
+    location = response.headers["location"]
+    assert location.startswith("/signin?step=code")
+    assert "new%40example.com" in location
+    assert "notice=" in location and "confirm" in location
+    assert "then sign in" not in location     # /auth/verify signs them in itself
+    page = client.get(location)
+    assert "Check your email" in page.text
+    assert 'action="/auth/verify"' in page.text
+    assert 'name="email" value="new@example.com"' in page.text
+    assert "to confirm your address" in page.text
+    assert "We sent a code to" not in page.text   # the notice replaces that line
+    assert 'action="/auth/email"' in page.text    # "Send a new code" is still there
 
 
 def test_logout_clears_the_session(clean_slate, gotrue):
@@ -314,6 +333,60 @@ def test_api_me_follows_the_brand_switch_like_the_shell_does(clean_slate, gotrue
         assert me["account"]["slug"] == slug
         assert f'data-brand="{slug}"' in client.get("/ui?legacy=1").text
         assert {a["slug"] for a in me["accounts"]} == {"zeropage", "antihero"}
+
+
+def _mcp_on(monkeypatch):
+    from app import mcp_auth, mcp_mount
+    monkeypatch.setenv(mcp_mount.ENABLED_ENV, "1")
+    monkeypatch.setenv(mcp_mount.TOKEN_ENV, "operator-key")
+    monkeypatch.setenv(mcp_auth.RESOURCE_ENV, "https://zeropage-studio.fly.dev/mcp")
+    monkeypatch.delenv(mcp_auth.DIRECTORY_ENV, raising=False)
+
+
+def test_api_me_carries_the_connector_url_from_the_resource_name(clean_slate, gotrue,
+                                                                  monkeypatch):
+    """The account menus' Connect to Claude panel reads the address to
+    paste off /api/me, and it is mcp_auth.resource_url() itself -- the
+    name tokens are minted for -- never a second copy in web/."""
+    from app import mcp_auth
+    _mcp_on(monkeypatch)
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    me = client.get("/api/me").json()
+    assert me["mcp_url"] == "https://zeropage-studio.fly.dev/mcp" == mcp_auth.resource_url()
+    assert me["claude_directory_url"] is None      # not listed yet: the manual steps
+
+
+def test_api_me_has_no_connector_url_when_a_person_cannot_connect(clean_slate, gotrue,
+                                                                  monkeypatch):
+    """No mount, or a mount with only the operator's key (no Supabase to
+    sign in through): a pasted URL would fail, so the panel gets null."""
+    from app import mcp_mount
+    _mcp_on(monkeypatch)
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    monkeypatch.delenv(mcp_mount.ENABLED_ENV)
+    assert client.get("/api/me").json()["mcp_url"] is None
+    monkeypatch.setenv(mcp_mount.ENABLED_ENV, "1")
+    monkeypatch.delenv(mcp_mount.TOKEN_ENV)
+    assert client.get("/api/me").json()["mcp_url"] is None
+    monkeypatch.setenv(mcp_mount.TOKEN_ENV, "operator-key")
+    monkeypatch.delenv("SUPABASE_URL")
+    assert client.get("/api/me").json()["mcp_url"] is None
+
+
+def test_api_me_publishes_only_a_claude_ai_directory_listing(clean_slate, gotrue, monkeypatch):
+    from app import mcp_auth
+    _mcp_on(monkeypatch)
+    seed_mike(clean_slate, gotrue)
+    login("mike@example.com", "mikes-password-1")
+    listing = "https://claude.ai/directory/connectors/zeropage-studio"
+    monkeypatch.setenv(mcp_auth.DIRECTORY_ENV, f"  {listing} ")
+    assert client.get("/api/me").json()["claude_directory_url"] == listing
+    for bad in ("javascript:alert(1)", "http://claude.ai/directory/connectors/x",
+                "https://claude.ai.evil.example/x", "claude.ai/directory"):
+        monkeypatch.setenv(mcp_auth.DIRECTORY_ENV, bad)
+        assert client.get("/api/me").json()["claude_directory_url"] is None, bad
 
 
 def test_brand_cookie_cannot_grant_an_account_you_are_not_in(clean_slate, gotrue):
@@ -698,13 +771,17 @@ def test_ui_legacy_keeps_the_reference_shell(clean_slate, gotrue, studio):
     login("mike@example.com", "mikes-password-1")
     response = client.get("/ui?legacy=1", follow_redirects=False)
     assert response.status_code == 200
-    assert 'data-view="director"' in response.text
+    # the shell itself stays; its own Director canvas was deleted 2026-10-07
+    assert 'data-view="queue"' in response.text
+    assert 'data-view="director"' not in response.text
 
 
 def test_ui_signed_out_goes_to_signin_with_the_studio_as_next(clean_slate, gotrue, studio):
+    # the Pipeline view lands on the Projects board since 2026-10-07 (Mike's
+    # call: one board of projects replaced the Pipeline and Director tabs)
     response = client.get("/ui?view=pipeline", follow_redirects=False)
     assert response.status_code == 303
-    assert response.headers["location"] == "/signin?next=https%3A%2F%2Fstudio.example%2Fstudio%2Fpipeline"
+    assert response.headers["location"] == "/signin?next=https%3A%2F%2Fstudio.example%2Fstudio%2Fprojects"
 
 
 def test_signin_when_already_signed_in_here_goes_to_the_studio(clean_slate, gotrue, studio):

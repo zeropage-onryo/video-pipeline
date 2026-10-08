@@ -25,18 +25,20 @@ the balance is checked for the worst case -- and settles at the price of
 the one that actually drew (`provider_usd`: Midjourney's AceDataCloud
 price, or the Nano still's), at the render markup and floor like every
 other still (src/charge.py, pricing). Nothing rendered, or nothing could
-be saved: released. The operator's exempt accounts and the unowned pool
-(the scout's own crawl, which passes no account) are never charged,
-exactly as for renders. An empty balance comes back as a note, never an
+be saved: released. A crawl someone RAN (the Studio's research button, the
+MCP `research` tool) passes their account and is charged like any other
+caller (2026-10-08); the operator's exempt accounts and the unowned pool
+(the CLI's crawl, which passes no account) are never charged, exactly as
+for renders. An empty balance comes back as a note, never an
 error -- an agent that sees an error retries, and the retry is what would
 spend twice.
 
 MIDJOURNEY'S OWN GATE STILL HOLDS. midjourney.generate_image refuses
 without MIDJOURNEY_SPEND_OK=1 and ACEDATA_API_KEY -- that gate was
 built so every AceData credit is an explicit approval, and this does
-not go around it. run_morning_prompts.sh exports it for the night if
-Mike wants the night to spend there; without it, this falls straight
-to Gemini and says so in the note.
+not go around it. Export it for a run if Mike wants that run to spend
+there; without it, this falls straight to Gemini and says so in the
+note.
 """
 from __future__ import annotations
 
@@ -145,7 +147,7 @@ def render_for_finding(finding_id: int, hook_frame: str, dsn=None,
                        account_id: Optional[int] = None) -> dict:
     """One generated reference for one spark. The public contract for
     both the MCP tool and the crawl. `account_id` is who pays (see the
-    module docstring); None -- the crawl -- is nobody's bill."""
+    module docstring); None -- the CLI's crawl -- is nobody's bill."""
     if not enabled():
         return {"ok": False, "note": "generated references are off (REFGEN_LANE=0)"}
     finding = scout.get_finding(int(finding_id), dsn=dsn)

@@ -3,6 +3,8 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { LANDING_MEDIA } from "@/content/landing-media";
 import { Reveal } from "@/components/reveal";
+import { KineticText } from "@/components/motion/kinetic-text";
+import { WipeReveal } from "@/components/motion/wipe-reveal";
 
 // The pipeline as four alternating two-column features -- the sequence is
 // real (ground, write, pick, render) so the order is load-bearing. Each
@@ -69,7 +71,7 @@ export function FeatureSection() {
         <section
           key={feature.title}
           className="overflow-x-clip border-b border-border"
-          aria-labelledby={`feature-${i}`}
+          aria-label={feature.title}
         >
           <div
             className={`mx-auto grid max-w-[1200px] items-center gap-12 px-6 py-20 md:min-h-[640px] md:grid-cols-2 md:gap-16 md:py-16 ${
@@ -78,9 +80,10 @@ export function FeatureSection() {
           >
             <Reveal className="max-w-[440px]">
               <span className="eyebrow">Step {String(i + 1).padStart(2, "0")}</span>
-              <h2 id={`feature-${i}`} className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]">
-                {feature.title}
-              </h2>
+              <KineticText
+                text={feature.title}
+                className="serif mt-5 text-[clamp(2rem,4.2vw,3.25rem)]"
+              />
               <p className="mt-6 text-[17px] leading-relaxed text-[#afafaf]">{feature.body}</p>
               <Link
                 href="/studio"
@@ -91,9 +94,9 @@ export function FeatureSection() {
               </Link>
             </Reveal>
 
-            <Reveal delay={0.08}>
+            <WipeReveal direction={i % 2 === 1 ? "right" : "left"} delay={0.1}>
               <FeatureMedia feature={feature} priority={i === 0} />
-            </Reveal>
+            </WipeReveal>
           </div>
         </section>
       ))}

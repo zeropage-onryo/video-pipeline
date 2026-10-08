@@ -24,6 +24,10 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A green run takes ~11 minutes (7-22 across 40 runs, 2026-10-07). Without
+    # this GitHub's 360-minute default applies, and a re-run on 2026-10-07 sat
+    # in the ffmpeg install for 40+ minutes without ever reaching pytest.
+    timeout-minutes: 30
     # The suite runs against a real Postgres since 2026-09-03 (pipeline.db
     # moved off SQLite -- docs/tasks/task-postgres-migration.md). conftest's
     # `pg` fixture gives every test its own schema on this box and drops it
@@ -72,7 +76,34 @@ jobs:
         # the cut's render tests (tests/test_cut_assemble.py) build fixture
         # clips with testsrc/sine and render them for real; without ffmpeg
         # they skip, which would make a green run mean nothing about them
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        #
+        # A pinned static build off GitHub Releases, not apt (2026-10-07): the
+        # Azure Ubuntu mirror stalled on single packages often enough to fail
+        # or hang this step (2-12 minutes on runs that passed, 40+ once).
+        # BtbN keeps its month-end autobuilds, so the tag below stays put, and
+        # 7.1 is what the Fly image's Debian ffmpeg is, so the render tests
+        # run against production's version rather than Ubuntu's 6.1. The
+        # binaries carry libass, libx264 and freetype themselves. To move it:
+        # pick another month-end tag's linux64-gpl-7.1 asset and take its line
+        # from that release's checksums.sha256.
+        timeout-minutes: 5
+        env:
+          FFMPEG_TAG: autobuild-2026-07-31-14-10
+          FFMPEG_BUILD: ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1
+          FFMPEG_SHA256: c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
+        run: |
+          archive="$RUNNER_TEMP/ffmpeg.tar.xz"
+          curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 \
+            -o "$archive" \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_TAG/$FFMPEG_BUILD.tar.xz"
+          echo "$FFMPEG_SHA256  $archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$RUNNER_TEMP" "$FFMPEG_BUILD/bin/ffmpeg" "$FFMPEG_BUILD/bin/ffprobe"
+          echo "$RUNNER_TEMP/$FFMPEG_BUILD/bin" >> "$GITHUB_PATH"
+          bin="$RUNNER_TEMP/$FFMPEG_BUILD/bin"
+          "$bin/ffmpeg" -hide_banner -version | head -n 1
+          "$bin/ffprobe" -hide_banner -version | head -n 1
+          # the `ass` filter is what render.can_burn_captions looks for
+          "$bin/ffmpeg" -hide_banner -filters | awk '$2 == "ass" {found = 1} END {exit !found}'
 
       - name: Lint with ruff
         run: ruff check .
@@ -83,6 +114,34 @@ jobs:
         # when the working directory is on sys.path -- `-m` puts it there,
         # the entrypoint does not. Same command CLAUDE.md gives for a laptop.
         run: python -m pytest tests/ -q
+
+  # The React studio's node:test suites (web/tests/*.test.mjs). Its own job,
+  # so it reports in seconds instead of waiting on the Python job's ~11
+  # minutes. The tests import web/src's .ts files directly through Node's
+  # type stripping (Node >= 23.6, hence 24) and nothing from npm, so there is
+  # no `npm ci`: a test that grows a dependency fails here with
+  # ERR_MODULE_NOT_FOUND, and that is the time to add one. A full checkout,
+  # not a sparse one of web/, because a guard test may read a file outside it
+  # (the legacy /ui Queue's queue.js, for one).
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Test web/ with node:test
+        working-directory: web
+        # The glob, not `node --test tests/`: the directory form does not
+        # find these files. NODE_OPTIONS reaches each test file's process and
+        # mutes one warning per imported .ts, which says web/package.json has
+        # no "type" -- adding one is a change to the Next app, not to CI.
+        env:
+          NODE_OPTIONS: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+        run: node --test tests/*.test.mjs
 
   # Everything in this job needs a real GEMINI_API_KEY -- it makes real
   # embedding, generation, and judge-model calls, unlike the hermetic

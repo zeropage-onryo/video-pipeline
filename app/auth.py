@@ -208,8 +208,12 @@ def studio_handoff(user_id: str, path: str = "/studio") -> Optional[RedirectResp
 
 
 # how the Jinja shell's `?view=` addresses map onto the React studio's pages
+# pipeline and director both land on the Projects board since 2026-10-07
+# (Mike's call: one board of projects replaced both tabs); /studio/flows
+# is the redirect that keeps a Director link's ?concept= and forwards it
+# to that scene's workspace.
 STUDIO_VIEWS = {"studio": "/studio", "assets": "/studio/assets",
-                "pipeline": "/studio/pipeline", "director": "/studio/flows",
+                "pipeline": "/studio/projects", "director": "/studio/flows",
                 "elements": "/studio/elements", "queue": "/studio/queue"}
 
 
@@ -466,7 +470,7 @@ def _redirect(url: str) -> Exception:
 # --------------------------------------------------------------------------
 
 _hits: dict[tuple, deque] = defaultdict(deque)
-RATE_LIMITS = {"login": (10, 60.0), "signup": (5, 60.0),     # (max, window s)
+RATE_LIMITS = {"consent": (30, 60.0), "login": (10, 60.0), "signup": (5, 60.0),     # (max, window s)
                "otp": (5, 60.0), "verify": (10, 60.0),
                # a password set/change/reset: each one re-proves the
                # person (a password check or a code), so it is a login
@@ -603,6 +607,14 @@ def _finish(request: Request, session: dict) -> RedirectResponse:
     if error:
         return _signin_error(error)
     _provision(user_id, claims.get("email"), display_name)
+    # A sign-in that was FOR an OAuth consent (app/oauth_consent.py) goes
+    # back to the consent page holding this sign-in's token for the one
+    # decision, instead of into the studio.
+    from . import oauth_consent
+    back = oauth_consent.resume(request, session)
+    if back is not None:
+        issue_session(back, user_id, request)
+        return back
     # An external frontend (FRONTEND_ORIGINS) that sent the person here
     # gets them back on its own origin THROUGH THE HANDOFF, so the cookie
     # is set there too (see handoff_redirect); otherwise the built-in /ui
@@ -660,10 +672,16 @@ def _provision(user_id: str, email: Optional[str],
 OTP_EMAIL_KEY = "sb_otp_email"
 
 
-def _code_page(email: str, error: Optional[str] = None) -> RedirectResponse:
+def _code_page(email: str, error: Optional[str] = None,
+               notice: Optional[str] = None) -> RedirectResponse:
+    """The code step for `email`. `error` is the red box; `notice` replaces
+    the step's "we sent a code" line (the sign-up door says what the code
+    is FOR)."""
     query = {"step": "code", "email": email}
     if error:
         query["error"] = error
+    if notice:
+        query["notice"] = notice
     return RedirectResponse(f"/signin?{urlencode(query)}", status_code=303)
 
 
@@ -753,10 +771,17 @@ async def signup(request: Request, email: str = Form(...),
                 "password, or reset it", "signin", open_step="password")
         return _signin_error(text, "signup", open_step="signup")
     if not body.get("access_token"):
-        # confirmation email on: Supabase made the user, no session yet
-        return RedirectResponse(
-            f"/signin?error={quote('check your email to confirm the address, then sign in')}"
-            f"&mode=signin&email={quote(email)}&open=password", status_code=303)
+        # Confirmation email on: Supabase made the user and mailed a code,
+        # no session yet. Land on the CODE step (2026-10-05: the mail says
+        # "type it on the page you came from", and this route used to send
+        # the person back to the password form with no code box). The
+        # emailed code verifies as type "email" exactly like a sign-in
+        # code, so /auth/verify finishes it and the person is signed in;
+        # "Send a new code" there is /auth/email, whose OTP also confirms.
+        request.session[OTP_EMAIL_KEY] = email
+        return _code_page(
+            email, notice=f"We emailed a code to {email} to confirm your "
+                          "address. Enter it below.")
     response = _finish(request, body)
     _stamp_password(body)
     return response

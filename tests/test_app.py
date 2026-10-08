@@ -1774,33 +1774,6 @@ def test_distribution_is_windowed_to_four_weeks(tmp_dev_db):
     assert app_main._distribution(None)["posts"] == 0
 
 
-def test_distribution_renders_without_a_nightly_runs_table(tmp_dev_db):
-    """The table landed in parallel with this block, so the read is
-    to_regclass-guarded: absent, the line is simply not shown and the
-    page is still correct."""
-    with db.connect(tmp_dev_db) as conn:
-        conn.execute("DROP TABLE IF EXISTS nightly_runs")
-    assert app_main._distribution(None)["nightly"] is None
-    assert client.get("/studio?tab=stats").status_code == 200
-    assert "Last night ·" not in client.get("/studio?tab=stats").text
-
-
-def test_distribution_reads_last_night_when_the_table_exists(tmp_dev_db):
-    with db.connect(tmp_dev_db) as conn:
-        db.add_nightly_runs_table(conn)
-        conn.execute(
-            "INSERT INTO nightly_runs (started_at, finished_at, attempted, "
-            "succeeded, failed, spent_usd, stopped_reason) "
-            "VALUES ('2026-09-07T03:30:00', '2026-09-07T04:10:00', 8, 6, 2, "
-            "1.25, 'daily cap')")
-
-    night = app_main._distribution(None)["nightly"]
-    assert night["attempted"] == 8 and night["succeeded"] == 6
-    text = client.get("/studio?tab=stats").text
-    assert "Last night ·" in text
-    assert "daily cap" in text
-
-
 def test_cost_per_post_divides_the_windows_spend(tmp_dev_db, monkeypatch):
     today = date.today().isoformat()
     db.add_video("a reel", "instagram", today, brand="zeropage",

@@ -33,7 +33,11 @@ NOTES = (
     "(src/spend.py PRICES, src/<tool>.py COST_*), never an invoice.",
     "A render with no price was paid for by a subscription, not per call; it "
     "is counted as free, not as $0.00 spend.",
-    "Embeddings (gemini-embedding-001, the RAG library) are not metered.",
+    "Embeddings (gemini-embedding-001, the RAG library) are metered since "
+    "2026-10-08; when the API reports no token count they are estimated at "
+    "four characters a token.",
+    "fal Whisper (the cut index's transcripts) is priced per audio minute and "
+    "Serper's image search per query -- flat estimates, not token counts.",
 )
 
 
@@ -114,52 +118,6 @@ def today(dsn: Optional[str] = None, *, account_id: Optional[int]) -> dict[str, 
         "tools": tools,
         "llm": spend.spent_today(dsn, account_id=account_id),
         "llm_everyone": spend.spent_today_everyone(dsn),
-    }
-
-
-def spent_since(ts: str, dsn: Optional[str] = None, *,
-                account_id: Optional[int]) -> dict[str, Any]:
-    """Every estimated dollar written since `ts` (an ISO timestamp), LLM
-    calls and renders together.
-
-    The reader the nightly budget needs and this module did not have:
-    `spent_today` is a calendar day, and a walk that starts at 22:00 and
-    a walk that starts at 03:30 are not the same day -- a budget read off
-    "today" would charge one night for the last one's spend and let a
-    3am walk start again at midnight with the meter freshly zeroed.
-    Since a TIMESTAMP is the only version of the question the breaker can
-    act on.
-
-    Both tables store `created_at` as an ISO string, so the comparison is
-    lexicographic and correct as long as both sides are UTC ISO -- which
-    is what db._now() and spend._now() write. `unpriced` is carried, not
-    folded into zero: a model missing from the price table is spend this
-    cannot see, and a budget that silently reads 0 is worse than one that
-    says how blind it is.
-    """
-    with db.connect(dsn) as conn:
-        llm = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0), "
-            "COUNT(*) FILTER (WHERE ok = 1 AND cost_usd IS NULL) "
-            "FROM llm_calls WHERE created_at >= %s "
-            "AND account_id IS NOT DISTINCT FROM %s",
-            (ts, account_id),
-        ).fetchone()
-        renders = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM generations "
-            "WHERE created_at >= %s AND account_id IS NOT DISTINCT FROM %s",
-            (ts, account_id),
-        ).fetchone()
-    llm_usd = round(float(llm[1]), 4)
-    render_usd = round(float(renders[1]), 4)
-    return {
-        "since": ts,
-        "calls": int(llm[0]),
-        "llm_usd": llm_usd,
-        "unpriced": int(llm[2] or 0),
-        "renders": int(renders[0]),
-        "render_usd": render_usd,
-        "total_usd": round(llm_usd + render_usd, 4),
     }
 
 

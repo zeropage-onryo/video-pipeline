@@ -8,13 +8,16 @@ from pydantic import ValidationError
 
 from app import api, auth
 from app.main import app
-from src import creative_guide, gemini_utils, scene_chain
+from src import charge, creative_guide, gemini_utils, scene_chain
 
 
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(auth, "current_user", lambda request: {"id": "guide-user"})
     monkeypatch.setattr(auth, "current_account", lambda request: {"slug": "zeropage"})
+    # the account here is a made-up id with no plan and no balance: the
+    # Create gate (tested in test_spend_gates.py) is held open
+    monkeypatch.setattr(charge, "create_refusal", lambda *a, **k: None)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     return TestClient(app, headers={"X-ZPF-Model-Connection": "1"})
 
@@ -155,3 +158,68 @@ def test_guide_route_clamps_the_brain_pill(client, monkeypatch, sent, expect):
     assert job['status'] == 'done', job
     assert seen['brain'] == expect
     assert job['brain'] == expect
+
+
+# ---------- the answer, as it is written (2026-10-08) ----------
+
+def test_partial_message_reads_every_prefix_as_a_prefix_of_the_answer():
+    """Whatever chunk boundary the stream falls on -- inside an escape, a
+    surrogate pair, the key itself -- the words shown so far are the
+    start of the words the reply will carry."""
+    answer = {"message": 'Two "takes" — a \U0001F3AC beat\nthen\\the turn', "choices": ["A"]}
+    for raw in (json.dumps(answer), json.dumps(answer, ensure_ascii=False)):
+        for k in range(len(raw) + 1):
+            assert answer["message"].startswith(creative_guide.partial_message(raw[:k])), raw[:k]
+        assert creative_guide.partial_message(raw) == answer["message"]
+
+
+def test_partial_message_waits_for_the_key_and_reads_through_a_fence():
+    assert creative_guide.partial_message('{"choices": ["a"], "mess') == ""
+    assert creative_guide.partial_message('```json\n{"message": "Half a') == "Half a"
+    assert creative_guide.partial_message("a bare sentence") == ""
+    assert creative_guide.partial_message('{"message": "x\\ud83c y"}') == "x y"   # a lone half
+
+
+def test_the_card_hears_the_message_and_a_tool_round_starts_it_over(monkeypatch):
+    """`on_text` reaches every answering call; what it is told is the
+    reply's own words, never the JSON around them, and a tool round
+    clears what an earlier round said."""
+    from types import SimpleNamespace
+
+    told = []
+    answer = json.dumps({"message": "Found two bars.", "choices": [], "brief": ""})
+    rounds = [
+        ('{"message": "Let me lo', SimpleNamespace(
+            text=None, function_calls=[SimpleNamespace(name="board", args={})],
+            candidates=[SimpleNamespace(content=SimpleNamespace(role="model", parts=[]))])),
+        (answer, SimpleNamespace(text=answer, function_calls=[], candidates=[])),
+    ]
+
+    def generate(client, model, contents, **kwargs):
+        streamed, response = rounds.pop(0)
+        for k in (8, len(streamed)):
+            kwargs["on_text"](streamed[:k])
+        return response
+
+    monkeypatch.setattr(gemini_utils, "generate_with_retry", generate)
+    specs = [{"name": "board", "description": "the board", "write": False,
+              "input_schema": {"type": "object", "properties": {}}}]
+    reply = creative_guide.respond(
+        creative_guide.Conversation(messages=[{"role": "user", "content": "find bars"}]),
+        client=object(), brand="zeropage", grounding={}, tools=specs,
+        run_tool=lambda name, args: "[]", on_text=told.append)
+    assert reply["message"] == "Found two bars."
+    assert told == ["Let me lo", "", "Found two bars."]
+
+
+def test_without_a_listener_nothing_is_streamed(monkeypatch):
+    seen = {}
+
+    def generate(client, model, contents, **kwargs):
+        seen.update(kwargs)
+        return json.dumps({"message": "ok"})
+
+    monkeypatch.setattr(gemini_utils, "generate_with_retry", generate)
+    creative_guide.respond(creative_guide.Conversation(messages=[{"role": "user", "content": "hi"}]),
+                           client=object(), brand="zeropage", grounding={})
+    assert seen["on_text"] is None

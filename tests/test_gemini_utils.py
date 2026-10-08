@@ -256,3 +256,157 @@ def test_every_offered_tier_is_priced():
     table = spend.prices()
     for option in gemini_utils.brain_options():
         assert gemini_utils.resolve_brain(option["id"])["model"] in table
+
+
+# ---------- the 429 that must not be retried ----------
+
+def test_a_depleted_429_is_not_retried(monkeypatch):
+    """Six attempts per call, times three models, for a card with no
+    money on it."""
+    calls = {"n": 0}
+
+    class Boom:
+        class models:
+            @staticmethod
+            def generate_content(model=None, contents=None):
+                calls["n"] += 1
+                raise RuntimeError(
+                    "429 RESOURCE_EXHAUSTED: your prepayment credits are depleted")
+
+    slept = []
+    monkeypatch.setattr(gemini_utils.time, "sleep", lambda s: slept.append(s))
+
+    with pytest.raises(RuntimeError):
+        gemini_utils.generate_with_retry(Boom(), "gemini-3-flash-preview", "hi")
+
+    assert calls["n"] == 1, "one attempt, no fallback models -- they bill the same card"
+    assert slept == []
+
+
+def test_a_rate_limit_429_is_still_retried(monkeypatch):
+    calls = {"n": 0}
+
+    class Boom:
+        class models:
+            @staticmethod
+            def generate_content(model=None, contents=None):
+                calls["n"] += 1
+                raise RuntimeError("429 RESOURCE_EXHAUSTED: rate limit, retry in 0.1s")
+
+    monkeypatch.setattr(gemini_utils.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError):
+        gemini_utils.generate_with_retry(Boom(), "gemini-3-flash-preview", "hi")
+    assert calls["n"] > 1, "a real rate limit still clears by waiting"
+
+
+@pytest.mark.parametrize("text,depleted", [
+    ("your prepayment credits are depleted", True),
+    ("billing account for project 123 is disabled", True),
+    ("rate limit exceeded, retry in 4s", False),
+    ("503 UNAVAILABLE", False),
+])
+def test_is_depleted_reads_the_billing_half_of_429(text, depleted):
+    assert gemini_utils.is_depleted(RuntimeError(text)) is depleted
+
+
+# --- streaming (2026-10-08, the assistant card) ------------------------------
+
+def _chunk(*parts, usage=None, finish=None):
+    from google.genai import types
+    return types.GenerateContentResponse(
+        candidates=[types.Candidate(content=types.Content(role="model", parts=list(parts)),
+                                    finish_reason=finish)],
+        usage_metadata=usage)
+
+
+class StreamingClient:
+    """generate_content_stream scripted per attempt: a list of chunks, or
+    a list ending in an exception raised mid-stream."""
+
+    def __init__(self, *attempts):
+        self.attempts = list(attempts)
+        self.calls = []
+
+        def generate_content_stream(model, contents, config=None):
+            self.calls.append(model)
+            for step in self.attempts.pop(0):
+                if isinstance(step, Exception):
+                    raise step
+                yield step
+
+        def generate_content(**kwargs):
+            raise AssertionError("streamed calls never take the whole-answer door")
+
+        self.models = SimpleNamespace(generate_content=generate_content,
+                                      generate_content_stream=generate_content_stream)
+
+
+def test_a_streamed_answer_is_told_as_it_arrives_and_returned_whole(monkeypatch):
+    from google.genai import types
+    metered = []
+    monkeypatch.setattr(gemini_utils.spend, "record_call",
+                        lambda **kw: metered.append(kw) or None)
+    usage = types.GenerateContentResponseUsageMetadata(prompt_token_count=10,
+                                                       candidates_token_count=4)
+    client = StreamingClient([
+        _chunk(types.Part(text="thinking it over", thought=True)),
+        _chunk(types.Part.from_text(text='{"message": "Hel')),
+        _chunk(types.Part.from_text(text='lo"}'), usage=usage, finish="STOP"),
+    ])
+    told = []
+    out = gemini_utils.generate_with_retry(client, "gemini-x", "hi", on_text=told.append)
+    assert out == '{"message": "Hello"}'
+    assert told == ['{"message": "Hel', '{"message": "Hello"}']      # never the thought
+    assert metered[0]["response"].usage_metadata.prompt_token_count == 10
+
+
+def test_a_streamed_tool_call_keeps_every_part_for_the_next_round(monkeypatch):
+    """The caller sends candidates[0].content back with the tool's answer,
+    and a thought signature must ride on the part it came with."""
+    from google.genai import types
+    monkeypatch.setattr(gemini_utils.spend, "record_call", lambda **kw: None)
+    call = types.Part(function_call=types.FunctionCall(name="find_references",
+                                                       args={"scene": "a bar"}),
+                      thought_signature=b"sig")
+    client = StreamingClient([_chunk(types.Part(text="plan", thought=True)), _chunk(call)])
+    told = []
+    response = gemini_utils.generate_with_retry(client, "gemini-x", "hi", raw=True,
+                                                on_text=told.append)
+    assert [fc.name for fc in response.function_calls] == ["find_references"]
+    parts = response.candidates[0].content.parts
+    assert len(parts) == 2 and parts[1].thought_signature == b"sig"
+    assert told == []
+
+
+def test_a_retry_mid_stream_starts_the_text_again(monkeypatch, no_sleeping):
+    from google.genai import types
+    monkeypatch.setattr(gemini_utils.spend, "record_call", lambda **kw: None)
+    client = StreamingClient(
+        [_chunk(types.Part.from_text(text="Half an ans")), RuntimeError("503 UNAVAILABLE")],
+        [_chunk(types.Part.from_text(text="Whole"))],
+    )
+    told = []
+    out = gemini_utils.generate_with_retry(client, "gemini-x", "hi", fallbacks=[],
+                                           on_text=told.append)
+    assert out == "Whole"
+    assert told == ["Half an ans", "", "Whole"]
+    assert client.calls == ["gemini-x", "gemini-x"]
+
+
+def test_a_client_with_no_stream_is_called_the_old_way():
+    client = FakeClient([answering("plain")])
+    told = []
+    assert gemini_utils.generate_with_retry(client, "gemini-x", "hi",
+                                            on_text=told.append) == "plain"
+    assert told == []
+
+
+def test_a_listener_that_raises_never_fails_the_call(monkeypatch):
+    from google.genai import types
+    monkeypatch.setattr(gemini_utils.spend, "record_call", lambda **kw: None)
+    client = StreamingClient([_chunk(types.Part.from_text(text="fine"))])
+
+    def broken(text):
+        raise RuntimeError("the card went away")
+
+    assert gemini_utils.generate_with_retry(client, "gemini-x", "hi", on_text=broken) == "fine"

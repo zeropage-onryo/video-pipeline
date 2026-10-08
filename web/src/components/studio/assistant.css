@@ -49,14 +49,16 @@
   height: 56px;
   flex: none;
   border-radius: 999px;
-  background: #151515;
-  border: 2px solid var(--signal);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
   line-height: 1;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.6);
+}
+/* the face itself (assistant-avatar.tsx) fills whatever box the pill gives it;
+   its ring is the red border the old emoji circle had */
+.zpa-avatar > .zav {
+  width: 100%;
+  height: 100%;
 }
 .zpa-bubble {
   max-width: 260px;
@@ -88,9 +90,13 @@
   box-shadow:
     0 12px 40px rgb(0 0 0 / 0.7),
     0 0 34px rgb(228 0 43 / 0.2);
-  transition:
-    box-shadow var(--t),
-    transform var(--t);
+  /* never `transform`: the morph out of the card drives it every frame */
+  transition: box-shadow var(--t);
+}
+/* what the pill says comes in once it has finished growing back from the
+   card -- shown during the morph it would be squeezed with the shell */
+.zpa-pill > * {
+  animation: zpa-fade 200ms 140ms both;
 }
 .zpa-pill:hover {
   box-shadow:
@@ -140,7 +146,11 @@
   box-shadow:
     0 20px 60px rgb(0 0 0 / 0.75),
     0 0 40px rgb(228 0 43 / 0.16);
-  animation: zpa-rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/* the card grows out of the pill (assistant-pill.tsx, a motion layoutId);
+   its contents fade in as it settles, so nothing reads while stretched */
+.zpa-card > :not(.zpa-avatar) {
+  animation: zpa-fade 220ms 150ms both;
 }
 .zpa-avatar.big {
   position: absolute;
@@ -148,7 +158,6 @@
   top: -30px;
   width: 60px;
   height: 60px;
-  font-size: 30px;
 }
 .zpa-head {
   padding: 38px 20px 14px;
@@ -263,6 +272,25 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dim);
+}
+.zpa-count {
+  margin-left: auto;
+  color: #a3a3a3;
+  font-variant-numeric: tabular-nums;
+}
+/* the answer as the model writes it (Typed), ending in a caret */
+.zpa-typing {
+  color: #e6e6e6;
+}
+.zpa-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--signal);
+  animation: zpa-pulse 1s steps(2, jump-none) infinite;
 }
 .zpa-dot {
   width: 7px;
@@ -489,6 +517,24 @@
   cursor: default;
 }
 
+/* a write the Guide proposed (2026-10-07: create_project, save_as_project,
+   a spark): what it will do, and the click that does it */
+.zpa-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #2a2a2a;
+  background: #111;
+}
+.zpa-confirm .zpa-msg {
+  margin: 0;
+}
+.zpa-older {
+  align-self: center;
+}
+
 /* credits, on the Queue */
 .zpa-credits {
   display: flex;
@@ -571,6 +617,11 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* the look picker is taller than the card on a laptop screen: it
+     scrolls inside the card rather than running off the bottom of it */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .zpa-field {
   display: flex;
@@ -623,6 +674,9 @@
   animation: zpa-ring 1.6s ease-in-out infinite;
 }
 .zps .zpa-filled {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--mono);
   font-size: 9.5px;
   letter-spacing: 0.14em;
@@ -637,13 +691,13 @@
   display: block;
   height: 72px;
 }
-/* Director: the minimap owns the corner and the prompt bar the bottom
+/* a canvas page (a project workspace, a scene): the minimap owns the corner and the prompt bar the bottom
    middle, so the collapsed pill is just the face, above the minimap */
-.zps[data-view="director"] .zpa:not(.open) {
+.zps[data-canvas="1"] .zpa:not(.open) {
   bottom: 160px;
   right: 22px;
 }
-.zps[data-view="director"] .zpa:not(.open) .zpa-pill {
+.zps[data-canvas="1"] .zpa:not(.open) .zpa-pill {
   width: 58px;
   max-width: 58px;
   padding: 0;
@@ -651,11 +705,11 @@
   position: absolute;
   inset: 0;
 }
-.zps[data-view="director"] .zpa:not(.open) .zpa-perch {
+.zps[data-canvas="1"] .zpa:not(.open) .zpa-perch {
   margin: 0;
   pointer-events: none;
 }
-.zps[data-view="director"] .zpa:not(.open) .zpa-bubble {
+.zps[data-canvas="1"] .zpa:not(.open) .zpa-bubble {
   position: absolute;
   right: 66px;
   bottom: 8px;
@@ -676,6 +730,11 @@
     transform: translateY(8px);
   }
 }
+@keyframes zpa-fade {
+  from {
+    opacity: 0;
+  }
+}
 @keyframes zpa-pulse {
   50% {
     opacity: 0.35;
@@ -691,8 +750,10 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .zpa-bubble,
-  .zpa-card,
+  .zpa-card > *,
+  .zpa-pill > *,
   .zpa-dot,
+  .zpa-caret,
   .zps .zpa-ring {
     animation: none;
   }
@@ -724,12 +785,12 @@
   /* the Queue's Approve bars and the Director's prompt bar run the full
      width of a phone: there the pill is just the face, at the edge */
   .zps[data-view="queue"] .zpa:not(.open),
-  .zps[data-view="director"] .zpa:not(.open) {
+  .zps[data-canvas="1"] .zpa:not(.open) {
     left: auto;
     right: 12px;
   }
   .zps[data-view="queue"] .zpa:not(.open) .zpa-pill,
-  .zps[data-view="director"] .zpa:not(.open) .zpa-pill {
+  .zps[data-canvas="1"] .zpa:not(.open) .zpa-pill {
     position: absolute;
     inset: 0;
     width: 52px;
@@ -738,11 +799,11 @@
     opacity: 0;
   }
   .zps[data-view="queue"] .zpa:not(.open) .zpa-perch,
-  .zps[data-view="director"] .zpa:not(.open) .zpa-perch {
+  .zps[data-canvas="1"] .zpa:not(.open) .zpa-perch {
     margin: 0;
   }
   .zps[data-view="queue"] .zpa:not(.open) .zpa-bubble,
-  .zps[data-view="director"] .zpa:not(.open) .zpa-bubble {
+  .zps[data-canvas="1"] .zpa:not(.open) .zpa-bubble {
     position: absolute;
     right: 60px;
     bottom: 6px;
@@ -752,7 +813,6 @@
   .zpa-avatar {
     width: 52px;
     height: 52px;
-    font-size: 26px;
   }
   .zpa-bubble {
     max-width: calc(100vw - 120px);
@@ -761,13 +821,13 @@
   /* ...sitting on the rail, so the rail stays reachable and nothing
      covers the sheet's own input */
   .zpa.open,
-  .zps[data-view="director"] .zpa.open {
+  .zps[data-canvas="1"] .zpa.open {
     left: 0;
     right: 0;
     bottom: calc(64px + env(safe-area-inset-bottom));
   }
   .zpa-card,
-  .zps[data-view="director"] .zpa.open .zpa-card {
+  .zps[data-canvas="1"] .zpa.open .zpa-card {
     width: 100%;
     max-height: calc(100dvh - 64px - 90px);
     border-radius: 26px 26px 0 0;
@@ -792,11 +852,93 @@
 
 /* Director, opened: above the minimap and the prompt bar, never on them */
 @media (min-width: 721px) {
-  .zps[data-view="director"] .zpa.open {
+  .zps[data-canvas="1"] .zpa.open {
     bottom: 160px;
     right: 22px;
   }
-  .zps[data-view="director"] .zpa.open .zpa-card {
+  .zps[data-canvas="1"] .zpa.open .zpa-card {
     max-height: calc(100vh - 160px - 150px);
   }
+}
+
+/* ── the face in the pill's text: what state it is in, for anyone who
+   cannot read the ring (a dot + a word, never colour alone) ── */
+.zpa-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+}
+.zpa-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.zpa-state[data-state="needs"] { color: #f5a524; }
+.zpa-state[data-state="working"],
+.zpa-state[data-state="thinking"] { color: #ff4d6a; }
+.zpa-state[data-state="success"] { color: #3ddc84; }
+.zpa-state[data-state="error"] { color: #ff4d6a; }
+.zpa-state[data-state="sleeping"] { color: var(--dim); }
+/* needs you: the pill's own border goes amber and steady */
+.zpa[data-face="needs"] .zpa-pill {
+  border-color: #f5a524;
+  box-shadow:
+    0 12px 40px rgb(0 0 0 / 0.7),
+    0 0 34px rgb(245 165 36 / 0.22);
+}
+
+/* ── "Meet your assistant": the look picker ── */
+.zpa-preview {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid #1f1f1f;
+  background: radial-gradient(120% 140% at 0% 0%, #1a0a0e 0%, #0c0c0d 60%);
+}
+.zpa-preview .zpa-mono {
+  display: block;
+}
+.zpa-preview b {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--display);
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+.zpa-glyphs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.zpa-glyph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px 8px;
+  border-radius: 16px;
+  border: 1px solid #222;
+  background: #101011;
+  color: var(--text);
+  font-size: 11px;
+  transition:
+    border-color var(--t),
+    background var(--t);
+}
+.zpa-glyph:hover {
+  border-color: #3a3a3a;
+}
+.zpa-glyph[aria-pressed="true"] {
+  border-color: var(--signal);
+  background: #1c060b;
+}
+.zpa-glyph:focus-visible,
+.zpa-av:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
 }
