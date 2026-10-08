@@ -1452,6 +1452,52 @@ def assets_search(q: str = "", limit: int = 8, account_id: int = Depends(auth.cu
                       for i in items[:max(1, min(limit, 20))]]}
 
 
+def _drawable(raw: Optional[str], account_id: Optional[int]) -> Optional[str]:
+    """A stored reference as something an <img> can draw, small where a
+    small one exists: `_ref_thumbs`' choice, minted through media.url_for
+    when it fell back to the stored string (a logical name is not a URL
+    on the tenant rung)."""
+    from src import media
+
+    if not raw:
+        return None
+    small = _ref_thumbs([raw], account_id)[0]
+    return small if small != raw else media.url_for(raw, account_id)
+
+
+def _element_photos(kind: str, name: str, account_id: Optional[int]) -> list:
+    """An element's photos by the kind the Elements page names it."""
+    if kind == "place":
+        return _location_photos(name, account_id)
+    if kind == "character":
+        return _asset_photo_urls("character", CHARACTERS_DIR, _slug(name), account_id)
+    return _asset_photo_urls("prop", PROPS_DIR, _slug(name), account_id)
+
+
+@router.get("/search")
+def global_search(q: str = "", limit: int = 5, account_id: int = Depends(auth.current_account_id)):
+    """The ⌘K palette's one question (2026-10-08, src/search.py): projects,
+    scenes (title and PROMPT), elements, renders and cuts that match every
+    word of `q`, for this account, each group capped at `limit`. An empty
+    `q` is the recent list. Slim rows with one drawable thumbnail each --
+    the palette needs a face, not a gallery. Reads only; nothing spends."""
+    from src import media, search
+
+    out = search.run(q, account_id=account_id, limit=limit)
+    groups = out["groups"]
+    for item in groups["projects"] + groups["scenes"]:
+        item["thumb"] = _drawable(item.pop("cover", None), account_id)
+    for item in groups["elements"]:
+        photos = _element_photos(item["kind"], item["name"], account_id)
+        item["frames"] = len(photos)
+        item["thumb"] = _asset_photo_thumbs(photos[:1], account_id)[0] if photos else None
+    for item in groups["renders"]:
+        url = item.pop("media_url", None) or ""
+        item["thumb"] = (None if not url else _drawable(url, account_id) if item["kind"] == "image"
+                         else media.thumb_url_for(url, account_id))
+    return out
+
+
 @router.get("/assets/{category}/{item_id}")
 def asset_detail(category: str, item_id: int, account_id: int = Depends(auth.current_account_id)):
     asset = next((i for i in _assets_all(account_id)

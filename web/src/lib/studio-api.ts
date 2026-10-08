@@ -122,6 +122,46 @@ export const getAssets = (q?: string, scope: AssetScope = "elements") => {
   );
 };
 
+/* GET /api/search (src/search.py, 2026-10-08): the ⌘K palette's one
+   question across everything this account made. An empty q is the recent
+   list (projects and open scenes). `thumb` is drawable as it comes. */
+export type SearchProject = { id: number; title: string; sub: string; archived: boolean; thumb: string | null };
+export type SearchScene = {
+  id: number;
+  n: string;
+  title: string;
+  sub: string;
+  project_id: number | null;
+  project_title: string | null;
+  picked: boolean;
+  archived: boolean;
+  rendered: boolean;
+  thumb: string | null;
+};
+export type SearchElement = {
+  id: string;
+  kind: "character" | "prop" | "product" | "place";
+  name: string;
+  sub: string;
+  frames: number;
+  thumb: string | null;
+};
+export type SearchRender = { id: number; kind: "image" | "video"; label: string; sub: string; concept_id: number | null; thumb: string | null };
+export type SearchCut = { id: string; title: string; concept_id: number | null };
+export type SearchResult = {
+  q: string;
+  recent: boolean;
+  groups: {
+    projects: SearchProject[];
+    scenes: SearchScene[];
+    elements: SearchElement[];
+    renders: SearchRender[];
+    cuts: SearchCut[];
+  };
+};
+export const globalSearch = (q: string, init?: RequestInit) =>
+  apiFetch<SearchResult>(`/search?q=${encodeURIComponent(q)}`, init);
+
 export type AssetHit = { name: string; category: AssetCategory; thumb: string | null };
 export const searchAssets = (q: string) =>
   apiFetch<{ items: AssetHit[] }>(`/assets/search?q=${encodeURIComponent(q)}`);

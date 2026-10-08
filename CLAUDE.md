@@ -1884,6 +1884,25 @@ is yours, in Resolve, by hand.
   `/studio/scene/draft`; `auth.STUDIO_VIEWS["pipeline"]` is the board. `sceneHref` /
   `workspaceHref` in `studio-api.ts` are the only scene links a page builds. The vanilla `/ui`
   still hands scenes to `/studio/flows` (`DIRECTOR_FRONTEND_URL`), i.e. through the redirect.
+- **The ⌘K palette and global search (2026-10-08, gap list items 1 and 2).** ⌘K / Ctrl+K from
+  any studio page, the rail's "Search ⌘K" and the header's search button (the phone's only door:
+  the header's Timeline tab gives way below 640px) open `components/studio/command-palette.tsx`,
+  a Base UI dialog mounted by the shell with props, not `useShell` (the two would import each
+  other). Typed words go to ONE route, `GET /api/search` (`src/search.py`): projects (title,
+  brief), scenes (title, card line, logline, spark AND shot 0's prompt -- `shots_json` is TEXT, so
+  `::jsonb`), elements (characters, props/products, places by name and notes), renders (the wall,
+  by prompt, removed ones excluded) and cuts, for the signed-in account only. Every word must match
+  (ILIKE, `%`/`_` escaped); live before archived, then title-starts-with, all-words-in-title,
+  the rest, recency within. Empty `q` is the recent projects and open scenes. The route mints one
+  drawable `thumb` per hit (`_drawable`, `_element_photos`). The palette ranks its own commands by
+  the same every-word rule (`lib/palette.ts`, node-tested). **Nothing in it spends**: "Draw
+  keyframes" opens the Queue (the priced button), "New project" and "Find references" open Create
+  with a `?spark=` for the Guide (projects are only made through it; references are its
+  `find_references` tool), and a new spark is re-applied while Create is open, caret at the end.
+  Results open through deep links that work on the page they target: `/studio/elements?open=<id>`
+  and `?new=1`, `/studio/assets?open=<generated id>` (it clears filters that would hide it), read
+  by `components/studio/url-params.tsx` (useSearchParams in its own Suspense boundary) and
+  stripped from the URL once used.
 - **The studio's chrome: one palette and a toast stack with Undo (2026-10-08, the front-end gap
   list vs LTX / invideo, items 6, 17, 18, 20; its item 22, credits everywhere, landed as #166).**
   **One palette**, on `:root` at

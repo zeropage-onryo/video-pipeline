@@ -34,6 +34,7 @@ import {
   PanelLeft,
   Plug,
   Scissors,
+  Search,
   Settings,
   X,
 } from "lucide-react";
@@ -52,6 +53,8 @@ import {
 } from "@/lib/studio-api";
 import { CreditPill } from "@/components/studio/credit-pill";
 import { ConnectClaude } from "@/components/studio/connect-claude";
+import { CommandPalette } from "@/components/studio/command-palette";
+import { modKey, openPalette } from "@/lib/palette";
 import { requestNewSession } from "@/lib/assistant";
 /* eslint-disable @next/next/no-img-element */
 import "@/app/studio/studio.css";
@@ -145,6 +148,7 @@ const subscribePin = (cb: () => void) => {
     window.removeEventListener("storage", cb);
   };
 };
+const subscribeNothing = () => () => {};
 const readPin = () => {
   try {
     return localStorage.getItem(PIN_KEY) === "1";
@@ -301,6 +305,14 @@ export function StudioShell({ children }: { children: ReactNode }) {
     // /api/me is re-read on a switch and hands back a new object for the
     // same account
   }, [accountId, refreshBalance]);
+
+  // the palette's modifier as this machine presses it (⌘ on a Mac, Ctrl
+  // elsewhere); "⌘" on the server, so the first paint matches the old hint
+  const mod = useSyncExternalStore(
+    subscribeNothing,
+    () => modKey(navigator.platform || navigator.userAgent),
+    () => "⌘" as const,
+  );
 
   const togglePin = () => {
     try {
@@ -482,9 +494,12 @@ export function StudioShell({ children }: { children: ReactNode }) {
             })}
           </div>
           <div className="rfoot">
-            <span className="rl rkbd">
-              <kbd>⌘K</kbd>
-            </span>
+            {/* the hint that had nothing behind it until 2026-10-08: it opens
+                the palette (command-palette.tsx), as ⌘K / Ctrl+K does */}
+            <button type="button" className="rl rkbd" onClick={() => openPalette()} title="Search and commands">
+              <span>Search</span>
+              <kbd>{mod === "⌘" ? "⌘K" : "Ctrl K"}</kbd>
+            </button>
             <button
               type="button"
               className="racct"
@@ -540,7 +555,12 @@ export function StudioShell({ children }: { children: ReactNode }) {
             </Link>
             <nav className="htabs" aria-label="Studio">
               {TABS.map((t) => (
-                <Link key={t.href} href={t.href} aria-current={view === t.view ? "page" : undefined}>
+                <Link
+                  key={t.href}
+                  href={t.href}
+                  aria-current={view === t.view ? "page" : undefined}
+                  className={t.view === "cut" ? "htab-cut" : undefined}
+                >
                   {t.label}
                 </Link>
               ))}
@@ -549,6 +569,17 @@ export function StudioShell({ children }: { children: ReactNode }) {
                 it and the brand can never be drawn underneath it */}
             <span className="hright">
               {bar}
+              {!signedOut && me?.account ? (
+                <button
+                  type="button"
+                  className="hsearch"
+                  onClick={() => openPalette()}
+                  aria-label="Search and commands"
+                  title={`Search and commands · ${mod === "⌘" ? "⌘K" : "Ctrl+K"}`}
+                >
+                  <Search size={15} strokeWidth={1.7} />
+                </button>
+              ) : null}
               <CreditPill balance={balance} onError={(text) => toast(text, "err")} />
               {!signedOut && me?.account ? (
                 <button
@@ -597,6 +628,15 @@ export function StudioShell({ children }: { children: ReactNode }) {
         </div>
 
         {connect ? <ConnectClaude me={me} onClose={() => setConnect(false)} toast={toast} /> : null}
+        <CommandPalette
+          me={me}
+          brand={brand}
+          signedOut={signedOut}
+          toast={toast}
+          pinned={pinned}
+          onTogglePin={togglePin}
+          onSwitchAccount={pickAccount}
+        />
 
         <MotionConfig reducedMotion="user">
           <div className="ztoasts">

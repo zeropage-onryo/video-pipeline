@@ -380,12 +380,28 @@ function Composer() {
   // What the URL asked for goes in AFTER the saved draft has loaded, or the
   // load would land on top of it: ?spark= replaces the idea (the visitor's
   // sentence outranks an old draft), ?attach= adds its frames to the picks.
+  // A NEW spark is applied again while the page is open (2026-10-08): the
+  // ⌘K palette's "New project" and "Find references" arrive as ?spark= on
+  // a Create that may already be showing, and they leave the caret at the
+  // end of the box, ready for the rest of the sentence.
+  const appliedSpark = useRef<string | null>(null);
   useEffect(() => {
-    if (!ready || paramsApplied.current) return;
-    if (attachId && attachPhotos === null) return; // its photos are still being looked up
-    paramsApplied.current = true;
-    if (sparkParam) setIdea(sparkParam);
-    if (attachPhotos?.length) setPicked((was) => [...new Set([...was, ...attachPhotos])]);
+    if (!ready) return;
+    if (!paramsApplied.current) {
+      if (attachId && attachPhotos === null) return; // its photos are still being looked up
+      paramsApplied.current = true;
+      if (attachPhotos?.length) setPicked((was) => [...new Set([...was, ...attachPhotos])]);
+    }
+    if (sparkParam && sparkParam !== appliedSpark.current) {
+      appliedSpark.current = sparkParam;
+      setIdea(sparkParam);
+      setTimeout(() => {
+        const box = textarea.current;
+        if (!box) return;
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+      }, 50);
+    }
   }, [ready, sparkParam, attachId, attachPhotos, setIdea, setPicked]);
 
   // The assistant pill writes into this box through a window event (it

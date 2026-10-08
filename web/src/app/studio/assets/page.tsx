@@ -16,6 +16,7 @@
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { Download, Film, Folder, FolderInput, Image as ImageIcon, Scissors, Search, Sparkles, Star, Trash2, UserRound, X } from "lucide-react";
 import { OpenInEditor } from "@/components/cut/open-in-editor";
@@ -33,6 +34,7 @@ import {
 } from "@/lib/studio-api";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
+import { UrlParams } from "@/components/studio/url-params";
 
 type Chip = { id: string; label: string; count: number; filter: MediaFilter; icon?: "folder" | "star" };
 const STEPS = [
@@ -81,11 +83,31 @@ export default function AssetsPage() {
   }, [wall]);
   const active = chips.find((c) => c.id === chip) ?? chips[0];
 
+  const show = (m: MediaItem | null) => {
+    setOpen(m);
+    setFolderDraft(m?.folder ?? "");
+    setConfirming(false);
+  };
+  // a render a deep link asked for (?open=<generated id>, the ⌘K palette):
+  // opened in the detail rail as soon as a loaded wall holds it
+  const router = useRouter();
+  const wantRef = useRef<number | null>(null);
+  const openWanted = (list: MediaItem[]) => {
+    const id = wantRef.current;
+    if (id === null) return;
+    const hit = list.find((m) => m.generated_id === id);
+    if (hit) {
+      wantRef.current = null;
+      show(hit);
+    }
+  };
+
   const load = (q = query, c = active, p = provider) => {
     getMedia({ ...c.filter, q: q.trim() || undefined, provider: p || undefined })
       .then((r) => {
         setWall(r);
         setError(null);
+        openWanted(r.items);
         // a folder chip whose last render moved out falls back to All
         if (c.filter.folder && !(c.filter.folder in r.folders)) setChip("all");
       })
@@ -102,12 +124,6 @@ export default function AssetsPage() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, chip, provider]);
-  const show = (m: MediaItem | null) => {
-    setOpen(m);
-    setFolderDraft(m?.folder ?? "");
-    setConfirming(false);
-  };
-
   const items = wall?.items ?? null;
   const groups = useMemo(() => {
     const out: { date: string; items: MediaItem[] }[] = [];
@@ -179,6 +195,21 @@ export default function AssetsPage() {
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
+      <UrlParams
+        onParams={(params) => {
+          const id = Number(params.get("open"));
+          if (!id) return;
+          wantRef.current = id;
+          // nothing may hide it: the filters go back to the whole wall (a
+          // change reloads it, and the load opens it); on the whole wall
+          // already, it opens from what is drawn
+          setChip("all");
+          setQuery("");
+          setProvider("");
+          if (wall) openWanted(wall.items);
+          router.replace("/studio/assets", { scroll: false });
+        }}
+      />
       <div className="vhead" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <h2>Assets</h2>
         <label className="asearch">

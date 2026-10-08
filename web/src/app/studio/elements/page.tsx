@@ -20,6 +20,7 @@
    opens the element sheet (frames, @handle, notes, where it grounds,
    its own delete) -- the hover buttons on the plate are the shortcuts. */
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { ImageOff, Info, LayoutGrid, Plus, Trash2 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -37,6 +38,7 @@ import { displayPhoto, elementKind, handleOf, kindLabel } from "@/lib/elements";
 import { useShell } from "@/components/studio/shell";
 import { AddElement } from "@/components/studio/add-element";
 import { ElementSheet, useElementDelete } from "@/components/studio/element-sheet";
+import { UrlParams } from "@/components/studio/url-params";
 
 const ROUTE_KIND = { character: "characters", prop: "props", location: "locations" } as const;
 type RouteKind = ElementKind;
@@ -57,6 +59,16 @@ export default function ElementsPage() {
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [open, setOpen] = useState<Asset | null>(null);
+  // the element a deep link asked for (?open=<id>, the ⌘K palette), opened
+  // as soon as the list holds it; ?new=1 opens the add form
+  const [want, setWant] = useState<string | null>(null);
+  const router = useRouter();
+  const wanted = want && assets ? (assets.find((a) => a.id === want) ?? null) : null;
+  const sheet = open ?? wanted;
+  const closeSheet = () => {
+    setOpen(null);
+    setWant(null);
+  };
   const [canDraw, setCanDraw] = useState(false);
   // element id -> the job drawing its sheet; the card shows it until the job lands
   const [drawing, setDrawing] = useState<Record<string, number>>({});
@@ -303,13 +315,30 @@ export default function ElementsPage() {
         </div>
       )}
 
-      {open ? (
-        <ElementSheet
-          asset={open}
-          usedIn={open.used_in ?? 0}
-          onClose={() => setOpen(null)}
-          onDeleted={(a) => {
+      <UrlParams
+        onParams={(params) => {
+          const id = params.get("open");
+          const make = params.get("new");
+          if (id) {
             setOpen(null);
+            setWant(id);
+          }
+          if (make) {
+            // one dialog at a time: a sheet left open is closed first
+            closeSheet();
+            setAdding(true);
+          }
+          // said once: a reload must not open it again
+          if (id || make) router.replace("/studio/elements", { scroll: false });
+        }}
+      />
+      {sheet ? (
+        <ElementSheet
+          asset={sheet}
+          usedIn={sheet.used_in ?? 0}
+          onClose={closeSheet}
+          onDeleted={(a) => {
+            closeSheet();
             hide(a);
           }}
           onRestored={() => load()}
