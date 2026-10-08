@@ -1,8 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { useEffect, useRef, type PointerEvent } from "react";
+import { ClipPlayer } from "./clips";
 import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from "motion/react";
 import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
@@ -103,40 +103,43 @@ function Fill({ tile, alt, plate }: { tile?: MakeTile; alt: string; plate: strin
   return <div aria-hidden className="absolute inset-0" style={{ background: plate }} />;
 }
 
+/** A vertical frame (9:16, 2:3): drawn narrower so the block stays a block. */
+const tall = (aspect: string) => {
+  const [w, h] = aspect.split(":").map(Number);
+  return h / w > 1.3;
+};
+
+/** A landscape frame (16:9, 21:9): drawn at the column's full width. */
+const wide = (aspect: string) => {
+  const [w, h] = aspect.split(":").map(Number);
+  return w / h > 1.4;
+};
+
 const CHIP = "rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm";
 
 function Media({ tile, title, plate, still, sound }: { tile?: MakeTile; title: string; plate: string; still: boolean; sound: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [muted, setMuted] = useState(true);
   useOnScreenPlay(ref, still);
-  const toggle = () => {
-    const v = ref.current?.querySelector("video");
-    if (!v) return;
-    v.muted = !v.muted;
-    if (!v.muted) v.play().catch(() => {});
-    setMuted(v.muted);
-  };
+  // a clip with sound goes through the shared player (clips.tsx), so it
+  // obeys the page's one-soundtrack-at-a-time rule like every other clip
+  const speaks = Boolean(sound && tile?.video);
+  const frame = tile?.aspect
+    ? tall(tile.aspect)
+      ? "mx-auto max-w-[300px]"
+      : wide(tile.aspect)
+        ? ""
+        : "mx-auto max-w-[460px]"
+    : "aspect-[4/3]";
   return (
     <div
       ref={ref}
       // a tile's own frame when it names one (a 4:5 label still must not be
       // cropped to 4:3 and lose its words); 4:3 otherwise, as before
       style={tile?.aspect ? { aspectRatio: tile.aspect.replace(":", " / ") } : undefined}
-      className={`relative w-full overflow-hidden rounded-2xl bg-card ${tile?.aspect ? "mx-auto max-w-[460px]" : "aspect-[4/3]"}`}
+      className={`relative w-full overflow-hidden rounded-2xl bg-card ${frame}`}
     >
-      <Fill tile={tile} alt={tile?.title || title} plate={plate} />
-      {tile?.tag && <span className={`absolute bottom-3 left-3 ${CHIP}`}>{tile.tag}</span>}
-      {sound && tile?.video && (
-        <button
-          type="button"
-          onClick={toggle}
-          aria-pressed={!muted}
-          className="absolute right-3 bottom-3 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-[12px] font-medium text-white backdrop-blur-sm outline-none transition-colors hover:bg-black/75 focus-visible:ring-3 focus-visible:ring-ring/50"
-        >
-          {muted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
-          {muted ? "Sound off" : "Sound on"}
-        </button>
-      )}
+      {speaks && tile ? <ClipPlayer tile={tile} /> : <Fill tile={tile} alt={tile?.title || title} plate={plate} />}
+      {tile?.tag && <span className={`absolute bottom-3 left-3 z-10 ${CHIP}`}>{tile.tag}</span>}
     </div>
   );
 }

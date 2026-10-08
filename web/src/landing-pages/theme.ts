@@ -111,6 +111,45 @@ export const VIOLET: MakeAccent = {
   ],
 };
 
+// Three more (2026-10-08) so no two model pages share a colour: the video
+// pages had borrowed the image pages' emerald, amber and rose. Checked
+// against white: cyan 5.4:1, orange 5.2:1, fuchsia 6.3:1.
+export const CYAN: MakeAccent = {
+  primary: "#0e7490",
+  primaryForeground: "#ffffff",
+  cardLine: "#b3e3ee",
+  lineHover: "#0e7490",
+  cardLight: "rgba(14,116,144,0.08)",
+  plates: [
+    "linear-gradient(135deg, #ecfeff 0%, #67e8f9 55%, #0e7490 100%)",
+    "linear-gradient(135deg, #f0f9ff 0%, #7dd3fc 50%, #155e75 100%)",
+  ],
+};
+
+export const ORANGE: MakeAccent = {
+  primary: "#c2410c",
+  primaryForeground: "#ffffff",
+  cardLine: "#f8cdb4",
+  lineHover: "#c2410c",
+  cardLight: "rgba(194,65,12,0.08)",
+  plates: [
+    "linear-gradient(135deg, #fff7ed 0%, #fdba74 55%, #c2410c 100%)",
+    "linear-gradient(135deg, #fffbeb 0%, #fca5a5 50%, #9a3412 100%)",
+  ],
+};
+
+export const FUCHSIA: MakeAccent = {
+  primary: "#a21caf",
+  primaryForeground: "#ffffff",
+  cardLine: "#efc2f3",
+  lineHover: "#a21caf",
+  cardLight: "rgba(162,28,175,0.08)",
+  plates: [
+    "linear-gradient(135deg, #fdf4ff 0%, #f0abfc 55%, #a21caf 100%)",
+    "linear-gradient(135deg, #faf5ff 0%, #e879f9 50%, #86198f 100%)",
+  ],
+};
+
 /** The inline variables the skin wrapper carries for `accent`. */
 export function accentVars(accent: MakeAccent): CSSProperties {
   return {

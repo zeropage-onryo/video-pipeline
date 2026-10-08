@@ -8,6 +8,7 @@ import { motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { SectionTitle } from "./section-title";
 import { ShowcaseWall } from "./showcase-wall";
 import { EditorialWall, FilmstripWall, PostersWall, PromptsWall } from "./walls";
+import { ReelsWall } from "./clips";
 import { Button } from "@/components/ui/button";
 import { SPRINGS, reveal } from "@/lib/motion";
 import { useRevealGroup, useStill } from "@/lib/motion-hooks";
@@ -44,6 +45,8 @@ export function AdWall({ page }: { page: MakePage }) {
       return <EditorialWall page={page} />;
     case "posters":
       return <PostersWall page={page} />;
+    case "reels":
+      return <ReelsWall page={page} />;
     default:
       return <BentoWall page={page} />;
   }

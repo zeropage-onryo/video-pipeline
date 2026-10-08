@@ -5,6 +5,7 @@ import { FramePicker } from "./frame-picker";
 import { EditLoop } from "./edit-loop";
 import { TypeFrame } from "./type-frame";
 import { PosterType } from "./poster-type";
+import { LengthDial, SoundBoard, TierPair } from "./clips";
 import type { MakePage } from "../pages";
 
 // A page's ONE signature interaction (2026-10-05): the section that gives
@@ -27,6 +28,12 @@ export const SIGNATURES = {
   "type-frame": TypeFrame,
   /** A poster whose type setting you pick (Ideogram). */
   "poster-type": PosterType,
+  /** One prompt on two tiers, side by side, with sound (LTX). */
+  "tier-pair": TierPair,
+  /** One long clip, looped at the length a slider picks (Wan). */
+  "length-dial": LengthDial,
+  /** Clips whose sound is the point, one heard at a time (Veo). */
+  "sound-board": SoundBoard,
 } satisfies Record<string, ComponentType<{ page: MakePage }>>;
 
 export type SignatureKey = keyof typeof SIGNATURES;

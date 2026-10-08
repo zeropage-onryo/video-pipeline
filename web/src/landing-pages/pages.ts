@@ -114,9 +114,13 @@ export type MakeLayout = {
    *  line over the buttons), "split" (the copy left, `hero.media[0]` large
    *  right with the rest pinned to it as reference chips), "cover" (the
    *  first media full-bleed behind the copy), "stack" (centered copy over
-   *  a row of the media) or "fan" (centered copy over the media fanned like
-   *  a hand of cards). */
-  hero?: "center" | "split" | "cover" | "stack" | "fan";
+   *  a row of the media), "fan" (centered copy over the media fanned like
+   *  a hand of cards), and for a clip: "reel" (centered copy over one wide
+   *  letterboxed clip), "phone" (the copy left, the clip in a phone frame
+   *  right) or "theater" (a dark panel, the clip large under the copy with
+   *  the sound toggle front and centre). A clip in any hero keeps its
+   *  sound behind a toggle. */
+  hero?: "center" | "split" | "cover" | "stack" | "fan" | "reel" | "phone" | "theater";
   /** The order of the sections after the hero. Absent = DEFAULT_ORDER. A
    *  section left out is not drawn. */
   order?: MakeSectionKey[];
@@ -211,8 +215,9 @@ export type MakePage = {
      *  still shows the prompt that drew it, with the words it had to get
      *  right marked `[[like this]]`; "editorial" is one large plate beside
      *  a column of numbered figures; "posters" is a staggered row of 2:3
-     *  posters on a tinted ground. */
-    layout?: "bento" | "showcase" | "filmstrip" | "prompts" | "editorial" | "posters";
+     *  posters on a tinted ground; "reels" is a row of vertical clips in
+     *  phone frames, each with its sound (clips.tsx). */
+    layout?: "bento" | "showcase" | "filmstrip" | "prompts" | "editorial" | "posters" | "reels";
   };
   /** The signature's own frames, when they are not the wall's first tiles
    *  (shot-timeline.tsx reads these first). */

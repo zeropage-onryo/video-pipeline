@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Spotlight } from "@/components/ui/spotlight-new";
 import { Button } from "@/components/ui/button";
 import { CreateCtaButton } from "./create-cta-button";
+import { ClipPlayer } from "./clips";
 import { REVEAL_CLASS as REVEAL } from "@/lib/motion";
 import type { MakePage, MakeTile } from "../pages";
 
@@ -37,6 +38,12 @@ export function MakeHero({ page }: { page: MakePage }) {
       return <StackHero page={page} />;
     case "fan":
       return <FanHero page={page} />;
+    case "reel":
+      return <ReelHero page={page} />;
+    case "phone":
+      return <PhoneHero page={page} />;
+    case "theater":
+      return <TheaterHero page={page} />;
     default:
       return <CenterHero page={page} />;
   }
@@ -63,21 +70,7 @@ function Buttons({ page, align = "center", onDark = false }: { page: MakePage; a
 
 /** One hero still or clip, filling its box. */
 function Media({ tile, sizes, priority = false, className = "" }: { tile: MakeTile; sizes: string; priority?: boolean; className?: string }) {
-  if (tile.video) {
-    return (
-      <video
-        className={`absolute inset-0 h-full w-full object-cover ${className}`}
-        src={tile.video}
-        poster={tile.src}
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="metadata"
-        aria-label={tile.title}
-      />
-    );
-  }
+  if (tile.video) return <ClipPlayer tile={tile} className={className} />;
   if (!tile.src) return <div aria-hidden className="absolute inset-0" style={{ background: tile.plate ?? "var(--plate-1)" }} />;
   return <Image src={tile.src} alt={tile.title} fill sizes={sizes} priority={priority} quality={78} className={`object-cover ${className}`} />;
 }
@@ -139,7 +132,9 @@ function SplitHero({ page }: { page: MakePage }) {
             <div className="relative aspect-[4/5] overflow-hidden rounded-[28px] bg-card shadow-[0_30px_80px_-30px_rgba(0,0,0,0.35)]">
               <Media tile={main} sizes="(min-width: 1024px) 480px, 90vw" priority />
               {main.title && (
-                <figcaption className="absolute inset-x-4 bottom-4 flex flex-wrap items-center justify-end gap-2 text-white">
+                <figcaption
+                  className={`absolute inset-x-4 flex flex-wrap items-center justify-end gap-2 text-white ${main.video ? "top-4" : "bottom-4"}`}
+                >
                   <span className="rounded-full bg-black/55 px-3 py-1.5 text-[12px] font-medium backdrop-blur-md">{main.title}</span>
                   {main.tag && <span className="rounded-full bg-[var(--primary)] px-3 py-1.5 text-[12px] font-semibold text-[var(--primary-foreground)]">{main.tag}</span>}
                 </figcaption>
@@ -293,6 +288,115 @@ function FanHero({ page }: { page: MakePage }) {
           })}
         </div>
       )}
+    </section>
+  );
+}
+
+// Centered copy over one wide letterboxed clip, its specs pinned to the
+// frame -- the LTX page's "this is what it renders" before a word of copy.
+function ReelHero({ page }: { page: MakePage }) {
+  const main = page.heroMedia?.[0];
+  const specs = (main?.meta ?? "").split("·").map((x) => x.trim()).filter(Boolean);
+  return (
+    <section className="relative overflow-hidden pt-[60px]">
+      <div className="mx-auto flex max-w-[1100px] flex-col items-center px-4 pt-14 text-center md:px-6 md:pt-20">
+        <h1 className={`serif serif-bold max-w-[14ch] text-[clamp(2.9rem,9vw,6.75rem)] ${REVEAL} motion-safe:duration-700`}>
+          {page.h1}
+        </h1>
+        <p
+          className={`mt-6 max-w-[54ch] text-[clamp(1rem,1.6vw,1.125rem)] leading-normal text-[var(--ink-2)] md:mt-8 ${REVEAL} motion-safe:duration-700 motion-safe:delay-100`}
+        >
+          {page.subhead}
+        </p>
+        <Buttons page={page} />
+      </div>
+      {main && (
+        <figure className={`mx-auto mt-12 max-w-[1320px] px-4 pb-16 md:mt-16 md:px-6 md:pb-24 ${REVEAL} motion-safe:duration-1000 motion-safe:delay-200`}>
+          <div className="relative aspect-video overflow-hidden rounded-3xl bg-black md:aspect-[21/9]">
+            <Media tile={main} sizes="100vw" priority />
+            {specs.length > 0 && (
+              <ul className="absolute left-4 top-4 flex flex-wrap gap-2">
+                {specs.map((sp) => (
+                  <li key={sp} className="rounded-full bg-black/55 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-white backdrop-blur-md">
+                    {sp}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {main.title && <figcaption className="mt-3 text-[13px] text-[var(--ink-2)]">{main.title}</figcaption>}
+        </figure>
+      )}
+    </section>
+  );
+}
+
+// The copy on the left, the clip in a phone frame on the right with a
+// second phone tilted behind it -- vertical takes of people, the way they
+// are watched.
+function PhoneHero({ page }: { page: MakePage }) {
+  const [main, back] = page.heroMedia ?? [];
+  return (
+    <section className="relative overflow-hidden pt-[60px]">
+      <div className="mx-auto grid max-w-[1200px] items-center gap-12 px-4 pb-16 pt-10 md:px-6 md:pb-24 md:pt-16 lg:grid-cols-[1.1fr_1fr] lg:gap-10">
+        <div className="flex flex-col items-start text-left">
+          <h1 className={`serif serif-bold max-w-[12ch] text-[clamp(2.9rem,7.4vw,6rem)] ${REVEAL} motion-safe:duration-700`}>{page.h1}</h1>
+          <p className={`mt-7 max-w-[46ch] text-[clamp(1rem,1.5vw,1.125rem)] leading-normal text-[var(--ink-2)] ${REVEAL} motion-safe:duration-700 motion-safe:delay-100`}>
+            {page.subhead}
+          </p>
+          <Buttons page={page} align="start" />
+        </div>
+        {main && (
+          <div className={`relative mx-auto aspect-[3/4] w-full max-w-[420px] ${REVEAL} motion-safe:duration-1000 motion-safe:delay-150`}>
+            {back && (
+              <div className="absolute right-0 top-10 aspect-[9/16] w-[58%] rotate-[8deg] overflow-hidden rounded-[30px] border-[6px] border-foreground/80 bg-black opacity-80 shadow-xl">
+                <Media tile={{ ...back, video: undefined }} sizes="240px" />
+              </div>
+            )}
+            <div className="absolute left-[4%] top-[2%] aspect-[9/16] w-[64%] -rotate-[3deg] overflow-hidden rounded-[34px] border-[7px] border-foreground bg-black shadow-[0_30px_80px_-30px_rgba(0,0,0,0.6)]">
+              <Media tile={main} sizes="280px" priority />
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// A dark panel inset under the header, the clip large under the copy and
+// its sound toggle the first thing to press -- Veo is bought for its sound.
+function TheaterHero({ page }: { page: MakePage }) {
+  const main = page.heroMedia?.[0];
+  return (
+    <section className="relative pt-[60px]">
+      <div className="mx-2 overflow-hidden rounded-[28px] bg-[#0a0b10] text-white sm:mx-4 md:rounded-[40px]">
+        <div className="mx-auto flex max-w-[1100px] flex-col items-center px-4 pt-14 text-center md:px-6 md:pt-20">
+          <h1 className={`serif serif-bold max-w-[13ch] text-[clamp(2.9rem,9vw,6.75rem)] text-white ${REVEAL} motion-safe:duration-700`}>
+            {page.h1}
+          </h1>
+          <p className={`mt-6 max-w-[52ch] text-[clamp(1rem,1.6vw,1.125rem)] leading-normal text-white/70 md:mt-8 ${REVEAL} motion-safe:duration-700 motion-safe:delay-100`}>
+            {page.subhead}
+          </p>
+          <Buttons page={page} onDark />
+        </div>
+        {main && (
+          <figure className={`mx-auto mt-12 max-w-[1040px] px-4 pb-10 md:mt-16 md:px-6 md:pb-16 ${REVEAL} motion-safe:duration-1000 motion-safe:delay-200`}>
+            <div className="relative aspect-video overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
+              {main.video ? (
+                <ClipPlayer tile={main} label={{ on: "Sound on", off: "Turn the sound on" }} />
+              ) : (
+                <Media tile={main} sizes="(min-width: 1040px) 1040px, 100vw" priority />
+              )}
+            </div>
+            {main.title && (
+              <figcaption className="mt-4 flex flex-wrap items-baseline justify-between gap-2 text-[13px] text-white/60">
+                <span>{main.title}</span>
+                {main.meta && <span className="font-mono text-[11px] uppercase tracking-[0.12em]">{main.meta}</span>}
+              </figcaption>
+            )}
+          </figure>
+        )}
+      </div>
     </section>
   );
 }

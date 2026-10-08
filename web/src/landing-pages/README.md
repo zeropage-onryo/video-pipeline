@@ -5,9 +5,10 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
 - `pages.ts` — the types and the ordered list `MAKE_PAGES`. **Adding a page is adding
   an entry under `entries/` and listing it here.** The route, the sitemap, the header's
   Solutions menu, the footer's Tools column and the FAQ JSON-LD all read this list.
-- `entries/<slug>.ts` — one typed `MakePage` per page (the Ad Generator, Seedance, and
-  the five image models: Nano Banana Pro, FLUX.2 Pro, Seedream 4.0, GPT Image 2,
-  Ideogram 3). Every claim is checked against the code and the comment at the top of
+- `entries/<slug>.ts` — one typed `MakePage` per page (the Ad Generator, the five
+  video models: LTX 2.5, Wan 3.0, Kling 3 Turbo Pro, Seedance 2.5, Veo 3.1, and the
+  five image models: Nano Banana Pro, FLUX.2 Pro, Seedream 4.5, GPT Image 2,
+  Ideogram 4.5). Every claim is checked against the code and the comment at the top of
   each file says where.
 - `shared.ts` — what entries build from: the video-model readers off `@/lib/catalog`
   (`model`, `modelCards`, `PLAN_FOR`), the image-model list copied from
@@ -65,7 +66,29 @@ is a 404, so every page has exactly one URL.
    `overview` (statement blocks between the hero and the signature).
 2. Want a signature section? Write a client component taking `{ page }`,
    register it in `components/signatures.tsx`, name its key on the entry.
-3. Nothing else: the sitemap, header, footer and JSON-LD follow the list.
+3. Give it its own arrangement (`layout`, 2026-10-08, Mike: "make sure
+   every layout varies so neither one is identical"): `layout.hero` (center,
+   split, cover, stack, fan for stills; reel, phone, theater for a clip),
+   `layout.order` (the sections after the hero, any order), `layout.features`
+   (grid, list, split) and `wall.layout` (bento, showcase, filmstrip,
+   prompts, editorial, posters, reels). An entry with no `layout` renders as
+   before. Check the new page is not a twin of another: no two pages share
+   the same hero + signature + wall.
+4. Nothing else: the sitemap, header, footer and JSON-LD follow the list.
+
+## Media
+
+Every still and clip on a model page is that model's own output, rendered
+on the exact model the page sells (2026-10-08: images on Higgsfield, LTX 2.5
+on Runway, Kling / Wan / Veo on Higgsfield), and the entry's top comment
+says where, at what settings, and anything that was re-rolled. Stills are
+JPEGs under `web/public/models/<slug>/` at a 1000-1600 px long edge. Clips
+are H.264 MP4s with fast-start and a poster JPEG of the same name, and they
+keep their sound (Mike: "use the sound on the page"): every clip plays muted
+with its own sound toggle (`components/clips.tsx`), and turning one on turns
+the others off. **MP4s are gitignored (`*.mp4`)**, so a fresh checkout has
+the posters and not the clips; they ship only once they are committed past
+the ignore rule or moved to R2.
 
 Every claim on a page must be something the studio does today. The CTA
 carries the entry's `cta.spark` into the composer as `?spark=` through
