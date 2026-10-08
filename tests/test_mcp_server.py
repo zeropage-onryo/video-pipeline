@@ -1707,3 +1707,96 @@ def test_every_surface_builds_under_python_3_11s_rules(tmp_db, monkeypatch, kwar
         approve_render=lambda *a: {}, approve_keyframes=lambda *a: {}, **kwargs)
     names = {t.name for t in _tools(server)}
     assert "save_chat" in names and "job" in names
+
+
+# ---------- element sheets from chat (2026-10-08) ----------
+# Mike: "create an element sheet tool". The studio's own drawer
+# (element_sheet.draw, what the Elements card's button runs), quoted first
+# and drawn only after the yes, saved on the element where the studio keeps it.
+
+def _sheet_world(monkeypatch, tmp_path, photos=("IMG_1.jpg",), has_key=True):
+    from src import asset_shelf, element_sheet, media
+    folder = tmp_path / "characters" / "maya"
+    folder.mkdir(parents=True)
+    for p in photos:
+        (folder / p).write_bytes(b"\xff\xd8 jpeg")
+    urls = [f"/characters/maya/photo/{p}" for p in photos]
+    monkeypatch.setattr(asset_shelf, "catalogue", lambda dsn=None, account_id=None: [
+        {"category": "character", "name": "Maya", "photos": urls, "text": "curly hair, mustard sweater"},
+        {"category": "prop", "name": "Lamp", "photos": [], "text": ""}])
+    monkeypatch.setattr(asset_shelf, "PHOTO_DIRS", {**asset_shelf.PHOTO_DIRS,
+                                                    "character": tmp_path / "characters"})
+    monkeypatch.setattr(asset_shelf, "resolve_photo",
+                        lambda url, *a, **k: tmp_path / url.replace("/photo/", "/").lstrip("/"))
+    monkeypatch.setattr(element_sheet, "available", lambda account_id=None: has_key)
+    monkeypatch.setattr(element_sheet, "price_usd", lambda: 0.134)
+    mirrored, drawn = [], []
+    monkeypatch.setattr(media, "mirror", lambda *a, **k: mirrored.append(a))
+
+    def fake_draw(kind, name, files, out_dir, **kw):
+        drawn.append({"kind": kind, "name": name, "files": list(files), "out_dir": out_dir, **kw})
+        out = out_dir / "sheet.jpg"
+        out.write_bytes(b"sheet")
+        return {"ok": True, "path": out, "generation_id": 41, "error": None}
+
+    monkeypatch.setattr(element_sheet, "draw", fake_draw)
+    return drawn, mirrored
+
+
+def test_a_sheet_is_quoted_before_anything_is_drawn(monkeypatch, tmp_path):
+    drawn, _ = _sheet_world(monkeypatch, tmp_path)
+    q = mcp_server.run_element_sheet("character", "maya", account_id=1)
+    assert q["needs_approval"] and q["ok"] is False and drawn == []
+    assert q["quote"]["usd"] == 0.134 and q["quote"]["replaces_sheet"] is False
+    assert q["quote"]["element"] == {"kind": "character", "name": "Maya"}
+    assert "approve_usd=0.134" in q["note"]
+    with pytest.raises(ValueError, match="above the"):
+        mcp_server.run_element_sheet("character", "Maya", approve_usd=0.1, account_id=1)
+    assert drawn == []
+
+
+def test_an_approved_sheet_is_drawn_from_the_real_photos_and_saved(monkeypatch, tmp_path):
+    drawn, mirrored = _sheet_world(monkeypatch, tmp_path, photos=("IMG_1.jpg", "sheet.jpg"))
+    out = mcp_server.run_element_sheet("character", "Maya", approve_usd=0.134, account_id=1)
+    assert out["ok"] is True and out["quote"]["replaces_sheet"] is True
+    assert [f.name for f in drawn[0]["files"]] == ["IMG_1.jpg"]    # never grounds on the old sheet
+    assert drawn[0]["out_dir"] == tmp_path / "characters" / "maya"
+    assert drawn[0]["notes"] == "curly hair, mustard sweater"
+    assert mirrored and mirrored[0][1] == "characters/maya/sheet.jpg"
+    assert out["sheet"].endswith("sheet.jpg") and out["generation_id"] == 41
+
+
+@pytest.mark.parametrize("kind, name, match", [
+    ("creature", "Maya", "kind must be one of"),
+    ("character", "Nobody", "no character named"),
+    ("prop", "Lamp", "no photos"),
+])
+def test_sheet_refusals_happen_before_any_spend(monkeypatch, tmp_path, kind, name, match):
+    drawn, _ = _sheet_world(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match=match):
+        mcp_server.run_element_sheet(kind, name, approve_usd=1, account_id=1)
+    assert drawn == []
+
+
+def test_no_image_key_is_a_refusal_not_a_retry(monkeypatch, tmp_path):
+    drawn, _ = _sheet_world(monkeypatch, tmp_path, has_key=False)
+    with pytest.raises(mcp_server.Refused):
+        mcp_server.run_element_sheet("character", "Maya", account_id=1)
+    assert drawn == []
+
+
+def test_a_failed_draw_comes_back_as_ok_false(monkeypatch, tmp_path):
+    from src import element_sheet
+    _sheet_world(monkeypatch, tmp_path)
+    monkeypatch.setattr(element_sheet, "draw", lambda *a, **k: {
+        "ok": False, "path": None, "generation_id": None, "error": "the sheet did not render"})
+    out = mcp_server.run_element_sheet("character", "Maya", approve_usd=1, account_id=1)
+    assert out["ok"] is False and "did not render" in out["error"]
+
+
+def test_element_sheet_is_on_the_studio_surface_only_behind_the_approval(tmp_db, monkeypatch):
+    monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
+    studio = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, surface="studio"))}
+    assert "element_sheet" in studio
+    board = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db))}
+    assert "element_sheet" not in board          # board: only under the engine flag

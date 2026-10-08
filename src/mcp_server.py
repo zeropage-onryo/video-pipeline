@@ -141,6 +141,7 @@ TITLES = {
     "generate_image": "Render an image (quoted first, spends credits)",
     "generate_video": "Render a video clip (quoted first, spends credits)",
     "apply_effect": "Apply an effect (quoted first, spends credits)",
+    "element_sheet": "Draw an element's reference sheet (quoted first, spends credits)",
     "projects": "List your projects",
     "project": "Open one project",
     "project_chat": "Read a project's chat history",
@@ -377,6 +378,19 @@ DESCRIPTIONS = {
         "it runs in the background: poll `job`; the result carries `media_url` "
         "and `asset_id`."
     ),
+    "element_sheet": (
+        "SPENDS CREDITS. Draw (or redraw) the reference sheet for one of your "
+        "elements -- `kind` (character, prop or location) and its `name` as "
+        "`elements` lists it -- from the element's real photos: front, "
+        "three-quarter, profile, back and a close-up for a character, a "
+        "turnaround for a prop, a set of plates for a location, with the face, "
+        "wardrobe or object kept in every panel. The sheet is saved on the "
+        "element in the studio (Elements) and listed after its real photos. A "
+        "redraw replaces the current sheet; the quote says when it would. The "
+        f"element needs at least one photo. {_APPROVAL} After the yes it runs in "
+        "the background: poll `job`; the result carries the sheet's `ref` and "
+        "`media_url`."
+    ),
     "projects": (
         "Your projects, most recently touched first: id, name, the start of "
         "its brief, whether it carries a look, and how many scenes it holds "
@@ -458,6 +472,7 @@ HINTS = {
     "generate_image":    {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "generate_video":    {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "apply_effect":      {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "element_sheet":     {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "projects":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "project":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "project_chat":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
@@ -491,13 +506,14 @@ LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
 STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_chat",
                 "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
-                "generate_video", "apply_effect", "job")
+                "generate_video", "apply_effect", "element_sheet", "job")
 SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
 SURFACES = ("board", "studio")
 STUDIO_INSTRUCTIONS = (
-    "Your studio: make images and video and apply effects with the studio's "
-    "models, on the studio's credits. Nothing here touches the idea board. "
-    "EVERY image, clip and effect is two calls: the first (no approve_usd) "
+    "Your studio: make images and video, apply effects and draw element "
+    "reference sheets with the studio's models, on the studio's credits. "
+    "Nothing here touches the idea board. "
+    "EVERY image, clip, effect and sheet is two calls: the first (no approve_usd) "
     "spends nothing and returns a quote -- show the person what will run and "
     "its dollar price, and WAIT for a yes; only then call again with the same "
     "arguments and approve_usd = the quoted price. Never approve on the "
@@ -1386,6 +1402,134 @@ def run_image(prompt: str, model: str = "", aspect: str = "",
         project_id=project_id,
         **({"db_path": dsn} if dsn is not None else {}))
     return {**res, "quote": quote}
+
+
+ElementKind = Literal["character", "prop", "location"]
+SHEET_PHOTO_BYTES = 15 * 1024 * 1024     # the same bound refbin puts on a fetch
+
+
+def _find_element(kind: str, name: str, dsn, account_id) -> dict:
+    """One element by kind + name (case-insensitive), as `elements` lists
+    it, or ValueError naming the ones that exist."""
+    from . import asset_shelf
+    from . import element_sheet as sheets
+    kind = (kind or "").strip().lower()
+    if kind not in sheets.KINDS:
+        raise ValueError(f"kind must be one of {list(sheets.KINDS)}, got {kind!r}")
+    wanted = " ".join((name or "").split()).lower()
+    items = [i for i in asset_shelf.catalogue(dsn, account_id=account_id)
+             if i["category"] == kind]
+    for item in items:
+        if item["name"].strip().lower() == wanted:
+            return item
+    names = [i["name"] for i in items]
+    raise ValueError(f"no {kind} named {name!r} -- `elements` lists them"
+                     + (f" ({', '.join(names[:20])})" if names else
+                        f"; there are no {kind}s yet"))
+
+
+def _sheet_photo_files(urls: list[str], tmp: Path, account_id) -> list[Path]:
+    """The element's real photos as files the drawer can read: the file on
+    this machine when it has it, else the bytes fetched from the bucket into
+    `tmp`. A photo that can be neither is skipped, never guessed at."""
+    import requests
+
+    from . import asset_shelf
+    from . import element_sheet as sheets
+    files = []
+    for i, url in enumerate(urls):
+        if sheets.is_sheet(url.rsplit("/", 1)[-1].split("?", 1)[0]):
+            continue
+        local = asset_shelf.resolve_photo(url)
+        if local is not None:
+            files.append(Path(local))
+            continue
+        try:
+            fetch = asset_shelf.fetch_url(url, account_id)
+            if not str(fetch).startswith(("http://", "https://")):
+                continue
+            r = requests.get(fetch, timeout=30)
+            r.raise_for_status()
+            if not r.content or len(r.content) > SHEET_PHOTO_BYTES:
+                continue
+            target = tmp / f"photo-{i}.jpg"
+            target.write_bytes(r.content)
+            files.append(target)
+        except Exception:
+            continue
+    return files
+
+
+def run_element_sheet(kind: str, name: str, approve_usd: float = 0.0,
+                      dsn: Optional[str] = None, account_id: Optional[int] = None,
+                      dry_run: bool = False) -> dict[str, Any]:
+    """Draw (or redraw) one element's reference sheet from its real photos
+    (2026-10-08, Mike: "create an element sheet tool"), behind the same chat
+    approval as every other spend on this surface.
+
+    The drawing is the studio's own: `element_sheet.draw`, the code the
+    Elements card's button and the create routes run, so the sheet comes out
+    the same shape (five panels for a person, a turnaround for a prop, plates
+    for a place) and lands where the studio keeps it -- `<element>/sheet.jpg`,
+    mirrored to the bucket, listed after the real photos so `refs[0]` is never
+    the drawing. The charge is the image adapter's own hold at the model's
+    meter price, which is the price quoted here.
+
+    A redraw REPLACES the current sheet, exactly as the studio's button does;
+    the quote says so. Only the element's real photos are sent -- an earlier
+    sheet is never grounded on.
+    """
+    import tempfile
+
+    from . import asset_shelf, media
+    from . import element_sheet as sheets
+    account_id = _account(account_id, dsn)
+    item = _find_element(kind, name, dsn, account_id)
+    kind = item["category"]
+    photos = [u for u in item.get("photos") or []
+              if not sheets.is_sheet(u.rsplit("/", 1)[-1].split("?", 1)[0])]
+    has_sheet = len(photos) < len(item.get("photos") or [])
+    if not photos:
+        raise ValueError(f"{item['name']} has no photos -- a sheet is drawn from real "
+                         "photos; add one in the studio (Elements) first")
+    if not sheets.available(account_id):
+        raise Refused("element sheets are not available on this installation "
+                      "(no image key is set)")
+    usd = sheets.price_usd()
+    quote = {"element": {"kind": kind, "name": item["name"]},
+             "photos": min(len(photos), sheets.MAX_REFERENCES),
+             "layout": {"character": "front, three-quarter, profile, back and a close-up",
+                        "prop": "a turnaround",
+                        "location": "a set of plates"}[kind],
+             "replaces_sheet": has_sheet, "usd": usd}
+    what = (f"Redrawing {item['name']}'s sheet (it replaces the current one)"
+            if has_sheet else f"Drawing {item['name']}'s sheet")
+    gate = approval_gate(usd, approve_usd, what=what)
+    if gate is not None:
+        return {**gate, "quote": quote}
+    if dry_run:
+        return {"ok": True, "dry_run": True, "quote": quote}
+
+    slug = asset_shelf.slugify(item["name"])
+    out_dir = asset_shelf.PHOTO_DIRS[kind] / slug
+    with tempfile.TemporaryDirectory() as tmp:
+        files = _sheet_photo_files(photos, Path(tmp), account_id)
+        if not files:
+            return {"ok": False, "quote": quote,
+                    "error": "none of the element's photos could be read"}
+        res = sheets.draw(kind, item["name"], files, out_dir,
+                          notes=item.get("text") or "", account_id=account_id,
+                          db_path=dsn)
+    if not res["ok"]:
+        return {"ok": False, "quote": quote, "error": res["error"]}
+    plural = {"character": "characters", "prop": "props", "location": "locations"}[kind]
+    media.mirror(res["path"], f"{plural}/{slug}/{res['path'].name}", account_id,
+                 content_type="image/jpeg")
+    ref = asset_shelf.storable_ref(asset_shelf.photo_url(kind, slug, res["path"].name))
+    return {"ok": True, "quote": quote, "sheet": ref, "media_url": _view(ref, account_id),
+            "generation_id": res.get("generation_id"),
+            "note": (f"Saved as {item['name']}'s reference sheet in Elements. It is "
+                     "listed after the real photos; scenes still anchor on a photo.")}
 
 
 def list_video_models() -> dict[str, Any]:
@@ -2677,6 +2821,11 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
             return _quoted(run_effect, f"effect {effect}", effect=effect,
                            sources=sources, prompt=prompt, options=options,
                            approve_usd=approve_usd, project_id=project_id)
+
+        @_reg("element_sheet")
+        def element_sheet(kind: ElementKind, name: str, approve_usd: float = 0.0) -> dict:
+            return _quoted(run_element_sheet, f"sheet {name}", kind=kind, name=name,
+                           approve_usd=approve_usd)
 
     @_reg("write_scene")
     def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,
