@@ -78,6 +78,19 @@ def _to_jpeg(data: bytes) -> bytes:
         return data
 
 
+def available(account_id: Optional[int] = None) -> bool:
+    """Whether a sheet can be drawn here at all (the image key is set)."""
+    from . import nano_banana
+    return nano_banana.has_key(account_id)
+
+
+def price_usd() -> float:
+    """What one sheet costs: one still on the image model, at the meter's
+    price -- the same number its credit hold is taken at."""
+    from . import nano_banana, pricing
+    return round(float(pricing.still_usd(nano_banana.MODEL)), 4)
+
+
 def draw(kind: str, name: str, photos: list, out_dir: Path, *,
          detail: str = "", notes: str = "",
          account_id: Optional[int] = None, db_path=None) -> dict:
