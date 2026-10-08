@@ -281,11 +281,15 @@ export const SEEDANCE: MakePage = {
       ],
     },
     faq: {
-      title: "FAQs about Seedance",
+      // Checked against main 2026-10-08: the Queue approves a scene with no
+      // keyframe as text-to-video (the card says so), the reference gate
+      // still refuses a scene with no photos, scenes clamp to 4-30 s, the
+      // plans are Starter / Creator / Studio, /terms exists.
+      title: "FAQs about Seedance 2.5",
       items: [
         {
-          q: "What is the Seedance video generator?",
-          a: "Seedance is ByteDance's video model. In this studio you write a scene as timed shots, each shot's first frame is drawn from your reference photos, and each shot renders as its own Seedance clip, image-to-video, on the tier you pick in the Queue. The clips assemble into one MP4.",
+          q: "What is the Seedance 2.5 video generator?",
+          a: "Seedance 2.5 is ByteDance's newest video model: up to 30 seconds a shot, with sound generated in the same pass as the picture. In this studio you write a scene as timed shots from your reference photos, each shot renders as its own Seedance clip on the model you pick in the Queue, and the editor joins them into one MP4.",
         },
         {
           q: "Which Seedance models can I render on?",
@@ -298,15 +302,19 @@ export const SEEDANCE: MakePage = {
         },
         {
           q: "Can I use my own photos as references?",
-          a: "Yes. Upload photos into the composer for one scene, or save a person, product or place as an element and reuse it. Every keyframe is drawn from the references attached to the scene, and a scene with no references never reaches the Queue.",
+          a: "Yes. Attach photos in Create for one scene, or save a person, product or place as an element and reuse it. Every keyframe is drawn from the references attached to the scene, and a scene with no references cannot be rendered.",
         },
         {
           q: "Does it keep the same character or product across shots?",
           a: "Each shot's keyframe is drawn from the same references and from the previous shot's still, so the scene holds together. Video models still vary between renders, so look at each keyframe before you approve. No pixel match is promised, and you need the consent of anyone whose likeness you upload.",
         },
         {
-          q: "Does the Queue render text-to-video or image-to-video?",
-          a: "Image-to-video, anchored on the shot's keyframe. A scene whose keyframes have not been drawn yet is drawn on the Draw keyframes button before the render, so a Seedance clip always starts from a frame you have seen.",
+          q: "Does it render text-to-video or image-to-video?",
+          a: "Both. Draw a shot's keyframe in the Queue and the clip renders image-to-video, starting from that frame. Approve without one and it renders text-to-video from the prompt. The card says which before you approve.",
+        },
+        {
+          q: "Does Seedance 2.5 make sound?",
+          a: "Yes. Every scene is written with its diegetic sound, the footsteps and the room, not a music bed, and Seedance 2.5 generates that audio in the same pass as the picture. It is included in the clip's price.",
         },
         {
           q: "Which plan do I need?",

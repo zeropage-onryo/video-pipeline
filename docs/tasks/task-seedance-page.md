@@ -71,16 +71,12 @@ keyframe on all three.
 - [x] Rewritten to main's flow (the branch is behind main; the page must match what ships): 1. Write the scene (Create, references, timed shots with sound) / 2. Send it to the Queue (Send to Queue is the pick; keyframes drawn in the Queue, priced on the button) / 3. Approve on Seedance 2.5 (model, length, frame per shot; then the editor exports one MP4)
 - [x] "The board" and "the Director" are gone from the copy: the studio's menu is Projects, Create, Assets, Edit, Elements, Queue. The Keyframe first feature card was corrected the same way.
 
-## 7. FAQ ("FAQs about Seedance", eight rows; the answers are the FAQPage JSON-LD)
+## 7. FAQ ("FAQs about Seedance 2.5", nine rows), done 2026-10-08
 
-- [ ] What is the Seedance video generator?
-- [ ] Which Seedance models can I render on? (names both off the catalog, links /models)
-- [ ] How long can a Seedance clip be?
-- [ ] Can I use my own photos as references?
-- [ ] Does it keep the same character or product across shots?
-- [ ] Does the Queue render text-to-video or image-to-video?
-- [ ] Which plan do I need? (links /pricing)
-- [ ] Can I use the clips commercially? (links /terms)
+- [x] Every answer checked against main: plans Starter / Creator / Studio, reference gate still refuses a scene with no photos, scenes clamp to 4-30 s, /terms exists
+- [x] FIXED a false claim: the Queue renders text-to-video when a shot has no keyframe (the card says so), so "a Seedance clip always starts from a frame you have seen" became "Both. Draw a keyframe and it renders image-to-video; approve without one and it renders text-to-video"
+- [x] Q1 names 2.5 (30 s a shot, sound in the same pass); references answer says Create, not "the composer"
+- [x] Added "Does Seedance 2.5 make sound?" (diegetic sound, same pass, in the price)
 
 ## 8. Related and close
 
