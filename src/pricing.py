@@ -722,6 +722,8 @@ CATALOG_MODELS: tuple[tuple[str, str, str, str], ...] = (
     # provider, model id, public name, one line -- all on fal since
     # 2026-09-26, the only video renderer
     ("fal", "ltx2.3", "LTX 2.3", "Fast, cheap, 1080p and up. The workhorse."),
+    ("fal", "ltx2.5-fast", "LTX 2.5 Fast", "LTX's newest, with sound, up to 20 seconds, 720p to 4K."),
+    ("fal", "ltx2.5", "LTX 2.5 Pro", "LTX 2.5 at full quality, with sound, 720p or 1080p."),
     ("fal", "wan3", "Wan 3.0", "Open-weight realism up to 1080p."),
     ("fal", "kling3-turbo-pro", "Kling 3 Turbo Pro", "Cinematic motion, strong on people."),
     ("fal", "seedance2-fast", "Seedance 2.0 Fast", "ByteDance's quick tier, up to 720p."),

@@ -203,6 +203,45 @@ VIDEO_MODELS: dict[str, dict] = {
         "checked": "2026-09-26",
         "source": "https://fal.ai/models/fal-ai/ltx-2.3/image-to-video/api",
     },
+    # LTX 2.5 (added 2026-10-08, Mike: "use ltx 2.5 on runway, switch to
+    # that" -- the LTX page is the 2.5 page), read off fal's queue OpenAPI
+    # schemas and model pages that day. NOTE THE NAMESPACE: `lightricks/`,
+    # and the tier is the LAST path segment. Sound is generated with the
+    # picture by default (`generate_audio: true`) and is in the rate. Fast:
+    # 6-20 s in even steps, 720p $0.09/s, 1080p $0.13, 1440p $0.19, 2160p
+    # $0.30. Pro: 6/8/10 s, 720p $0.12/s, 1080p $0.17. Duration is an INT
+    # enum on the wire (2.3's lesson). camera_motion, fps and end_image_url
+    # exist and are not wired. 2.3 stays the platform default: at $0.06/s
+    # for 1080p it is still the cheapest credible LTX. Both 2.5 tiers default
+    # to 720p, the house rule wherever a model offers it.
+    "ltx2.5-fast": {
+        "t2v": "lightricks/ltx-2.5/text-to-video/fast",
+        "i2v": "lightricks/ltx-2.5/image-to-video/fast",
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (6, 20),
+        "duration_values": (6, 8, 10, 12, 14, 16, 18, 20),
+        "duration_wire": "int",
+        "resolutions": ("720p", "1080p", "1440p", "2160p"),
+        "default_resolution": "720p",
+        "prices": {"720p": 0.09, "1080p": 0.13, "1440p": 0.19, "2160p": 0.30},
+        "platform": "ltx",
+        "checked": "2026-10-08",
+        "source": "https://fal.ai/models/lightricks/ltx-2.5/text-to-video/fast",
+    },
+    "ltx2.5": {
+        "t2v": "lightricks/ltx-2.5/text-to-video/pro",
+        "i2v": "lightricks/ltx-2.5/image-to-video/pro",
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (6, 10),
+        "duration_values": (6, 8, 10),
+        "duration_wire": "int",
+        "resolutions": ("720p", "1080p"),
+        "default_resolution": "720p",
+        "prices": {"720p": 0.12, "1080p": 0.17},
+        "platform": "ltx",
+        "checked": "2026-10-08",
+        "source": "https://fal.ai/models/lightricks/ltx-2.5/text-to-video/pro",
+    },
     # NOTE THE NAMESPACE: `alibaba/`, not `fal-ai/`. The older
     # fal-ai/wan-i2v and fal-ai/wan-pro routes still exist and are a
     # different, older model -- do not "fix" this prefix. The endpoint's own

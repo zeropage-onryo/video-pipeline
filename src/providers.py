@@ -218,6 +218,9 @@ class Band:
 
 BANDS: dict[tuple[str, str], Band] = {
     ("fal", "ltx2.3"): Band("standard"),
+    # 2.5 sits with 2.3: Pro at 1080p ($0.17/s) is under 2.3 at 2160p
+    ("fal", "ltx2.5-fast"): Band("standard"),
+    ("fal", "ltx2.5"): Band("standard"),
     ("fal", "wan3"): Band("standard"),
     ("fal", "kling3-turbo-pro"): Band("creator"),
     ("fal", "seedance2-fast"): Band("creator"),
