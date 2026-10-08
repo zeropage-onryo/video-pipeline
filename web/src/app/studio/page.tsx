@@ -258,6 +258,9 @@ function Composer() {
   const [project, setProject] = useState<Project | null>(null);
   const [caps, setCaps] = useState<Capabilities>({});
   const [assets, setAssets] = useState<Asset[]>([]);
+  // an element deleted from the shelf took its frames off the box; an Undo
+  // puts them back (keyed by element, until the toast closes)
+  const unpicked = useRef(new Map<string, string[]>());
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
@@ -553,7 +556,13 @@ function Composer() {
         // go away (2026-10-02, Mike's call). The send's own turn stays --
         // it IS the "scene written" card here, with the timed shots under it.
         finishProject({ conceptId, detail: job.detail || "on the board" });
-        toast("Scene written · it is on Pipeline to pick");
+        // a scene filed under a project is picked in its workspace; one made
+        // outside any project has no board, only the tiles' Send to Queue
+        toast(
+          detail?.project_id
+            ? "Scene written · it is in the project, ready to pick"
+            : "Scene written · Send to Queue when you want it rendered",
+        );
         announceQueueChange();
       }
     },
@@ -1555,8 +1564,19 @@ function Composer() {
           }}
           onDeleted={(a) => {
             setOpen(null);
+            // the delete is held behind an Undo: hide it here rather than
+            // re-read a listing that still has it
+            setAssets((was) => was.filter((x) => x.id !== a.id));
+            const dropped = picked.filter((u) => a.photos.includes(u));
+            unpicked.current.set(a.id, dropped);
             setPicked((was) => was.filter((u) => !a.photos.includes(u)));
-            toast(`${a.name} deleted`);
+          }}
+          onRestored={(a) => {
+            // Undo: nothing was deleted -- the shelf reads it back and the
+            // frames it took off the box go back on
+            const dropped = unpicked.current.get(a.id) ?? [];
+            unpicked.current.delete(a.id);
+            if (dropped.length) setPicked((was) => [...new Set([...was, ...dropped])]);
             void loadAssets();
           }}
         />

@@ -22,6 +22,7 @@ import { OpenInEditor } from "@/components/cut/open-in-editor";
 import { API_URL } from "@/lib/api";
 import {
   deleteGenerated,
+  restoreGenerated,
   getMedia,
   organizeGenerated,
   sceneHref,
@@ -90,6 +91,12 @@ export default function AssetsPage() {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Media unavailable"));
   };
+  // an Undo pressed later reloads the wall under the filters showing then,
+  // not the ones showing when the render was removed
+  const latestLoad = useRef(() => load());
+  useEffect(() => {
+    latestLoad.current = () => load();
+  });
   useEffect(() => {
     const timer = setTimeout(() => load(query, active, provider), query ? 220 : 0);
     return () => clearTimeout(timer);
@@ -130,7 +137,17 @@ export default function AssetsPage() {
       .then(() => {
         show(null);
         setWall((w) => (w ? { ...w, items: w.items.filter((x) => x.generated_id !== m.generated_id) } : w));
-        toast(`${m.provider ?? "render"} removed from the wall · the file stays`);
+        toast(`${m.provider ?? "render"} removed from the wall · the file stays`, "ok", {
+          // the delete is soft, so Undo is the server's own inverse
+          action: {
+            label: "Undo",
+            run: () =>
+              restoreGenerated(m.generated_id!).then(() => {
+                latestLoad.current();
+                toast(`${m.provider ?? "render"} is back on the wall`);
+              }),
+          },
+        });
         load();
       })
       .catch((e) => toast(e instanceof Error ? e.message : "Could not delete", "err"));
@@ -215,7 +232,7 @@ export default function AssetsPage() {
       <div className={`wall${open ? " has-detail" : ""}`}>
         {items && !items.length ? (
           <p className="stateline" style={{ padding: "14px 42px" }}>
-            {total ? "Nothing matches — clear the search or pick another chip" : "No renders yet — pick a scene to draw its keyframe, or approve one in Queue"}
+            {total ? "Nothing matches — clear the search or pick another chip" : "No renders yet — an image made in Create, or keyframes and clips approved in the Queue, land here"}
           </p>
         ) : null}
         {groups.map((g) => (

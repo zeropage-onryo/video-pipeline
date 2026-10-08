@@ -38,6 +38,7 @@ import { API_URL } from "@/lib/api";
 import {
   announceBalanceChange,
   announceQueueChange,
+  archiveConcept,
   cancelJob,
   clearJob,
   cutAssemble,
@@ -47,6 +48,7 @@ import {
   fileLaneClip,
   getCapabilities,
   listJobs,
+  pickConcept,
   queueApprove,
   queueQuote,
   queueManual,
@@ -99,7 +101,7 @@ const announced = new Set<number>();
 const PILL =
   "min-h-11 rounded-[6px] border px-3 font-plex! text-xs! focus-visible:rounded-[6px]! disabled:cursor-not-allowed";
 const pill = (on: boolean, off = false) =>
-  `${PILL} ${off ? (on ? "border-noir-line3 bg-noir-line3 text-bone!" : "border-noir-line2 text-[#5e5b55]!") : on ? "border-bone bg-bone text-noir-bg!" : "border-noir-line3 text-bone! hover:border-bone"}`;
+  `${PILL} ${off ? (on ? "border-noir-line3 bg-noir-line3 text-bone!" : "border-noir-line2 text-[var(--dimmer)]!") : on ? "border-bone bg-bone text-noir-bg!" : "border-noir-line3 text-bone! hover:border-bone"}`;
 const SIDE_BTN =
   "flex size-[52px] flex-none items-center justify-center rounded-[8px] border border-noir-line bg-transparent p-0 hover:enabled:border-bone hover:enabled:text-bone! disabled:opacity-50 focus-visible:rounded-[8px]!";
 const POPK = "mb-2 font-plex text-[11px] tracking-[0.14em] text-bone3";
@@ -327,6 +329,20 @@ export default function QueuePage() {
       setDrawing((d) => ({ ...d, [c.id]: false }));
     }
   };
+  /* the toast's Undo on a reject or a hand-made mark: the server's own
+     inverse routes, then the card is read back like any other change */
+  const undoDecision = async (c: Concept, what: "reject" | "shot") => {
+    if (what === "reject") {
+      await archiveConcept(c.id, false);
+      if (c.picked) await pickConcept(c.id, true);
+    } else {
+      await queueShot(c.id, false);
+    }
+    acted.delete(c.id);
+    announceQueueChange();
+    loadPending();
+    toast(`${c.n} is back in the Queue`);
+  };
   const decide = async (c: Concept, what: "approve" | "reject" | "shot") => {
     setBusy((b) => ({ ...b, [c.id]: what }));
     setPopId(null);
@@ -359,11 +375,18 @@ export default function QueuePage() {
         acted.set(c.id, { status: "RENDERING", job: res.job_id, at: Date.now() });
       } else if (what === "reject") {
         await queueReject(c.id);
-        toast(`${c.n} rejected — archived, still counted`);
+        // Undo is the inverse, in order: un-archive (which withdraws any
+        // board ruling not yet taught), then pick again if it was picked --
+        // the pick re-records its own ruling. A parked card was never picked.
+        toast(`${c.n} rejected — archived, still counted`, "ok", {
+          action: { label: "Undo", run: () => undoDecision(c, "reject") },
+        });
         acted.set(c.id, { status: "ARCHIVED", at: Date.now() });
       } else {
         await queueShot(c.id);
-        toast(`${c.n} marked shot by hand`);
+        toast(`${c.n} marked shot by hand`, "ok", {
+          action: { label: "Undo", run: () => undoDecision(c, "shot") },
+        });
         acted.set(c.id, { status: "SHOT BY HAND", at: Date.now() });
       }
       held.delete(c.id);
@@ -550,9 +573,9 @@ export default function QueuePage() {
                   key={p}
                   role="listitem"
                   title={gateLine(p) + (full ? " · daily cap reached" : "")}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-plex text-[10px] leading-none tracking-[0.08em] ${v.available ? "border-noir-line3 text-bone2" : "border-noir-line2 text-[#5e5b55]"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-plex text-[10px] leading-none tracking-[0.08em] ${v.available ? "border-noir-line3 text-bone2" : "border-noir-line2 text-[var(--dimmer)]"}`}
                 >
-                  <i className={`size-1.5 flex-none rounded-full ${!v.available ? "bg-[#4a4843]" : full ? "bg-gate-warn" : "bg-gate-pass"}`} />
+                  <i className={`size-1.5 flex-none rounded-full ${!v.available ? "bg-[var(--dimmer)]" : full ? "bg-gate-warn" : "bg-gate-pass"}`} />
                   {v.label.toUpperCase()}
                   <span className="text-bone3">
                     {!v.available ? "OFF" : v.today != null ? `${v.today}${v.cap ? `/${v.cap}` : ""}` : "READY"}
@@ -574,7 +597,7 @@ export default function QueuePage() {
       {error ? <div className="stateline err" style={{ padding: "0 42px 14px" }}>{error}</div> : null}
       {pending && !pending.length ? (
         <p className="stateline" style={{ padding: "0 42px" }}>
-          Nothing waiting — a Studio run lands here once its keyframe is rendered, or pick a concept on Pipeline
+          Nothing waiting — pick a scene in a project, or Send to Queue from Create, and it waits here for your approval
         </p>
       ) : null}
       <div className="mx-auto mb-4 grid max-w-[1680px] grid-cols-[repeat(auto-fill,minmax(min(400px,100%),1fr))] items-start gap-6 px-[42px] max-sm:px-4">
@@ -626,7 +649,7 @@ export default function QueuePage() {
             <article
               key={c.id}
               data-id={c.id}
-              className={`${CARD} ${locked ? "border-[#5a2320]" : "border-noir-line2"} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
+              className={`${CARD} ${locked ? "border-noir-red/40" : "border-noir-line2"} ${did && did.status !== "RENDERING" ? "opacity-35" : ""}`}
             >
               <Hero
                 concept={c}
@@ -1007,7 +1030,7 @@ export default function QueuePage() {
           </div>
           {lane && !lane.length ? (
             <p className="stateline" style={{ padding: "0 42px" }}>
-              Nothing to render by hand — the lane takes the scenes you picked on Pipeline or sent from the Director
+              Nothing to render by hand — the lane takes the scenes you picked in a project or sent to the Queue
             </p>
           ) : null}
           <div className="scenegrid">

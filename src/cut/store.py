@@ -484,6 +484,32 @@ def delete_project(project_id: str, *, account_id: Optional[int],
         return bool(cur.rowcount)
 
 
+def restore_project(project_id: str, *, account_id: Optional[int],
+                    dsn: Optional[str] = None) -> tuple[Optional[dict[str, Any]], str]:
+    """The Undo on delete_project (2026-10-08): the project is back on the
+    list, where it was (updated_at is not touched). Returns (row, "") on
+    success, else (None, why): "not_found" for a project that is not
+    deleted or not this account's, "taken" for a concept's cut whose scene
+    was opened again since -- cut_projects_concept allows one live project
+    per concept, and the new one is the same history anyway."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT * FROM cut_projects WHERE id = %s AND deleted_at IS NOT NULL "
+            "AND account_id IS NOT DISTINCT FROM %s", (str(project_id), account_id)).fetchone()
+        if row is None:
+            return None, "not_found"
+        if row["concept_id"] is not None and conn.execute(
+                "SELECT 1 FROM cut_projects WHERE concept_id = %s AND deleted_at IS NULL "
+                "AND account_id IS NOT DISTINCT FROM %s",
+                (row["concept_id"], account_id)).fetchone():
+            return None, "taken"
+        back = conn.execute(
+            "UPDATE cut_projects SET deleted_at = NULL WHERE id = %s "
+            "AND account_id IS NOT DISTINCT FROM %s RETURNING *",
+            (str(project_id), account_id)).fetchone()
+    return (dict(back), "") if back else (None, "not_found")
+
+
 # --------------------------------------------------------------------------
 # cut_media_cache -- what a handle's file is, and its previews
 # --------------------------------------------------------------------------

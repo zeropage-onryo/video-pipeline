@@ -1897,6 +1897,16 @@ def asset_delete_generated(asset_id: int, account_id: int = Depends(auth.current
     return {"deleted": asset_id}
 
 
+@router.post("/assets/generated/{asset_id}/restore")
+def asset_restore_generated(asset_id: int, account_id: int = Depends(auth.current_account_id)):
+    """The Undo on a removed render (2026-10-08): back on the wall and
+    the assets shelf. 404 for a render that is not removed, or not this
+    account's."""
+    if not render_assets.restore(asset_id, account_id=account_id):
+        return _error(404, "not_found", "no removed render with that id")
+    return {"restored": asset_id}
+
+
 # --- retrieval --------------------------------------------------------------
 
 class RetrieveBody(BaseModel):

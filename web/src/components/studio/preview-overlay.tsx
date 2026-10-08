@@ -115,7 +115,7 @@ export function PreviewOverlay({ state, onClose }: { state: PreviewState; onClos
                 eager
                 className="block size-full rounded-[6px] object-contain"
                 deadLabel={`IMAGE UNAVAILABLE · ${it.name || fileName(it.url)}`}
-                deadClassName="size-full rounded-[6px] border border-dashed border-[#5a2320] p-6 text-xs tracking-[0.14em]"
+                deadClassName="size-full rounded-[6px] border border-dashed border-noir-red/40 p-6 text-xs tracking-[0.14em]"
               />
               )}
             </div>
