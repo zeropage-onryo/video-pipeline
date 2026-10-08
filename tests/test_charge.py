@@ -143,7 +143,7 @@ def test_a_chosen_length_and_resolution_are_held_sent_and_banked(studio, tmp_pat
     result = fal.generate_from_prompt(PROMPT, db_path=studio["dsn"],
                                       account_id=studio["account_id"], model="ltx2.3",
                                       duration=10, resolution="1440p", source="mcp",
-                                      bank=True)
+                                      bank=True, project_id=3)
     assert result["ok"] is True, result
     assert result["asset_id"] == 55
     (body,) = studio["submits"]
@@ -156,7 +156,8 @@ def test_a_chosen_length_and_resolution_are_held_sent_and_banked(studio, tmp_pat
             "SELECT params_json FROM generations WHERE id = %s",
             (result["generation_id"],)).fetchone()["params_json"])
     assert params["source"] == "mcp" and params["duration"] == 10
-    assert params["resolution"] == "1440p"
+    assert params["resolution"] == "1440p" and params["project_id"] == 3
+    assert banked[0]["metadata"]["project_id"] == 3
 
     banked.clear()
     studio["submits"].clear()

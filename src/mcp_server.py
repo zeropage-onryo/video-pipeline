@@ -133,6 +133,10 @@ TITLES = {
     "generate_image": "Render an image (quoted first, spends credits)",
     "generate_video": "Render a video clip (quoted first, spends credits)",
     "apply_effect": "Apply an effect (quoted first, spends credits)",
+    "projects": "List your projects",
+    "project": "Open one project",
+    "project_chat": "Read a project's chat history",
+    "create_project": "Create a project",
 }
 
 _CAP = f"Returns at most `limit` rows (default {LIST_LIMIT}, maximum 100)"
@@ -147,9 +151,13 @@ _APPROVAL = (
     "refused, never charged."
 )
 _REFERENCE_IDS = (
-    "References are ids, never URLs: `gen:<id>` (an image from `renders`), "
-    "a photo `ref` exactly as `elements` lists it, or `candidate:<id>` (an id "
-    "`images_for` returned)."
+    "References are ids, never URLs: `gen:<id>` (an image from `renders` or "
+    "a project), a photo `ref` exactly as `elements` or `project` lists it, "
+    "or `candidate:<id>` (an id `images_for` returned)."
+)
+_PROJECT_FILING = (
+    "`project_id` (from `projects`) files the result under that project, so "
+    "it is there when the project is opened again."
 )
 
 DESCRIPTIONS = {
@@ -336,9 +344,9 @@ DESCRIPTIONS = {
         f"(`image_models`; omit `model` for the default) and file it on your "
         f"Assets wall. {_APPROVAL} An unknown model, an aspect ratio it does not "
         "take or more references than it accepts is refused, never swapped. "
-        f"{_REFERENCE_IDS} After the yes it runs in the background: poll `job`; "
-        "the result carries `media_url` and `asset_id` (`gen:<asset_id>` names "
-        "it from then on)."
+        f"{_REFERENCE_IDS} {_PROJECT_FILING} After the yes it runs in the "
+        "background: poll `job`; the result carries `media_url` and `asset_id` "
+        "(`gen:<asset_id>` names it from then on)."
     ),
     "generate_video": (
         "SPENDS CREDITS. Render one clip on a video model you choose "
@@ -347,8 +355,8 @@ DESCRIPTIONS = {
         "be ones the model takes, or the call is refused with the legal set. "
         "`reference` is ONE start frame for image-to-video, by id (same ids as "
         "a render reference); omit it for text-to-video. "
-        f"{_REFERENCE_IDS} After the yes it runs in the background: poll `job`; "
-        "the result carries `media_url` and `asset_id`."
+        f"{_REFERENCE_IDS} {_PROJECT_FILING} After the yes it runs in the "
+        "background: poll `job`; the result carries `media_url` and `asset_id`."
     ),
     "apply_effect": (
         "SPENDS CREDITS. Apply one effect from `effects` to sources named by "
@@ -357,8 +365,39 @@ DESCRIPTIONS = {
         "it is priced). `options` takes the names and values `effects` lists, "
         "e.g. {\"effect_scene\": \"bullet_time_360\"}; anything else is refused "
         "with the legal set. `prompt` is required, optional or refused per "
-        f"effect. {_APPROVAL} {_REFERENCE_IDS} After the yes it runs in the "
-        "background: poll `job`; the result carries `media_url` and `asset_id`."
+        f"effect. {_APPROVAL} {_REFERENCE_IDS} {_PROJECT_FILING} After the yes "
+        "it runs in the background: poll `job`; the result carries `media_url` "
+        "and `asset_id`."
+    ),
+    "projects": (
+        "Your projects, most recently touched first: id, name, the start of "
+        "its brief, whether it carries a look, and how many scenes it holds "
+        "(and how many were picked and rendered). `include_archived` adds the "
+        f"archived ones. {_CAP}. Read-only."
+    ),
+    "project": (
+        "One project in full, by its id from `projects`: its brief and look, "
+        "what it learned from earlier picks and passes, its scenes (status, "
+        "the start of each scene prompt, its still or clip), every reference "
+        "image those scenes used (each with a `ref` you can pass back as a "
+        "reference, what it shows and the page it came from), the renders "
+        "made for it (`gen:<id>`), and the latest turns of its chat. "
+        "`chat_turns` sets how many turns (default 12, maximum 40); page "
+        "further back with `project_chat`. Read-only."
+    ),
+    "project_chat": (
+        "A project's chat history: each turn's role, words and time, oldest "
+        "first within the page. Returns the newest `limit` turns (default 40, "
+        "maximum 200); pass `before` (the oldest turn id you already hold) to "
+        "page further back; `has_more` says whether older turns exist. "
+        "Read-only."
+    ),
+    "create_project": (
+        "Start a new project: a name, an optional brief (who it is for, what "
+        "it must always have and never show) and an optional look (the style "
+        "every prompt in it is held to). It appears on your projects board in "
+        "the studio. Pass its id as `project_id` to a render or an effect to "
+        "file the result under it. Spends nothing."
     ),
 }
 
@@ -397,6 +436,10 @@ HINTS = {
     "generate_image":    {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "generate_video":    {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "apply_effect":      {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
+    "projects":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "project":           {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "project_chat":      {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "create_project":    {"read": False, "destructive": False, "idempotent": False, "open_world": False},
 }
 
 # THE LISTED SET (2026-10-07, Mike's call). What a signed-in stranger is
@@ -417,7 +460,8 @@ LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
 # always on here, because they are the point of it; each is quoted first
 # and runs only after the person's yes in chat (`approval_gate`), which is
 # the gate -- not the engine flag. `build_server(surface="studio")`.
-STUDIO_TOOLS = ("elements", "images_for", "image_models", "video_models",
+STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project",
+                "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
                 "generate_video", "apply_effect", "job")
 SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
@@ -429,8 +473,12 @@ STUDIO_INSTRUCTIONS = (
     "spends nothing and returns a quote -- show the person what will run and "
     "its dollar price, and WAIT for a yes; only then call again with the same "
     "arguments and approve_usd = the quoted price. Never approve on the "
-    "person's behalf. References and sources are ids (gen:<id> from renders, "
-    "a photo ref from elements, candidate:<id> from images_for), never URLs. "
+    "person's behalf. Work can be filed into a project: `projects` lists them, "
+    "`project` reopens one (its brief, look, scenes, the reference images it "
+    "used and its chat), `create_project` starts one, and `project_id` on a "
+    "render files it there. References and sources are ids (gen:<id> from "
+    "renders, a photo ref from elements or a project, candidate:<id> from "
+    "images_for), never URLs. "
     "Renders run in the background: poll `job`. prompt_craft holds the "
     "studio's prompt-writing guides."
 )
@@ -1056,7 +1104,8 @@ def quote_render(idea_id: int, provider: Optional[str] = None, model: Optional[s
 
 REFERENCE_IDS = ("gen:<id> (an image on your Assets wall -- see `renders`, or the "
                  "asset_id a render returned), a photo `ref` exactly as `elements` "
-                 "lists it, or candidate:<id> (an image `images_for` found)")
+                 "or `project` lists it, or candidate:<id> (an image `images_for` "
+                 "found)")
 
 
 def _fetchable(raw: str, account_id: Optional[int]) -> Optional[str]:
@@ -1121,6 +1170,10 @@ def resolve_references(refs, *, limit: int, who: str, dsn: Optional[str] = None,
         else:
             if allowed is None:
                 allowed = _allowed_refs(dsn, account_id)
+                # ...and every photo a project's scenes were grounded on
+                # (2026-10-08): reopening a project reuses what it used
+                for row in _project_refs(dsn, account_id):
+                    allowed.setdefault(row["ref"], row["ref"])
             if ref not in allowed:
                 raise ValueError(f"{ref!r} is not a reference id. Use one of: "
                                  f"{REFERENCE_IDS}. URLs are never taken")
@@ -1131,6 +1184,17 @@ def resolve_references(refs, *, limit: int, who: str, dsn: Optional[str] = None,
                              "(its bytes are not in the studio's bucket)")
         urls.append(url)
     return urls
+
+
+def _project_refs(dsn, account_id, project_id: Optional[int] = None) -> list[dict]:
+    """The refs on the account's project scenes, or [] when they cannot be
+    read -- a reference check fails CLOSED (the ref is refused as unknown),
+    never open."""
+    from . import projects
+    try:
+        return projects.scene_refs(dsn, account_id=account_id, project_id=project_id)
+    except Exception:
+        return []
 
 
 def approval_gate(usd: float, approve_usd, *, what: str) -> Optional[dict]:
@@ -1241,7 +1305,8 @@ def run_image(prompt: str, model: str = "", aspect: str = "",
               references: Optional[list] = None, approve_usd: float = 0.0,
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
-              dry_run: bool = False) -> dict[str, Any]:
+              dry_run: bool = False,
+              project_id: Optional[int] = None) -> dict[str, Any]:
     """One still on ONE chosen model, through fal.generate_image_from_prompt:
     the composer's own door, so the credit hold, the cap, the generations
     row and the Assets wall behave exactly as they do from Studio.
@@ -1271,7 +1336,8 @@ def run_image(prompt: str, model: str = "", aspect: str = "",
                               dsn=dsn, account_id=account_id)
     usd = fal.image_usd(model, aspect or None, references=len(urls))
     quote = {"model": model, "label": spec["label"], "aspect": aspect or None,
-             "references": named, "usd": usd}
+             "references": named, "usd": usd,
+             **_filed_under(project_id, dsn, account_id)}
     gate = approval_gate(usd, approve_usd, what=f"This {spec['label']} image")
     if gate is not None:
         return {**gate, "quote": quote}
@@ -1280,6 +1346,7 @@ def run_image(prompt: str, model: str = "", aspect: str = "",
     res = fal.generate_image_from_prompt(
         prompt, model=model, aspect=aspect or None, reference_urls=urls or None,
         approved=True, account_id=account_id, source="mcp", bank=True,
+        project_id=project_id,
         **({"db_path": dsn} if dsn is not None else {}))
     return {**res, "quote": quote}
 
@@ -1298,7 +1365,8 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
               frame: str = "", reference: str = "", approve_usd: float = 0.0,
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
-              dry_run: bool = False) -> dict[str, Any]:
+              dry_run: bool = False,
+              project_id: Optional[int] = None) -> dict[str, Any]:
     """One clip on ONE chosen fal model, behind a chat approval.
 
     Priced first by providers.check_render_choice -- the Queue's own
@@ -1330,7 +1398,8 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
     quote = {"model": choice["model"], "seconds": choice["duration"],
              "frame": choice["frame"], "usd": usd,
              "from_image": bool(start_frame),
-             **({"reference": reference} if reference else {})}
+             **({"reference": reference} if reference else {}),
+             **_filed_under(project_id, dsn, account_id)}
     gate = approval_gate(usd, approve_usd, what="This clip")
     if gate is not None:
         return {**gate, "quote": quote}
@@ -1340,6 +1409,7 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
         prompt, reference_image=start_frame, model=choice["model"],
         duration=choice["duration"], resolution=choice["frame"],
         approved=True, account_id=account_id, source="mcp", bank=True,
+        project_id=project_id,
         **({"db_path": dsn} if dsn is not None else {}))
     return {**res, "quote": quote}
 
@@ -1384,7 +1454,8 @@ def _video_sources(refs: list[str], dsn, account_id) -> tuple[list[str], dict]:
 def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
                options: Optional[dict] = None, approve_usd: float = 0.0,
                dsn: Optional[str] = None, account_id: Optional[int] = None,
-               dry_run: bool = False) -> dict[str, Any]:
+               dry_run: bool = False,
+               project_id: Optional[int] = None) -> dict[str, Any]:
     """Apply ONE effect (`effects` lists them) to sources named by id,
     behind the same chat approval as a clip: quoted with approve_usd 0,
     run only when approve_usd covers the price. Every check -- the effect,
@@ -1407,14 +1478,16 @@ def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
     usd = effects.quote_usd(effect, opts, probe)
     quote = {"effect": effect, "label": row["label"], "options": opts,
              "sources": named, "output": row["output"], "usd": usd,
-             **({"source_clip": probe} if probe else {})}
+             **({"source_clip": probe} if probe else {}),
+             **_filed_under(project_id, dsn, account_id)}
     gate = approval_gate(usd, approve_usd, what=f"This {row['label']} pass")
     if gate is not None:
         return {**gate, "quote": quote}
     if dry_run:
         return {"ok": True, "dry_run": True, "quote": quote}
     res = effects.run(effect, urls, prompt, opts, usd=usd, sources=named, probe=probe,
-                      account_id=account_id, db_path=dsn, source="mcp")
+                      account_id=account_id, db_path=dsn, source="mcp",
+                      project_id=project_id)
     return {**res, "quote": quote}
 
 
@@ -1446,6 +1519,204 @@ def list_renders(kind: Optional[str] = None, limit: int = 20, dsn: Optional[str]
             break
     return {"count": len(out), "renders": out,
             "note": "" if out else "no renders yet -- generate_image makes the first"}
+
+
+# --- projects: make one, reopen one (2026-10-08) -----------------------------
+#
+# Mike's ask: make projects from Claude, revisit the ones made in the
+# studio, and pull the reference images and the chat a project already
+# has. All of it reads and writes `src/projects.py` -- the SAME rows the
+# studio's projects board and workspace draw -- so a project started here
+# is on the board, and one started there opens here with its history.
+
+CHAT_PREVIEW = 12        # turns `project` carries; `project_chat` pages the rest
+CHAT_PREVIEW_MAX = 40
+CHAT_EXCERPT = 1500      # characters of one turn in the preview
+PROJECT_REFS_MAX = 60    # reference images listed on `project`
+PROJECT_RENDERS_MAX = 50
+PROJECT_MEMORY = 20      # newest lessons shown
+
+
+def _project_or_refuse(project_id, dsn, account_id) -> dict:
+    """The caller's project, or ValueError -- someone else's id reads
+    exactly like one that does not exist."""
+    from . import projects
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"project_id must be a number from `projects`, got {project_id!r}")
+    found = projects.get(pid, dsn, account_id=account_id)
+    if not found:
+        raise ValueError(f"no project {pid} -- ids come from `projects`")
+    return found
+
+
+def _filed_under(project_id, dsn, account_id) -> dict:
+    """The quote's `project` entry, checked before any price is shown, or
+    nothing when no project was named."""
+    if project_id in (None, "", 0):
+        return {}
+    found = _project_or_refuse(project_id, dsn, account_id)
+    return {"project": {"id": found["id"], "title": found["title"]}}
+
+
+def _view(url: Optional[str], account_id) -> Optional[str]:
+    """A stored media string as something a person can open, minted on read."""
+    from . import media
+    if not url:
+        return None
+    try:
+        return media.url_for(str(url), account_id)
+    except Exception:
+        return str(url)
+
+
+def _turn(message: dict, excerpt: Optional[int] = None) -> dict[str, Any]:
+    content = message.get("content") or ""
+    out = {"id": message["id"], "role": message["role"],
+           "at": message.get("created_at"),
+           "content": content if excerpt is None else content[:excerpt]}
+    if excerpt is not None and len(content) > excerpt:
+        out["truncated"] = True
+    extras = message.get("tool_calls")
+    if isinstance(extras, dict) and extras:
+        out["carried"] = sorted(extras)          # what the studio drew beside it
+    return out
+
+
+def list_project_cards(include_archived: bool = False, limit: int = LIST_LIMIT,
+                       dsn: Optional[str] = None,
+                       account_id: Optional[int] = None) -> dict[str, Any]:
+    """The account's projects, newest-touched first -- the projects board."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    cap = max(1, min(int(limit or LIST_LIMIT), 100))
+    rows = projects.list_projects(dsn, account_id=account_id,
+                                  include_archived=bool(include_archived))
+    cards = [{"id": p["id"], "title": p["title"],
+              "brief": " ".join((p.get("brief") or "").split())[:200],
+              "has_look": bool((p.get("look") or "").strip()),
+              "scenes": int(p.get("concepts") or 0),
+              "picked": int(p.get("picked") or 0),
+              "rendered": int(p.get("rendered") or 0),
+              "archived": bool(p.get("archived")),
+              "updated_at": p.get("updated_at"),
+              "cover": _view(p.get("cover"), account_id)}
+             for p in rows[:cap]]
+    return {"count": len(cards), "projects": cards,
+            **_truncation(rows, cap, "raise `limit`"),
+            **({} if cards else {"note": "no projects yet -- `create_project` starts one"})}
+
+
+def get_project(project_id: int, chat_turns: int = CHAT_PREVIEW,
+                dsn: Optional[str] = None,
+                account_id: Optional[int] = None) -> dict[str, Any]:
+    """One project as a person reopening it needs it: the brief and look,
+    what it learned, its scenes, the reference images they used (as refs
+    the render tools take back), its renders and the latest chat."""
+    from . import asset_shelf, projects, render_assets
+    account_id = _account(account_id, dsn)
+    project = _project_or_refuse(project_id, dsn, account_id)
+    pid = project["id"]
+
+    concepts = preprod.list_concepts(limit=200, dsn=dsn, account_id=account_id,
+                                     project_id=pid)
+    scenes = []
+    for c in concepts:
+        shot = (c.get("shots") or [{}])[0] or {}
+        scenes.append({**_card(c),
+                       "prompt": (shot.get("prompt") or "")[:400],
+                       "still": _view(shot.get("reference_image"), account_id),
+                       "clip": _view(shot.get("media_url"), account_id)})
+
+    refs = _project_refs(dsn, account_id, pid)
+    sources = scout.sources_for_refs(
+        [r["ref"].split("?", 1)[0].rsplit("/", 1)[-1] for r in refs], dsn=dsn)
+    references = []
+    for r in refs[:PROJECT_REFS_MAX]:
+        parsed = asset_shelf.parse_ref(r["ref"]) or {}
+        src = sources.get(r["ref"].split("?", 1)[0].rsplit("/", 1)[-1]) or {}
+        page = src.get("source_url") or ""
+        references.append({
+            "ref": r["ref"], "kind": parsed.get("kind") or "",
+            "label": src.get("title") or parsed.get("filename")
+            or r["ref"].rsplit("/", 1)[-1],
+            "url": _view(r["ref"], account_id),
+            "page": page if page.startswith(("http://", "https://")) else None,
+            "scenes": r["concept_ids"]})
+
+    in_scenes = {c["id"] for c in concepts}
+    renders = []
+    for row in render_assets.list_all(dsn, account_id=account_id):
+        meta = row.get("metadata") or {}
+        if row.get("concept_id") not in in_scenes and meta.get("project_id") != pid:
+            continue
+        renders.append({"id": f"gen:{row['id']}", "kind": row.get("media_kind"),
+                        "model": row.get("model"),
+                        "prompt": (row.get("prompt") or "")[:160],
+                        "scene": row.get("concept_id"),
+                        "media_url": _view(row.get("media_url"), account_id)})
+        if len(renders) >= PROJECT_RENDERS_MAX:
+            break
+
+    turns = max(0, min(int(chat_turns if chat_turns is not None else CHAT_PREVIEW),
+                       CHAT_PREVIEW_MAX))
+    chat = (projects.messages(pid, dsn, account_id=account_id, limit=turns)
+            if turns else {"items": [], "has_more": bool(
+                projects.messages(pid, dsn, account_id=account_id, limit=1)["items"])})
+
+    return {"id": pid, "title": project["title"],
+            "brief": project.get("brief") or "",
+            "look": project.get("look") or "",
+            "archived": bool(project.get("archived")),
+            "created_at": project.get("created_at"),
+            "updated_at": project.get("updated_at"),
+            "learned": (project.get("memory") or [])[-PROJECT_MEMORY:],
+            "scenes": scenes,
+            "references": references,
+            "references_truncated": len(refs) > PROJECT_REFS_MAX,
+            "renders": renders,
+            "chat": [_turn(m, CHAT_EXCERPT) for m in chat["items"]],
+            "chat_has_more": bool(chat["has_more"]),
+            "next": ("pass a reference's `ref` (or a render's `gen:<id>`) to "
+                     "generate_image / generate_video / apply_effect with "
+                     f"project_id={pid} to keep working in it; `project_chat` "
+                     "pages back through the conversation")}
+
+
+def project_history(project_id: int, before: Optional[int] = None,
+                    limit: int = 40, dsn: Optional[str] = None,
+                    account_id: Optional[int] = None) -> dict[str, Any]:
+    """The project's chat, a page at a time, full turns."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    project = _project_or_refuse(project_id, dsn, account_id)
+    page = projects.messages(project["id"], dsn, account_id=account_id,
+                             limit=max(1, min(int(limit or 40), 200)),
+                             before=int(before) if before is not None else None)
+    items = [_turn(m) for m in page["items"]]
+    return {"project_id": project["id"], "title": project["title"],
+            "count": len(items), "turns": items, "has_more": bool(page["has_more"]),
+            **({"next_before": items[0]["id"]} if page["has_more"] and items else {}),
+            **({} if items else {"note": "no chat in this project yet"})}
+
+
+def make_project(title: str, brief: str = "", look: str = "",
+                 dsn: Optional[str] = None,
+                 account_id: Optional[int] = None) -> dict[str, Any]:
+    """A new project on the account's projects board. Spends nothing."""
+    from . import projects
+    account_id = _account(account_id, dsn)
+    title = " ".join((title or "").split())
+    if not title:
+        raise ValueError("a project needs a name")
+    if len((look or "").strip()) > projects.LOOK_MAX:
+        raise ValueError(f"the look is at most {projects.LOOK_MAX} characters")
+    made = projects.create(title, brief, dsn, account_id=account_id, look=look)
+    return {"id": made["id"], "title": made["title"], "brief": made.get("brief") or "",
+            "look": made.get("look") or "",
+            "next": (f"pass project_id={made['id']} to generate_image / "
+                     "generate_video / apply_effect to file work under it")}
 
 
 # --- the night's direction -------------------------------------------------
@@ -2227,6 +2498,27 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                         account_id=_account(account_id, dsn),
                         _label=f"graph {brand}")
 
+    @_reg("projects")
+    def projects_tool(include_archived: bool = False, limit: int = LIST_LIMIT) -> dict:
+        return _t(list_project_cards, include_archived=include_archived, limit=limit,
+                  dsn=dsn, account_id=account_id)
+
+    @_reg("project")
+    def project_tool(project_id: int, chat_turns: int = CHAT_PREVIEW) -> dict:
+        return _t(get_project, project_id, chat_turns=chat_turns, dsn=dsn,
+                  account_id=account_id)
+
+    @_reg("project_chat")
+    def project_chat(project_id: int, before: Optional[int] = None,
+                     limit: int = 40) -> dict:
+        return _t(project_history, project_id, before=before, limit=limit, dsn=dsn,
+                  account_id=account_id)
+
+    @_reg("create_project")
+    def create_project(title: str, brief: str = "", look: str = "") -> dict:
+        return _t(make_project, title, brief=brief, look=look, dsn=dsn,
+                  account_id=account_id)
+
     @_reg("elements")
     def elements() -> dict:
         return _t(list_elements, dsn=dsn, account_id=account_id)
@@ -2270,26 +2562,30 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         @_reg("generate_image")
         def generate_image(prompt: str, model: str = "", aspect: str = "",
                            references: Optional[list[str]] = None,
-                           approve_usd: float = 0.0) -> dict:
+                           approve_usd: float = 0.0,
+                           project_id: Optional[int] = None) -> dict:
             return _quoted(run_image, f"image {model or 'default'}", prompt=prompt,
                            model=model, aspect=aspect, references=references,
-                           approve_usd=approve_usd)
+                           approve_usd=approve_usd, project_id=project_id)
 
         @_reg("generate_video")
         def generate_video(prompt: str, model: str = "", seconds: Optional[int] = None,
                            frame: str = "", reference: str = "",
-                           approve_usd: float = 0.0) -> dict:
+                           approve_usd: float = 0.0,
+                           project_id: Optional[int] = None) -> dict:
             return _quoted(run_video, f"video {model or 'default'}", prompt=prompt,
                            model=model, seconds=seconds, frame=frame,
-                           reference=reference, approve_usd=approve_usd)
+                           reference=reference, approve_usd=approve_usd,
+                           project_id=project_id)
 
         @_reg("apply_effect")
         def apply_effect(effect: str, sources: Optional[list[str]] = None,
                          prompt: str = "", options: Optional[dict] = None,
-                         approve_usd: float = 0.0) -> dict:
+                         approve_usd: float = 0.0,
+                         project_id: Optional[int] = None) -> dict:
             return _quoted(run_effect, f"effect {effect}", effect=effect,
                            sources=sources, prompt=prompt, options=options,
-                           approve_usd=approve_usd)
+                           approve_usd=approve_usd, project_id=project_id)
 
     @_reg("write_scene")
     def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,
@@ -2400,9 +2696,10 @@ def main(argv=None) -> int:
     # fresh database answered a photo ref with "Error executing tool"
     # rather than "not one of your photos" (found running the studio
     # surface over stdio, 2026-10-08).
-    from . import entities, render_assets
+    from . import entities, projects, render_assets
     entities.init(dsn)
     render_assets.init(dsn)
+    projects.init(dsn)            # after preprod.init: it ALTERs shoot_concepts
 
     # The job registry, injected here for the same reason app/mcp_mount.py
     # injects it: a graph run takes minutes, and a tool call that blocks

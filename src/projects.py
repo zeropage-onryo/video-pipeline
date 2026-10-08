@@ -231,6 +231,59 @@ def for_concepts(concept_ids, dsn: Optional[str] = None, *,
     return {int(r["concept_id"]): {"id": int(r["id"]), "title": r["title"]} for r in rows}
 
 
+def titles(project_ids, dsn: Optional[str] = None, *,
+           account_id: int) -> dict[int, str]:
+    """{project_id: title} for this account's projects among `project_ids`
+    -- one query, for a wall that names the project a render was filed
+    under. Someone else's id is simply absent."""
+    ids = sorted({int(i) for i in (project_ids or []) if i})
+    if not ids:
+        return {}
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, title FROM projects WHERE id = ANY(%s) "
+            "AND account_id IS NOT DISTINCT FROM %s", (ids, account_id)).fetchall()
+    return {int(r["id"]): r["title"] for r in rows}
+
+
+def scene_refs(dsn: Optional[str] = None, *, account_id: int,
+               project_id: Optional[int] = None) -> list[dict[str, Any]]:
+    """Every reference photo on the scenes filed under one project -- or
+    under any of this account's projects when `project_id` is None --
+    oldest scene first, each photo once: [{ref, concept_ids, project_ids}].
+
+    The refs are the strings stored on the shots (`shot["refs"]`), so a
+    caller can hand one straight back as a reference (2026-10-08: the MCP
+    reopens a project and reuses what it was grounded on). A scene outside
+    every project is not read."""
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, project_id, shots_json FROM shoot_concepts "
+            "WHERE account_id IS NOT DISTINCT FROM %s AND project_id IS NOT NULL "
+            + ("AND project_id = %s " if project_id is not None else "")
+            + "ORDER BY created_at, id",
+            (account_id, *([int(project_id)] if project_id is not None else []))).fetchall()
+    found: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        try:
+            shots = json.loads(r["shots_json"] or "[]")
+        except (TypeError, ValueError):
+            shots = []
+        for shot in shots if isinstance(shots, list) else []:
+            if not isinstance(shot, dict):
+                continue
+            for ref in shot.get("refs") or []:
+                if not isinstance(ref, str) or not ref.strip():
+                    continue
+                entry = found.setdefault(ref, {"ref": ref, "concept_ids": [],
+                                               "project_ids": []})
+                if int(r["id"]) not in entry["concept_ids"]:
+                    entry["concept_ids"].append(int(r["id"]))
+                if int(r["project_id"]) not in entry["project_ids"]:
+                    entry["project_ids"].append(int(r["project_id"]))
+    return list(found.values())
+
+
 def update(project_id: int, dsn: Optional[str] = None, *, account_id: int,
            title: Optional[str] = None, brief: Optional[str] = None,
            look: Optional[str] = None) -> dict[str, Any]:

@@ -1572,7 +1572,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          quote=None, duration: Optional[int] = None,
                          resolution: Optional[str] = None,
                          aspect_ratio: Optional[str] = None,
-                         source: str = "workflow", bank: bool = False) -> dict:
+                         source: str = "workflow", bank: bool = False,
+                         project_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The free-standing render behind the Director canvas's Generate node.
@@ -1585,7 +1586,9 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     `source` labels the generations row (still "workflow" for the canvas).
     `bank` (the MCP's) files the finished clip on the Assets wall like a
     still or a Queue clip; off, this door never has (the canvas keeps what
-    it does), and the result then carries no asset_id.
+    it does), and the result then carries no asset_id. `project_id`
+    (2026-10-08) files the clip under a project -- on the row's params and
+    so on the Assets wall's metadata -- for a render no scene carries.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
@@ -1618,6 +1621,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         base_params = {"provider": "fal", "model": model,
                        "duration": seconds, "source": source,
                        **({"resolution": resolution} if resolution else {}),
+                       **({"project_id": int(project_id)} if project_id else {}),
                        "prompt_image": bool(image_url),
                        "key_source": key_source,
                        **fal_requests.ref_params(charge.ref)}
@@ -1682,7 +1686,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                                reference_urls=None,
                                concept_id: Optional[int] = None,
                                source: str = "workflow",
-                               bank: bool = True) -> dict:
+                               bank: bool = True,
+                               project_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error",
     "references", "asset_id"}.
@@ -1749,6 +1754,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                   "key_source": KEY_SOURCE, "references": used,
                   **({"aspect": aspect} if aspect else {}),
                   **({"concept_id": concept_id} if concept_id else {}),
+                  # a still no scene carries, filed under a project (2026-10-08)
+                  **({"project_id": int(project_id)} if project_id else {}),
                   **charge.params()}
         try:
             shot_row_id = _shot_row_for_prompt(

@@ -145,7 +145,9 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # Kling + PixVerse template effects, PixVerse camera moves, Topaz upscale/fps,
 # MMAudio sound), each quoted first and spent only after a yes in chat
 # (approve_usd), plus image_models / video_models / effects / elements /
-# renders / images_for / prompt_craft. NO board tools. --surface board (or
+# renders / images_for / prompt_craft, and PROJECTS (projects / project /
+# project_chat / create_project; project_id on a render files it there).
+# NO board tools. --surface board (or
 # ZEROPAGE_MCP_SURFACE=board) serves the full board; src/research_agent.py
 # asks for it by name. The Guide and the HTTP mount build the board surface.
 # Registering it: ops/connect-claude.md (paste ops/claude-desktop-mcp.json, ⌘Q, reopen)
@@ -1622,7 +1624,20 @@ is yours, in Resolve, by hand.
   clamped) and price rule; a clip source is a `gen:` video measured by ffprobe before it is
   priced, and one that cannot be measured is refused. Effects log under the image tool name
   (`fal`), so they share the stills' cap. Left out because a price or input could not be
-  verified: lip sync, relight, RIFE/FILM, PixVerse 8s. **The cost of the choice:** the
+  verified: lip sync, relight, RIFE/FILM, PixVerse 8s. **Projects reach it too (2026-10-08,
+  Mike's ask: make projects, revisit the ones made in the studio, pull their reference images
+  and chats).** `projects` lists the account's projects (`projects.list_projects`), `project`
+  reopens one -- brief, look, `learned` (its memory), its scenes, every reference photo those
+  scenes used (`projects.scene_refs`, each with the `ref` stored on the shot, its kind, label and
+  source page), its renders and the latest chat turns -- `project_chat` pages the history
+  (`projects.messages`, `before` = the oldest id held) and `create_project` makes one on the same
+  projects board the studio draws. Reopening is read-only: nothing here writes to a project's
+  chat. A project's scene refs join the reference grammar (`_project_refs`, read lazily, fails
+  CLOSED), and `project_id` on `generate_image` / `generate_video` / `apply_effect` files the
+  render under the project -- in the generations row's params and the Assets row's metadata,
+  NOT as a scene (that would be adding to the board) -- so `project` lists it on the next visit
+  and the Assets wall names the project (`api._project_of`, after the scene link). A project that
+  is not the caller's reads as "no project N" everywhere. **The cost of the choice:** the
   idea-agent skill drives BOARD tools, which Claude Desktop no longer has unless a second
   server entry runs `--surface board`. The studio surface was ported onto main from the
   stale `claude/remove-brands` branch on 2026-10-08; that branch's own `STILL_MODELS` image

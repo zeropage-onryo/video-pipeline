@@ -647,7 +647,8 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
         usd: float, sources: Optional[list] = None, probe: Optional[dict] = None,
         account_id: Optional[int] = None, db_path=None, http=None,
         source: str = "mcp", bank: bool = True,
-        publish: Optional[Callable] = None) -> dict[str, Any]:
+        publish: Optional[Callable] = None,
+        project_id: Optional[int] = None) -> dict[str, Any]:
     """Never raises: {"ok", "media_url", "generation_id", "asset_id", "path",
     "error"}. The caller has already checked everything above and had the
     price approved; `usd` is that approved price, and it is what is held."""
@@ -695,6 +696,7 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
         params = {"provider": "fal", "model": effect, "endpoint": endpoint,
                   "effect": effect, "options": options, "source": source,
                   "sources": list(sources or []), "key_source": fal.KEY_SOURCE,
+                  **({"project_id": int(project_id)} if project_id else {}),
                   **charge.params()}
         text = prompt or f"{row['label']} {json.dumps(options, sort_keys=True)}"
         try:

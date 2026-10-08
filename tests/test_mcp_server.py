@@ -1029,8 +1029,12 @@ def test_the_studio_instructions_carry_no_operator_vocabulary():
 
 # ---------- references by id ----------
 
-def _stub_sources(monkeypatch, assets=None, cands=None, photos=None):
-    from src import asset_shelf, fal, imagesearch, render_assets
+def _stub_sources(monkeypatch, assets=None, cands=None, photos=None, project_refs=None):
+    from src import asset_shelf, fal, imagesearch, projects, render_assets
+    monkeypatch.setattr(projects, "scene_refs",
+                        lambda dsn=None, account_id=None, project_id=None: [
+                            {"ref": r, "concept_ids": [1], "project_ids": [2]}
+                            for r in (project_refs or [])])
     monkeypatch.setattr(render_assets, "get",
                         lambda i, dsn=None, account_id=None: (assets or {}).get(i))
     monkeypatch.setattr(imagesearch, "get", lambda c, dsn=None: (cands or {}).get(c))
@@ -1428,3 +1432,160 @@ def test_prompt_craft_refuses_what_it_cannot_serve(kwargs, tmp_db, monkeypatch):
     _shelf(monkeypatch)
     with pytest.raises(ValueError):
         mcp_server.get_prompt_craft(**kwargs, dsn=tmp_db)
+
+
+# ---------- projects from Claude (2026-10-08) ----------
+# Make a project here, reopen one made in the studio, and pull what it
+# already has: its scenes, the reference images they used, its renders and
+# its chat -- the same rows the studio's projects board draws.
+
+def _project_db(tmp_db, monkeypatch):
+    from src import projects, render_assets
+    projects.init(tmp_db)
+    render_assets.init(tmp_db)
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    return tmp_db
+
+
+def _scene_in(path, project_id, title, refs, **shot):
+    from src import projects
+    cid = preprod.save_concept(
+        {"title": title, "hook": "", "logline": "",
+         "shots": [{"n": 1, "type": "BROLL", "source": "AI", "tool": "RUNWAY", "desc": "d",
+                    "prompt": f"{title}: a woman lifts the lid", "refs": refs, **shot}]},
+        brand="zeropage", prompt_template="T", dsn=path, account_id=None)
+    if project_id is not None:
+        projects.tag_concepts([cid], project_id, path, account_id=None)
+    return cid
+
+
+def test_a_project_made_here_is_listed_and_reopened(tmp_db, monkeypatch):
+    path = _project_db(tmp_db, monkeypatch)
+    made = mcp_server.make_project("  Perfume   ad ", brief="gold, slow",
+                                   look="soft window light", dsn=path)
+    assert made["title"] == "Perfume ad" and "project_id=" in made["next"]
+    listed = mcp_server.list_project_cards(dsn=path)
+    assert [p["id"] for p in listed["projects"]] == [made["id"]]
+    card = listed["projects"][0]
+    assert card["has_look"] is True and card["brief"] == "gold, slow" and card["scenes"] == 0
+    opened = mcp_server.get_project(made["id"], dsn=path)
+    assert opened["look"] == "soft window light" and opened["brief"] == "gold, slow"
+    assert opened["scenes"] == opened["references"] == opened["renders"] == opened["chat"] == []
+    with pytest.raises(ValueError, match="needs a name"):
+        mcp_server.make_project("   ", dsn=path)
+    with pytest.raises(ValueError, match="no project"):
+        mcp_server.get_project(999999, dsn=path)
+
+
+def test_reopening_a_studio_project_brings_its_scenes_references_renders_and_chat(
+        tmp_db, monkeypatch):
+    from src import projects, render_assets
+    path = _project_db(tmp_db, monkeypatch)
+    project = projects.create("Ghost can", "an energy drink ad", path, account_id=None)
+    pid = project["id"]
+    first = _scene_in(path, pid, "first", ["/refs/aaa.jpg", "/characters/sam/photo/face.jpg"],
+                      reference_image="https://r2/still.png")
+    second = _scene_in(path, pid, "second", ["/refs/aaa.jpg", "/refs/bbb.jpg"],
+                       media_url="https://r2/clip.mp4")
+    _scene_in(path, None, "elsewhere", ["/refs/zzz.jpg"])
+    on_scene = render_assets.record(
+        generation_id=1, tool="fal", model="ltx2.3", media_kind="video", prompt="p",
+        media_url="https://r2/clip.mp4", concept_id=second, dsn=path, account_id=None)
+    filed = render_assets.record(
+        generation_id=2, tool="fal", model="flux2-pro", media_kind="image",
+        prompt="made in chat", media_url="https://r2/f.png",
+        metadata={"project_id": pid}, dsn=path, account_id=None)
+    render_assets.record(generation_id=3, tool="fal", model="flux2-pro", media_kind="image",
+                         prompt="no project", media_url="https://r2/other.png",
+                         dsn=path, account_id=None)
+    for i in range(15):
+        projects.append_message(pid, "user" if i % 2 == 0 else "assistant",
+                                f"turn {i:02d} " + ("x" * 2000 if i == 14 else ""),
+                                path, account_id=None,
+                                tool_calls={"brief": "b"} if i == 13 else None)
+    monkeypatch.setattr(mcp_server.scout, "sources_for_refs", lambda names, dsn=None: {
+        "bbb.jpg": {"source_url": "https://example.com/page", "title": "a can on ice"}})
+
+    out = mcp_server.get_project(pid, dsn=path)
+    assert {s["title"] for s in out["scenes"]} == {"first", "second"}
+    refs = {r["ref"]: r for r in out["references"]}
+    assert list(refs) == ["/refs/aaa.jpg", "/characters/sam/photo/face.jpg", "/refs/bbb.jpg"]
+    assert refs["/refs/aaa.jpg"]["scenes"] == [first, second]
+    assert refs["/refs/bbb.jpg"]["page"] == "https://example.com/page"
+    assert refs["/refs/bbb.jpg"]["label"] == "a can on ice"
+    assert refs["/characters/sam/photo/face.jpg"]["kind"] == "character"
+    assert {r["id"] for r in out["renders"]} == {f"gen:{on_scene['id']}", f"gen:{filed['id']}"}
+    assert len(out["chat"]) == mcp_server.CHAT_PREVIEW and out["chat_has_more"] is True
+    assert out["chat"][-1]["truncated"] is True
+    assert len(out["chat"][-1]["content"]) == mcp_server.CHAT_EXCERPT
+    assert out["chat"][-2]["carried"] == ["brief"]
+
+    page = mcp_server.project_history(pid, limit=10, dsn=path)
+    assert [t["content"][:7] for t in page["turns"]] == [f"turn {i:02d}" for i in range(5, 15)]
+    assert page["has_more"] is True and len(page["turns"][-1]["content"]) > 2000
+    older = mcp_server.project_history(pid, before=page["next_before"], limit=10, dsn=path)
+    assert [t["content"][:7] for t in older["turns"]] == [f"turn {i:02d}" for i in range(5)]
+    assert older["has_more"] is False
+
+
+def test_another_accounts_project_cannot_be_read_or_filed_into(pg):
+    from conftest import seed_two
+
+    from src import accounts, projects
+    preprod.init(pg)
+    scout.init(pg)
+    projects.init(pg)
+    seed_two("mike@example.com", dsn=pg)
+    with db.connect(pg) as conn:
+        other = conn.execute("SELECT id FROM accounts WHERE slug='antihero'").fetchone()["id"]
+    mine = accounts.resolve_account(dsn=pg)
+    theirs = projects.create("Theirs", "", pg, account_id=other)
+    projects.append_message(theirs["id"], "user", "a secret", pg, account_id=other)
+    assert mcp_server.list_project_cards(dsn=pg, account_id=mine)["projects"] == []
+    for call in (lambda: mcp_server.get_project(theirs["id"], dsn=pg, account_id=mine),
+                 lambda: mcp_server.project_history(theirs["id"], dsn=pg, account_id=mine),
+                 lambda: mcp_server.run_image("a can", model="seedream4",
+                                              project_id=theirs["id"], dsn=pg,
+                                              account_id=mine)):
+        with pytest.raises(ValueError, match="no project"):
+            call()
+
+
+def test_a_projects_references_can_be_used_again(monkeypatch):
+    _stub_sources(monkeypatch, project_refs=["https://r2/old.jpg"])
+    assert mcp_server.resolve_references(["https://r2/old.jpg", "sam/s1.jpg"], limit=4,
+                                         who="X") == ["https://r2/old.jpg", "https://r2/s1.jpg"]
+    with pytest.raises(ValueError, match="not a reference id"):
+        mcp_server.resolve_references(["https://r2/never-used.jpg"], limit=4, who="X")
+
+
+def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypatch):
+    path = _project_db(tmp_db, monkeypatch)
+    project = mcp_server.make_project("Ad", dsn=path)
+    pid = project["id"]
+    stills, clips, fx = _stub_still(monkeypatch), _stub_render(monkeypatch), _stub_effect(monkeypatch)
+    quote = mcp_server.run_image("a can", model="seedream4", project_id=pid, dsn=path)
+    assert quote["quote"]["project"] == {"id": pid, "title": "Ad"}
+    mcp_server.run_image("a can", model="seedream4", project_id=pid, approve_usd=0.03, dsn=path)
+    assert stills[0]["project_id"] == pid
+    price = mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
+                                 dsn=path)["quote"]["usd"]
+    mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
+                         approve_usd=price, dsn=path)
+    assert clips[0]["project_id"] == pid
+    monkeypatch.setattr(mcp_server, "resolve_references", lambda refs, **kw: list(refs))
+    mcp_server.run_effect("remove-background", sources=["gen:1"], project_id=pid,
+                          approve_usd=1, dsn=path)
+    assert fx[0]["project_id"] == pid
+    with pytest.raises(ValueError, match="no project 999999"):
+        mcp_server.run_image("a can", model="seedream4", project_id=999999, dsn=path)
+    assert len(stills) == 1
+
+
+def test_the_project_tools_are_on_the_studio_surface_and_never_listed(tmp_db, monkeypatch):
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    tools = {"projects", "project", "project_chat", "create_project"}
+    studio = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, surface="studio"))}
+    listed = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, listed=True))}
+    assert tools <= studio and not tools & listed

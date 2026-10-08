@@ -165,3 +165,22 @@ def test_an_effect_counts_against_the_image_wall_not_a_clips(tmp_db, keys, monke
     assert res == {"ok": False, "error": "daily cap reached"} and http.calls == []
     assert seen["tool"] == fal.IMAGE_LOG_TOOL and seen["per_account"] == 1
     assert seen["env_prefix"] == "FAL"
+
+
+
+def test_an_effect_records_the_project_it_was_filed_under(tmp_db, keys, fake_download,
+                                                          local_publish, monkeypatch):
+    import json
+
+    from src import render_assets
+    banked = []
+    monkeypatch.setattr(render_assets, "record_best_effort",
+                        lambda **kw: banked.append(kw) or {"id": 1})
+    http = FakeHttp(result={"image": {"url": "https://v3.fal.media/cut.png"}})
+    res = effects.run("remove-background", ["https://r2/a.jpg"], "", {}, usd=0.018,
+                      db_path=tmp_db, http=http, publish=local_publish, project_id=12)
+    assert res["ok"] is True, res["error"]
+    assert banked[0]["metadata"]["project_id"] == 12
+    with generative.connect(tmp_db) as conn:
+        params = json.loads(conn.execute("SELECT params_json FROM generations").fetchone()[0])
+    assert params["project_id"] == 12

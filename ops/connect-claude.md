@@ -67,7 +67,10 @@ price is refused.
 | `renders` | your recent renders as `gen:<id>` |
 | `images_for` | web reference images, as `candidate:<id>` |
 | `prompt_craft` | the studio's prompt-writing guides, for Claude to apply |
-| `generate_image` / `generate_video` / `apply_effect` | quoted, then (after your yes) run as a job; the result lands on the Assets wall |
+| `projects` / `project` | your projects; open one to get its brief, look, scenes, the reference images they used, its renders and its latest chat |
+| `project_chat` | page back through a project's chat history |
+| `create_project` | start a project (it shows on the studio's projects board) |
+| `generate_image` / `generate_video` / `apply_effect` | quoted, then (after your yes) run as a job; the result lands on the Assets wall, and in a project when given its `project_id` |
 | `job` | poll a running render |
 
 The board tools below are on the **board surface**, which Claude Desktop

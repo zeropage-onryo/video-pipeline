@@ -378,3 +378,29 @@ def test_a_solo_render_lands_on_the_assets_wall_with_no_project(tmp_db, monkeypa
     # and the card says which project a scene sits in, or none
     cards = {c["id"]: c for c in client.get("/api/pipeline/concepts").json()["items"]}
     assert cards[solo]["project_id"] is None and cards[filed]["project_id"] == project["id"]
+
+
+
+# guards: a render no scene carries, filed under a project when it was made
+# (the MCP's project_id, 2026-10-08), is labelled with that project on the
+# wall -- and only when the project is this account's
+def test_a_render_filed_under_a_project_is_labelled_on_the_wall(tmp_db, monkeypatch):
+    from src import render_assets
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    # routes act as account None in tests (conftest's dependency override);
+    # a second account would make own_table hand these rows to it, so "not
+    # this account's project" is a project id this account does not hold
+    project = projects.create("Made in chat", "", tmp_db, account_id=None)
+    render_assets.record(generation_id=21, tool="fal", model="flux2-pro", media_kind="image",
+                         prompt="p", media_url="https://r2/filed.png",
+                         metadata={"project_id": project["id"]}, dsn=tmp_db, account_id=None)
+    render_assets.record(generation_id=22, tool="fal", model="flux2-pro", media_kind="image",
+                         prompt="p", media_url="https://r2/stray.png",
+                         metadata={"project_id": 999999}, dsn=tmp_db, account_id=None)
+    wall = {i["url"]: i for i in
+            client.get("/api/media?kind=all&scope=generated").json()["items"]}
+    assert wall["https://r2/filed.png"]["project_id"] == project["id"]
+    assert wall["https://r2/filed.png"]["project_title"] == "Made in chat"
+    assert wall["https://r2/stray.png"]["project_id"] is None
+    assert wall["https://r2/stray.png"]["project_title"] is None
