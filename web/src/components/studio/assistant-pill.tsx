@@ -34,7 +34,15 @@
    the job's `partial` as the model writes it; an answer that lands while
    the card is shut is counted on the face and quoted in the bubble; and
    the card grows out of the pill (one motion layoutId for the shell, one
-   for the face) instead of swapping with it. */
+   for the face) instead of swapping with it.
+
+   It can draw a still (2026-10-08): its turns ask as `output=still`, which
+   hands the brain make_image and nothing else -- a scene is the composer's.
+   A still is the same step card the composer shows (still-step.tsx), held
+   on Approve, with the model and its price under it; the click draws it
+   through /generate/run into that same turn, so the composer shows it too,
+   and a still waiting on Approve turns the face amber like any click it
+   is waiting on. */
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -43,18 +51,24 @@ import { ArrowRight, ChevronDown, ChevronUp, Settings2, SquarePen } from "lucide
 import { useShell } from "@/components/studio/shell";
 import { useAssistantThread } from "@/components/studio/assistant-thread";
 import {
+  announceBalanceChange,
   getBalance,
+  getConceptDetail,
+  getImageModels,
   isProjectTool,
   queuePending,
   runCreativeGuide,
   runGuideAction,
+  runImage,
   waitForJob,
   workspaceHref,
   type Balance,
   type Concept,
   type GuideReply,
+  type ImageModels,
 } from "@/lib/studio-api";
-import { isMake } from "@/lib/composer";
+import { IMAGE_ASPECTS, isMake, loadImageModel, newMadeId, type Made } from "@/lib/composer";
+import { StillStep, isStillStep, lineIsPrompt, stepOf } from "@/components/studio/still-step";
 import { headline } from "@/lib/assistant-text";
 import { TypedText } from "@/components/studio/typed-text";
 import {
@@ -134,7 +148,7 @@ function usePhone(): boolean {
 
 export function AssistantPill() {
   const pathname = usePathname() || "/studio";
-  const { me, signedOut, toast } = useShell();
+  const { me, signedOut, toast, balance } = useShell();
   // the thread, the step and the composer's box are the studio's, shared
   // with the Studio page's Guide (assistant-thread.tsx)
   const {
@@ -250,6 +264,31 @@ export function AssistantPill() {
     },
     [say],
   );
+  // what a still can be drawn on and what one costs: read once a step card
+  // is on the thread (the composer may have left one waiting), for its line
+  const [stillModels, setStillModels] = useState<ImageModels | null>(null);
+  const hasStep = turns.some(isStillStep);
+  useEffect(() => {
+    if (!hasStep || stillModels) return;
+    getImageModels()
+      .then(setStillModels)
+      .catch(() => {
+        /* the card shows Approve without its price line */
+      });
+  }, [hasStep, stillModels]);
+  // the model a still is drawn on: the composer's remembered pick, else the server's default
+  const stillModel = (models: ImageModels | null) => {
+    const kept = loadImageModel();
+    return models?.items.some((m) => m.id === kept) ? kept : (models?.default ?? "");
+  };
+  const stillLine = (modelId?: string) => {
+    if (!stillModels) return "";
+    const id = modelId || stillModel(stillModels);
+    const m = stillModels.items.find((x) => x.id === id) ?? stillModels.items[0];
+    if (!m) return "";
+    return `${m.label} · ${balance?.exempt ? "not charged" : `${m.credits.toLocaleString()} credits`}`;
+  };
+
   function openCard() {
     setBubble("");
     setUnread(0);
@@ -325,6 +364,9 @@ export function AssistantPill() {
       form.append("stage", stage);
       form.append("page", pathname);
       form.append("brain", "auto");
+      // a maker turn that can draw a still and nothing else: a "make it"
+      // here comes back as a step card, held on Approve
+      form.append("output", "still");
       // the composer's references ride along, so the turn sees what the box
       // sees: its uploads (saved to the bin on attach) and then its picks
       [...composer.uploads.map((u) => u.url), ...composer.picked].forEach((u) => form.append("asset_photos", u));
@@ -398,6 +440,64 @@ export function AssistantPill() {
       arrived("");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Those frames were not kept.", "err");
+    } finally {
+      setBusy(false);
+      setDetail("");
+    }
+  }
+
+  /* Approve on a still's step card: the click that spends. The still is
+     drawn through the composer's own route (/generate/run, on the model the
+     composer last picked) into that same turn, so the composer shows it as
+     its own when the person goes back. */
+  async function approveStill(i: number) {
+    const t = turns[i];
+    if (!t || busy || !isStillStep(t)) return;
+    const { prompt, aspect, state } = stepOf(t);
+    if (state !== "waiting" && state !== "failed") return;
+    const models = stillModels ?? (await getImageModels().catch(() => null));
+    const model = stillModel(models);
+    const frame = aspect && IMAGE_ASPECTS.some((a) => a.id === aspect) ? aspect : IMAGE_ASPECTS[0].id;
+    const refs = [...composer.uploads.map((u) => u.url), ...composer.picked];
+    const made: Made = {
+      id: newMadeId(),
+      output: "image",
+      refs,
+      status: "running",
+      detail: "",
+      frame,
+      prompt,
+      ...(model ? { model } : {}),
+    };
+    const patch = (p: Partial<Made>) =>
+      setTurns((all) => all.map((x) => (x.made?.id === made.id ? { ...x, made: { ...x.made!, ...p } } : x)));
+    setTurns((all) => all.map((x) => (x === t ? { ...x, made } : x)));
+    setBusy(true);
+    setDetail("Drawing the still…");
+    try {
+      const form = new FormData();
+      if (account) form.append("brand", account);
+      form.append("prompt", prompt);
+      form.append("output", "image");
+      form.append("aspect", frame);
+      if (model) form.append("image_model", model);
+      refs.forEach((u) => form.append("asset_photos", u));
+      const started = await runImage(form);
+      patch({ jobId: started.job_id });
+      const job = await waitForJob(started.job_id, (j) => setDetail(j.detail || "Drawing the still…"));
+      announceBalanceChange();
+      if (job.status !== "done") throw new Error(job.error || "The still did not finish.");
+      const conceptId = job.ref_id ?? null;
+      const concept = conceptId ? await getConceptDetail(conceptId).catch(() => null) : null;
+      const shots = concept?.shots ?? [];
+      const image = concept?.reference_image || shots[shots.length - 1]?.reference_image || null;
+      patch({ status: "done", conceptId, image, detail: job.detail || "" });
+      if (!image) toast(job.detail || "Saved, but no image came back.", "err");
+      arrived("Your still is ready");
+    } catch (e) {
+      const said = e instanceof Error ? e.message : "The still was not drawn.";
+      patch({ status: "failed", detail: said });
+      toast(said, "err");
     } finally {
       setBusy(false);
       setDetail("");
@@ -492,6 +592,7 @@ export function AssistantPill() {
     !!latest &&
     !busy &&
     ((!!latest.reply?.proposal && isProjectTool(latest.reply.proposal.tool) && latest.decided == null) ||
+      (isStillStep(latest) && stepOf(latest).state === "waiting") ||
       (!!latest.reply?.sheet?.sheet?.length && !latest.kept && Object.values(chosenOf(latest)).some(Boolean)));
   const face: AvatarState = busy
     ? steps || (detail && !/^thinking/i.test(detail))
@@ -611,12 +712,23 @@ export function AssistantPill() {
                         : "Tell me what you want to make. I'll ask a couple of things, pitch directions, find references and put it all in your composer. Create and Approve stay your clicks."}
                   </p>
                 ) : null}
-                {turns.map((t, i) => t.made ? null : (
+                {turns.map((t, i) => t.made && !isStillStep(t) ? null : (
                   <div key={i} className="zpa-turn">
-                    <p className={`zpa-msg${t.role === "user" ? " me" : ""}${t.failed ? " failed" : ""}`}>
-                      {t.content}
-                      {t.failed ? <span className="zpa-failed">Not sent — press send to retry</span> : null}
-                    </p>
+                    {lineIsPrompt(t) ? null : (
+                      <p className={`zpa-msg${t.role === "user" ? " me" : ""}${t.failed ? " failed" : ""}`}>
+                        {t.content}
+                        {t.failed ? <span className="zpa-failed">Not sent — press send to retry</span> : null}
+                      </p>
+                    )}
+                    {isStillStep(t) ? (
+                      <StillStep
+                        turn={t}
+                        line={stillLine(t.made?.model)}
+                        busy={busy}
+                        onApprove={() => void approveStill(i)}
+                        showImage
+                      />
+                    ) : null}
                     {t.reply && i === lastIndex ? (
                       <Extras
                         reply={t.reply}

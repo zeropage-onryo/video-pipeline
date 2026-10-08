@@ -2099,7 +2099,12 @@ is yours, in Resolve, by hand.
   (`lib/composer.ts GENERATE_MODES`, per browser, Ask by default) is Runway's toggle: Auto
   draws on the send and the card is only the record. The click draws the still into that
   same turn; the card stays as the step's record (Generating / Done, or "Approve again"
-  after a failure) and survives a reload with the thread. `/creative-guide/act` and `guide_tools.run`
+  after a failure) and survives a reload with the thread. **The pill has the same card**
+  (same day): `components/studio/still-step.tsx` is ONE card for both surfaces; the pill's
+  turns ask as `output=still` (`creative_guide.OUTPUT_NOTES["still"]`, `MAKES_FOR` ->
+  `guide_tools.session(makes=("make_image",))`: a still, never a scene), its Approve draws
+  through `/generate/run` on the composer's remembered model into the shared turn (so the
+  composer shows it as its own), and a still waiting on Approve turns the face amber. `/creative-guide/act` and `guide_tools.run`
   refuse the make tools. `prompts/creative_guide_make.txt` is the rule the brain follows:
   make ONLY on an ask in this turn in so many words or a confirmed offer, talk on "let's
   bounce ideas", and write the prompt as the work; `creative_guide.OUTPUT_NOTES` tells it

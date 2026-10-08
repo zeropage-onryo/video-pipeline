@@ -417,7 +417,7 @@ def run_project_tool(name: str, args: dict, *, account_id: int, conversation=Non
 
 def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
             *, local: bool = False, brand: str = "", maker: bool = False,
-            on_step=None):
+            makes: Optional[tuple] = None, on_step=None):
     """Everything a Guide turn needs, gathered once: the tool specs for
     the model, and a synchronous `run_tool(name, args)` for the READ
     calls the model makes mid-turn.
@@ -435,6 +435,9 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
 
     `maker=True` (the composer's send, 2026-10-04) also publishes
     make_image / make_video -- proposals the studio runs, see MAKE_TOOLS.
+
+    `makes` narrows the make tools a maker turn is handed (the assistant
+    pill gets ("make_image",) -- 2026-10-08); None is every one.
 
     `on_step(done, of, detail)` hears a local tool's progress
     (find_references' hunt), for the job the turn runs in.
@@ -463,7 +466,8 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
         # composer's brain -- never to a caller that asked for the board alone
         tool_specs = tool_specs + [dict(s) for s in PROJECT_SPECS]
     if maker:
-        tool_specs = tool_specs + [dict(s) for s in MAKE_SPECS]
+        tool_specs = tool_specs + [dict(s) for s in MAKE_SPECS
+                                   if makes is None or s["name"] in makes]
 
     attachments: dict = {}
 

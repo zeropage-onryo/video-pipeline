@@ -130,7 +130,17 @@ OUTPUT_NOTES = {
               "through make_image. Talk in frames, not scenes."),
     "video": ("The composer is switched to VIDEO: a 'make it' means ONE written "
               "scene in timed shots, through make_video."),
+    # the assistant pill (2026-10-08): it can draw a still -- the same step
+    # card and Approve the composer shows -- but a scene is the composer's
+    "still": ("This turn is in the assistant card, not the composer: a 'make it' "
+              "means ONE still, through make_image -- the only make tool here. A "
+              "scene is written from the Studio composer; say so rather than "
+              "pretending to write one."),
 }
+
+# Which make tools a turn is handed, by its output (guide_tools.session's
+# `makes`): the composer gets both, the pill only the still.
+MAKES_FOR = {"image": None, "video": None, "still": ("make_image",)}
 
 
 def project_note(project) -> str:

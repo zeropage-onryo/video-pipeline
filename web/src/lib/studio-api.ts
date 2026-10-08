@@ -904,6 +904,10 @@ export function recallActiveProject(): number | null {
    Banana still saved as a one-shot concept. Not mutation_header-guarded
    (the Create route beside it is not either). `aspect` is optional and
    allowlisted server-side. */
+/* GET /api/image-models: what a still can be drawn on, with what one
+   costs -- the composer's picker, and the pill's step card price line */
+export type ImageModels = { items: { id: string; label: string; note: string; credits: number }[]; default: string };
+export const getImageModels = () => apiFetch<ImageModels>("/image-models");
 export const runImage = (form: FormData) =>
   apiForm<{ job_id: number; image_refs: number; video_refs: number }>("/generate/run", form);
 

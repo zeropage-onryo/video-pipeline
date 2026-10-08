@@ -137,8 +137,10 @@ on is a still from the composer, which used to run on the send. It is now a step
 on Runway Agent's "Ask before generating media" (Mike: "similar to Runway's in their chat"). It
 shows the prompt and the frame, then "Approve" with the model and its price under it ("Nano
 Banana · 10 credits"). The composer's Ask first / Auto pill switches between waiting and
-drawing at once. A scene still writes at once, since it costs nothing. See CLAUDE.md, "THE
-BRAIN IS THE COMPOSER".
+drawing at once. A scene still writes at once, since it costs nothing. The pill shows the same
+card (`still-step.tsx`, one component for both). Its turns can propose a still, though never a
+scene, and Approve draws it into the shared turn. A still waiting on Approve counts as "needs
+you", so the face goes amber. See CLAUDE.md, "THE BRAIN IS THE COMPOSER".
 
 ## Still not built
 
