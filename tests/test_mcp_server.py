@@ -1666,3 +1666,20 @@ def test_a_long_chat_page_stops_before_it_is_too_big_to_carry(tmp_db, monkeypatc
     assert page["has_more"] is True
     rest = mcp_server.project_history(pid, before=page["next_before"], limit=6, dsn=path)
     assert [t["content"][0] for t in rest["turns"]] == ["2", "3"] and rest["has_more"]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"listed": True}, {"surface": "studio"}])
+def test_every_surface_builds_under_python_3_11s_rules(tmp_db, monkeypatch, kwargs):
+    """The Fly image runs Python 3.11, where pydantic refuses a
+    `typing.TypedDict` in a tool's arguments -- and a server that fails to
+    build leaves /mcp unmounted in production (2026-10-08, after #165) while
+    CI on 3.12 stays green. So every surface is built here with pydantic
+    answering as it does on 3.11, every optional tool registered."""
+    import pydantic._internal._generate_schema as schema
+    monkeypatch.setattr(schema, "_SUPPORTS_TYPEDDICT", False)
+    monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
+    server = mcp_server.build_server(
+        dsn=tmp_db, job_status=lambda i, account_id=None: None,
+        approve_render=lambda *a: {}, approve_keyframes=lambda *a: {}, **kwargs)
+    names = {t.name for t in _tools(server)}
+    assert "save_chat" in names and "job" in names
