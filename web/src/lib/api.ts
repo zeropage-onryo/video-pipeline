@@ -15,9 +15,12 @@ export const AUTH_ORIGIN = process.env.NEXT_PUBLIC_AUTH_ORIGIN ?? API_URL;
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** the route's own `error.code` (e.g. "trial_thinking_used"), when it sent one */
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -36,13 +39,15 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     let message = res.statusText || `request failed (${res.status})`;
+    let code: string | undefined;
     try {
       const body = await res.clone().json();
       message = body?.error?.message ?? body?.detail ?? message;
+      code = body?.error?.code;
     } catch {
       // not JSON -- keep the fallback
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, code);
   }
 
   if (res.status === 204) return undefined as T;

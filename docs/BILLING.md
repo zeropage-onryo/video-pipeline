@@ -82,6 +82,14 @@ Change a plan, the markup, a band or a rate card → re-export → commit, or
   `charge.create_refusal`, which the MCP `research` / `generate` tools ask too.
 - **The trial**: a new open sign-up gets **100 credits once**
   (`ZEROPAGE_SIGNUP_CREDITS`, default 100; 0 turns it off), InVideo's shape.
+  **Its thinking is included once, too** (2026-10-08, Mike: "fix the trial"):
+  an account that has never had credit the trial did not give it
+  (`ledger.beyond_trial` -- no subscription, purchase or adjustment lot) may
+  spend `pricing.trial_thinking_usd()` of model text, $1.00 by default
+  (`ZEROPAGE_TRIAL_THINKING_USD`), measured by the meter (`spend.thinking_spent`,
+  stills excluded -- they are charged in credits). Then the Guide, Create and the
+  rest answer 402 `trial_thinking_used`. Thinking is never debited from the
+  balance: on a plan the brain stays free, its cost carried by the render markup.
 - **No image cap**: `NANO_DAILY_CAP` is gone (2026-09-29) — for everyone,
   exempt accounts included. The balance is the limit.
 
@@ -192,9 +200,9 @@ Dry-run on 2026-09-29, without a Stripe key, on the local server:
 ## Still open
 
 - Phase 4 of the Stripe task doc — a per-account daily Gemini budget — is not
-  built. The Create gate means an account with no plan and no balance cannot
-  Create at all; one with a trial or a plan Creates free per click, so the
-  creative guide, Direct and Polish (all free) are still unbounded per day.
+  built, and will not be (2026-10-08, Mike: the cost goes into the plan prices).
+  An account on a plan thinks free per click, without a daily cap; the trial's
+  thinking is capped once (above).
 - The studio shell does not show the balance yet; `GET /api/billing/balance` is
   there for it.
 - Negative balances (settle can overdraw; the next hold refuses), downgrade timing

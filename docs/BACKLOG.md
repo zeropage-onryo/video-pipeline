@@ -1234,7 +1234,20 @@ defaults to high, roughly four times the price). The exact `image_size` enum str
 what the page text named; the live /api schema is still the thing to glance at.
 
 
-## 24. A trial account can think forever  (found 2026-10-07, DECIDED 2026-10-08 -- no allowance, priced into the plans)
+## 24. A trial account can think forever  (found 2026-10-07, DECIDED 2026-10-08 -- no allowance, priced into the plans; the TRIAL capped once, same day)
+
+**The trial is fixed (2026-10-08, Mike: "fix the trial then. keep the first
+approach").** The industry's common shape -- Runway, Higgsfield, Firefly: the
+brain is free and the generations carry its cost -- stays for every paying
+account. The sign-up trial, which has no plan to carry it, now includes
+`pricing.trial_thinking_usd()` of model text ONCE ($1.00, the 100 credits' own
+value; `ZEROPAGE_TRIAL_THINKING_USD`), and is then refused 402
+`trial_thinking_used` (`charge.create_refusal_code`). "Trial" is an account that
+has never had a subscription, purchase or adjustment lot (`ledger.beyond_trial`),
+so a lapsed subscriber and an operator-vouched pilot are not capped. The third
+shape -- the person brings their own brain -- is already built: the listed MCP
+server and the personal ChatGPT/Claude connections. The rest of this entry is
+the record of how it was decided.
 
 **Mike's call, 2026-10-08: "i don't want a daily allowance, we will add it into
 the price."** No per-account cap on model text is built, and none should be

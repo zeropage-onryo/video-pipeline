@@ -243,6 +243,11 @@ def init(dsn: Optional[str] = None) -> None:
     with db.connect(dsn) as conn:
         conn.execute(SCHEMA)
         db.own_table(conn, "llm_calls")
+        # per-account reads on the gate's path (thinking_spent) and the
+        # day's figures; here and not in SCHEMA because own_table is what
+        # adds account_id
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_account_day "
+                     "ON llm_calls (account_id, created_at)")
     _ready.add(db.resolve_dsn(dsn))
 
 
@@ -469,6 +474,28 @@ def spent_today(dsn: Optional[str] = None, *, account_id: Optional[int]) -> dict
             (_today(), account_id),
         ).fetchone()
     return {"calls": row[0], "cost_usd": round(row[1], 4), "unpriced": row[2] or 0}
+
+
+# Stages a person already pays for in CREDITS, on a hold of their own: a
+# still (nano_image) is charged at the render markup, so it is not part
+# of the thinking the trial includes -- counting it there would bill it
+# twice.
+CHARGED_STAGES = ("nano_image",)
+
+
+def thinking_spent(dsn: Optional[str] = None, *, account_id: Optional[int]) -> float:
+    """What this account's model text has cost, ever, in USD: every stage
+    but the credit-charged ones, an unpriced call counting as 0. What
+    charge.create_refusal_code holds a trial account to
+    (pricing.trial_thinking_usd). RAISES on a read error: the gate decides
+    what a failed read means (it fails open)."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls "
+            "WHERE account_id IS NOT DISTINCT FROM %s AND NOT (stage = ANY(%s))",
+            (account_id, list(CHARGED_STAGES)),
+        ).fetchone()
+    return float(row[0] or 0)
 
 
 def spent_today_everyone(dsn: Optional[str] = None) -> dict:

@@ -103,8 +103,8 @@ def _create_gate(account_id: Optional[int]) -> Optional[JSONResponse]:
     account with no plan and no credit balance is refused, 402, before any
     job starts (2026-10-08, the spend holes)."""
     from src import charge
-    reason = charge.create_refusal(account_id)
-    return _error(402, "subscribe_or_top_up", reason) if reason else None
+    refused = charge.create_refusal_code(account_id)
+    return _error(402, *refused) if refused else None
 
 
 def _mint(stored: Optional[str], account_id: Optional[int]) -> Optional[str]:

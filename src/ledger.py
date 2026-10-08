@@ -500,6 +500,26 @@ def available(account_id: Optional[int], dsn: Optional[str] = None) -> int:
         return _available(conn, account_id)
 
 
+# Credit that says an account is past the sign-up trial: it paid (a
+# subscription, a purchase) or the operator vouched for it (an
+# adjustment -- a pilot's grant). The trial's own grant is a `promo` lot.
+BEYOND_TRIAL_KINDS = ("subscription", "purchase", "adjustment")
+
+
+def beyond_trial(account_id: Optional[int], dsn: Optional[str] = None) -> bool:
+    """True once this account has ever held credit the trial did not give
+    it (BEYOND_TRIAL_KINDS), expired or spent included -- a lapsed
+    subscriber is not on a trial. charge.create_refusal_code asks it
+    (2026-10-08): the trial's thinking is capped, a paying account's is
+    not. Raises on a read error; the gate decides what that means."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM credit_lots WHERE account_id IS NOT DISTINCT FROM %s "
+            "AND kind = ANY(%s) LIMIT 1",
+            (account_id, list(BEYOND_TRIAL_KINDS))).fetchone()
+    return row is not None
+
+
 def lots(account_id: Optional[int], dsn: Optional[str] = None,
          *, include_expired: bool = True) -> list[dict[str, Any]]:
     """This account's lots, soonest-expiry first -- the order credit is

@@ -2620,8 +2620,11 @@ it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and t
 spends model text asks it too** (`api._create_gate`: the Guide, the brief draft, an element's
 describe, Direct / Polish, the canvas's Ground / Enhance / Run all, the scout, the evals, the
 cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`). There is NO daily cap
-on model text, by Mike's call (2026-10-08): its cost goes into the plan prices, so a trial
-account can think without limit until its credits go (BACKLOG #24). **The studio shows
+on model text, by Mike's call (2026-10-08): on a plan the brain is free, its cost carried by the
+render markup. **The trial's thinking is capped ONCE** (same day, "fix the trial"): an account
+that never had a subscription, purchase or adjustment lot (`ledger.beyond_trial`) may spend
+`pricing.trial_thinking_usd()` ($1.00) of model text (`spend.thinking_spent`, stills excluded),
+then gets 402 `trial_thinking_used` (BACKLOG #24, docs/BILLING.md). **The studio shows
 credits, never dollars** (`tests/test_studio_shows_credits.py` guards it); a new open sign-up gets a one-time
 **100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
 everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
