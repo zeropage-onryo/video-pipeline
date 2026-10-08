@@ -1234,32 +1234,30 @@ defaults to high, roughly four times the price). The exact `image_size` enum str
 what the page text named; the live /api schema is still the thing to glance at.
 
 
-## 24. A trial account can think forever  (found 2026-10-07, DEFERRED -- Mike, 2026-10-08: "skip 1b for now")
+## 24. A trial account can think forever  (found 2026-10-07, DECIDED 2026-10-08 -- no allowance, priced into the plans)
 
-Part 1b of `docs/tasks/task-spend-holes-and-credits.md`, the one part not built.
-Every route that spends model text now asks `charge.create_refusal`, which passes
-whenever an account has a plan OR `available > 0`. A new open sign-up gets 100
-trial credits, so it may run unlimited Creates and Guide turns on the studio's
-Gemini key until it spends those credits on a still -- which it never has to do.
-On 2026-10-07's numbers a Guide turn is ~0.4 cents on Flash and ~1.5 cents on
-Pro, a Create with its timeline ~4 cents; a script could spend dollars an hour.
+**Mike's call, 2026-10-08: "i don't want a daily allowance, we will add it into
+the price."** No per-account cap on model text is built, and none should be
+proposed again: what the Guide, Create and the rest cost in Gemini is to be
+covered by the plan prices, the way Create's cost already is (2026-09-29).
 
-Two ways to close it, as planned:
+What stays true, for whoever sets those prices: every route that spends model
+text asks `charge.create_refusal`, which passes whenever an account has a plan
+OR `available > 0`. So an account on the 100-credit sign-up trial -- which has
+no plan price to absorb anything -- may still run Creates and Guide turns until
+it spends those credits on a still, which it never has to do. On 2026-10-07's
+numbers a Guide turn is ~0.4 cents on Flash and ~1.5 cents on Pro, a Create with
+its timeline ~4 cents. The meter (`llm_calls`, `/costs`) sees all of it since
+2026-10-08, embeddings and the story judge included, so the per-account spend
+the prices have to cover is measurable.
 
-- **A. A daily "included thinking" allowance (recommended; keeps Create free
-  per click).** `Plan.included_llm_usd_day` -- suggested $0.25 with no plan,
-  $1 Starter, $2.50 Creator, $6 Studio, under 20% of each plan's price used
-  daily; `ZEROPAGE_INCLUDED_LLM_USD` for the no-plan default. `create_refusal`
-  refuses once `spend.spent_today(account_id=)` reaches it, with a 402
-  `daily_thinking_used` the UI words differently from "top up" ("resets at
-  midnight UTC · Upgrade"). Exempt and unowned accounts untouched, fails open on
-  a read error. Needs `CREATE INDEX IF NOT EXISTS idx_llm_calls_account_day ON
-  llm_calls (account_id, created_at)` in `spend.SCHEMA` (the only index today is
-  on `run_id`). The meter it would read now includes embeddings, the story
-  judge, Whisper and Serper (2026-10-08), so the allowance would see all of it.
-- **B. Charge credits for thinking.** Debit after each `record_call`. Reverses
-  the 2026-09-29 "Create is free" call, puts a price on every chat turn, and
-  needs a post-spend debit path the ledger does not have (holds are pre-spend
-  by design).
+Measured on the live database that day (one account, the operator's): a busy
+hands-on day cost $0.18-0.43 of model text; the $1.38-3.00 days were the
+nightly walk's unattended runs, which no longer happen; the median account-day
+was $0.09.
 
-Open: A or B, and the four numbers.
+Considered and not built: a daily "included thinking" allowance per plan
+(option A -- note that the suggested $0.25 / $1 / $2.50 / $6 would have cost
+about 2x each plan's price if maxed every day, not the "under 20%" the plan
+claimed), and charging credits per model call (option B, which would have
+reversed the "Create is free" call).
