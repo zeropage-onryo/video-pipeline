@@ -29,7 +29,7 @@ import {
   drawSheet,
   getAssets,
   getCapabilities,
-  getJob,
+  waitForJob,
   type Asset,
   type ElementKind,
 } from "@/lib/studio-api";
@@ -76,13 +76,10 @@ export default function ElementsPage() {
   // watch a sheet job: the card says "drawing" until it lands, then reloads
   const watchSheet = (assetId: string, jobId: number, name: string) => {
     setDrawing((was) => ({ ...was, [assetId]: jobId }));
-    const tick = () =>
-      getJob(jobId)
+    // on the studio's job stream (lib/jobs.ts); polled only when it is down
+    const watch = () =>
+      waitForJob(jobId, undefined, 2000)
         .then((job) => {
-          if (job.status === "queued" || job.status === "running") {
-            setTimeout(tick, 2000);
-            return;
-          }
           setDrawing((was) => {
             const next = { ...was };
             delete next[assetId];
@@ -94,8 +91,8 @@ export default function ElementsPage() {
           announceBalanceChange();
           load();
         })
-        .catch(() => setTimeout(tick, 4000));
-    setTimeout(tick, 1500);
+        .catch(() => setTimeout(watch, 4000));
+    watch();
   };
 
   const draw = (a: Asset) => {

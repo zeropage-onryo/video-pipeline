@@ -34,7 +34,7 @@
    Progress ticks stay in page state (a save per tick would be a PUT a
    second); only the result and the status changes are saved. */
 import { API_URL } from "@/lib/api";
-import { getJob, type Job, type TimelinePart } from "@/lib/studio-api";
+import { followJob, type Job, type TimelinePart } from "@/lib/studio-api";
 
 export type Output = "image" | "video";
 
@@ -200,23 +200,16 @@ export function saveImageModel(id: string) {
   }
 }
 
-/* waitForJob without the abort: a Stop on the composer has to end the
-   wait at once, whatever the server does with the cancel. Resolves to
-   null when stopped. */
+/* waitForJob with a stop: a Stop on the composer has to end the wait at
+   once, whatever the server does with the cancel. Resolves to null when
+   stopped. On the job stream while it is live (studio-api followJob). */
 export async function pollJob(
   id: number,
   onTick: (job: Job) => void,
   stopped: () => boolean,
   everyMs = 1200,
 ): Promise<Job | null> {
-  for (;;) {
-    if (stopped()) return null;
-    const job = await getJob(id);
-    if (stopped()) return null;
-    onTick(job);
-    if (["done", "failed", "cancelled"].includes(job.status)) return job;
-    await new Promise((r) => setTimeout(r, everyMs));
-  }
+  return followJob(id, onTick, { everyMs, stopped });
 }
 
 /** "4:5" -> "4 / 5" for CSS aspect-ratio; anything else -> undefined */

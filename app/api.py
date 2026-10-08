@@ -6092,19 +6092,38 @@ async def jobs_stream(account_id: int = Depends(auth.current_account_id)):
 
     The registry publishes every job to every subscriber; the filter
     is here, at the one place the account is known, so a subscriber
-    only ever sees its own."""
+    only ever sees its own.
+
+    THE REACT STUDIO'S ONE CONNECTION (2026-10-08, the activity tray):
+    - `retry: 3000` first, so a dropped connection is retried in three
+      seconds rather than the browser's own guess;
+    - `event: hello` with this process's boot id: job ids restart at 1
+      with the registry, and a tab that saw another boot drops what it
+      held instead of matching a new job 7 with an old one;
+    - then every live job and the newest finished ones (`jobs.replay`),
+      not everything a long-running process ever ran;
+    - `event: job` with the whole job on every change, and `event: gone`
+      when one is cleared, so every open tab drops it;
+    - `no-transform`: Next's proxy gzips any text/* response it is not
+      told to leave alone, and a gzipped stream sits in the compressor --
+      the events would arrive in a lump, or never."""
     queue = jobs.subscribe()
 
     async def gen():
         import asyncio
         try:
+            yield "retry: 3000\n\n"
+            yield f"event: hello\ndata: {json.dumps({'boot': jobs.BOOT})}\n\n"
             # current state first, so a fresh subscriber isn't blind
-            for job in jobs.list_jobs(account_id=account_id):
+            for job in jobs.replay(account_id=account_id):
                 yield f"event: job\ndata: {json.dumps(job)}\n\n"
             while True:
                 try:
                     job = await asyncio.wait_for(queue.get(), timeout=25)
                     if not jobs.owned_by(job, account_id):
+                        continue
+                    if job.get("gone"):
+                        yield f"event: gone\ndata: {json.dumps({'id': job['id']})}\n\n"
                         continue
                     yield f"event: job\ndata: {json.dumps(job)}\n\n"
                 except asyncio.TimeoutError:
@@ -6113,8 +6132,15 @@ async def jobs_stream(account_id: int = Depends(auth.current_account_id)):
             jobs.unsubscribe(queue)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
+                             headers={"Cache-Control": "no-cache, no-transform",
                                       "X-Accel-Buffering": "no"})
+
+
+@router.delete("/jobs")
+def jobs_clear_finished(account_id: int = Depends(auth.current_account_id)):
+    """Clear every finished job of yours (the tray's "Clear finished");
+    running ones stay. Each one cleared is said on the stream."""
+    return {"cleared": jobs.clear_finished(account_id=account_id)}
 
 
 @router.get("/jobs/{job_id}")

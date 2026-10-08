@@ -24,12 +24,24 @@ it does in the data layer.
 import asyncio
 import itertools
 import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 _lock = threading.Lock()
 _jobs: dict[int, dict] = {}
 _ids = itertools.count(1)
+
+# THIS PROCESS (2026-10-08). Ids restart at 1 with the registry, so a job
+# id means nothing without the boot it was handed out in: the stream says
+# this first, and a tab that saw another boot drops what it held instead
+# of matching a new job 7 with an old one.
+BOOT = uuid.uuid4().hex[:12]
+
+# what a fresh subscriber is replayed: every live job, and this many of the
+# newest finished ones -- a long-running process keeps every job it ever
+# ran, and a reconnect must not resend all of them
+REPLAY_FINISHED = 50
 
 # (event loop, queue) pairs -- publish happens from worker threads, so
 # each push is marshalled onto the subscriber's own loop.
@@ -128,6 +140,7 @@ def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
         # contextvar set in the request thread never reaches it
         from src import spend
         spend.bind(account_id=account_id)
+        _meter_credits(job["id"])
         update(job["id"], status="running")
         try:
             result = fn(job) or {}
@@ -140,6 +153,37 @@ def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
 
     threading.Thread(target=runner, daemon=True).start()
     return job
+
+
+def _meter_credits(job_id: int) -> None:
+    """What this job spends, on the job, as it spends it (2026-10-08). Every
+    Charge made in this worker thread (src/charge.metering) reports here:
+    `credits` is what has been debited (or, uncharged, what it would have
+    cost), `credits_held` what is held right now -- a multi-shot render's
+    running cost -- and `charged` False only when nothing was billed. Lazy
+    and best-effort: this registry imports nothing heavy at module level
+    (the MCP stdio server loads it), and a job that cannot meter still runs."""
+    try:
+        from src import charge
+    except Exception:  # noqa: BLE001
+        return
+    tally = {"held": 0, "spent": 0, "charged": None}
+
+    def heard(event: str, credits: int, held: int, charged: bool) -> None:
+        if event == "hold":
+            tally["held"] += held
+        elif event == "settle":
+            tally["held"] -= held
+            tally["spent"] += credits
+        elif event == "release":
+            tally["held"] -= held
+        elif event == "spent":
+            tally["spent"] += credits
+        tally["charged"] = charged if tally["charged"] is None else (tally["charged"] or charged)
+        update(job_id, credits=tally["spent"], credits_held=max(0, tally["held"]),
+               charged=bool(tally["charged"]))
+
+    charge.metering(heard)
 
 
 def owned_by(job: Optional[dict], account_id: Optional[int]) -> bool:
@@ -174,7 +218,44 @@ def remove(job_id: int, *, account_id: Optional[int] = None) -> Optional[bool]:
         if job["status"] in ("queued", "running"):
             return False
         del _jobs[job_id]
+    _publish_gone(job_id, account_id)
     return True
+
+
+def clear_finished(*, account_id: Optional[int] = None) -> int:
+    """Clear every finished job of this account's at once -- the tray's
+    "Clear finished". Returns how many went."""
+    with _lock:
+        done = [jid for jid, j in _jobs.items()
+                if owned_by(j, account_id) and j["status"] not in ("queued", "running")]
+        for jid in done:
+            del _jobs[jid]
+    for jid in done:
+        _publish_gone(jid, account_id)
+    return len(done)
+
+
+def _publish_gone(job_id: int, account_id: Optional[int]) -> None:
+    """Tell the stream a job was cleared, so every open tab drops it. Never
+    used to be said at all: a job cleared in one tab stayed in the others."""
+    with _lock:
+        subscribers = list(_subscribers)
+    note = {"id": job_id, "account_id": account_id, "gone": True}
+    for loop, queue in subscribers:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, note)
+        except RuntimeError:
+            pass
+
+
+def replay(*, account_id: Optional[int] = None,
+           finished: int = REPLAY_FINISHED) -> list[dict]:
+    """What a fresh subscriber is sent: every live job of this account's
+    and its `finished` newest finished ones, newest first."""
+    rows = list_jobs(account_id=account_id)
+    live = [j for j in rows if j["status"] in ("queued", "running")]
+    ended = [j for j in rows if j["status"] not in ("queued", "running")][:finished]
+    return sorted(live + ended, key=lambda j: j["id"], reverse=True)
 
 
 def get(job_id: int, *, account_id: Optional[int] = None) -> Optional[dict]:

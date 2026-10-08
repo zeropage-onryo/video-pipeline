@@ -85,11 +85,13 @@ import { creditsText } from "@/lib/render-choice";
 import {
   announceBalanceChange,
   announceQueueChange,
+  followJob,
   getAssets,
   getCapabilities,
   getPresets,
   pickConcept,
   type Capabilities,
+  type Job,
   type Preset,
   type RenderQuote,
   type RendererState,
@@ -1160,44 +1162,45 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
       pending.current.delete(id);
     }
   };
-  // per-node jobs: poll until terminal
+  // per-node jobs: each followed to its end ONCE, on the studio's job stream
+  // (lib/jobs.ts) -- polled only when the stream is down. It used to ask
+  // the server about every busy node every 2.5s.
+  const followed = useRef(new Set<number>());
   useEffect(() => {
-    const jobs = nodes.filter((n) => n.data.jobId && n.data.busy);
-    if (!jobs.length) return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      await Promise.all(
-        jobs.map(async (n) => {
-          try {
-            const job = await apiFetch<{ status: string; output?: string; error?: string }>(`/jobs/${n.data.jobId}`);
-            if (cancelled) return;
-            if (job.status === "done")
-              update(n.id, {
-                busy: false,
-                jobId: undefined,
-                ...(isText(n.data.kind) ? { text: job.output } : { url: job.output }),
-              });
-            else if (["failed", "cancelled"].includes(job.status))
-              update(n.id, { busy: false, jobId: undefined, error: job.error || job.status });
-            else update(n.id, { busy: true });
-            // a still or a clip settles (or releases) its hold as its job
-            // ends: the header's balance re-reads then, not on the next page
-            if (!isText(n.data.kind) && !["queued", "running"].includes(job.status)) announceBalanceChange();
-          } catch (error) {
-            if (!cancelled)
-              update(n.id, {
-                busy: false,
-                error: `Could not check render: ${error instanceof Error ? error.message : "connection lost"}`,
-              });
-          }
-        }),
-      );
-    }, 2500);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [nodes, update]);
+    for (const n of nodes) {
+      const id = n.data.jobId;
+      if (!id || !n.data.busy || followed.current.has(id)) continue;
+      followed.current.add(id);
+      const nodeId = n.id;
+      const kind = n.data.kind;
+      // only if the node is still waiting on THIS job: a re-run started on
+      // it meanwhile must not be written over by the old answer
+      const stillMine = () => getNodes().some((x) => x.id === nodeId && x.data.jobId === id);
+      followJob(id, undefined, { everyMs: 2500 })
+        .then((job) => {
+          followed.current.delete(id);
+          if (!job || !stillMine()) return;
+          if (job.status === "done")
+            update(nodeId, {
+              busy: false,
+              jobId: undefined,
+              ...(isText(kind) ? { text: job.output ?? undefined } : { url: job.output ?? undefined }),
+            });
+          else update(nodeId, { busy: false, jobId: undefined, error: job.error || job.status });
+          // a still or a clip settles (or releases) its hold as its job
+          // ends: the header's balance re-reads then, not on the next page
+          if (!isText(kind)) announceBalanceChange();
+        })
+        .catch((error) => {
+          followed.current.delete(id);
+          if (!stillMine()) return;
+          update(nodeId, {
+            busy: false,
+            error: `Could not check render: ${error instanceof Error ? error.message : "connection lost"}`,
+          });
+        });
+    }
+  }, [nodes, update, getNodes]);
 
   /* ── Generate = Run all: save, then the runner walks the graph ── */
   const runAll = async () => {
@@ -1235,60 +1238,52 @@ function Workspace({ conceptId, shotN, nav = {} }: { conceptId?: number; shotN?:
   useEffect(() => {
     if (!runJob) return;
     let cancelled = false;
-    const tick = async () => {
-      try {
-        const job = await apiFetch<{
-          status: string;
-          detail?: string;
-          error?: string;
-          progress?: number;
-          node_states?: Record<string, NodeState>;
-        }>(`/jobs/${runJob.id}`);
-        if (cancelled) return;
-        const states = job.node_states || {};
-        setNodes((ns) =>
-          ns.map((n) => {
-            const legacyId = [...runMap.current].find(([, nodeId]) => nodeId === n.id)?.[0];
-            const s = legacyId ? states[legacyId] : undefined;
-            if (!s) return n;
-            const done = s.status === "done";
-            const out = typeof s.output === "string" ? s.output : undefined;
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                busy: s.status === "running",
-                error: s.status === "failed" || s.status === "skipped" ? s.error || s.status : undefined,
-                ...(done && ["enhance", "ground"].includes(n.data.kind) ? { text: out } : {}),
-                ...(done && isMedia(n.data.kind) ? { url: out } : {}),
-              },
-            };
-          }),
-        );
-        setRunProgress(job.detail || job.status);
-        if (["done", "failed", "cancelled"].includes(job.status)) {
-          setRunJob(null);
-          setRunProgress("");
-          notify(job.status === "done" ? job.detail || "Run complete" : job.error || `Run ${job.status}`);
-          lastSaved.current = "";
-          setSaveRevision((n) => n + 1);
-          if (job.status === "done") announceQueueChange();
-          // however the run ended, its stills and clips settled or released
-          announceBalanceChange();
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setRunJob(null);
-          setRunProgress("");
-          notify(`Lost the run: ${error instanceof Error ? error.message : "connection lost"}`);
-        }
-      }
+    // each node's state as the runner reports it -- on the job stream, as it
+    // happens (it was a 2s poll)
+    const apply = (job: Job & { node_states?: Record<string, NodeState> }) => {
+      if (cancelled) return;
+      const states = job.node_states || {};
+      setNodes((ns) =>
+        ns.map((n) => {
+          const legacyId = [...runMap.current].find(([, nodeId]) => nodeId === n.id)?.[0];
+          const s = legacyId ? states[legacyId] : undefined;
+          if (!s) return n;
+          const done = s.status === "done";
+          const out = typeof s.output === "string" ? s.output : undefined;
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              busy: s.status === "running",
+              error: s.status === "failed" || s.status === "skipped" ? s.error || s.status : undefined,
+              ...(done && ["enhance", "ground"].includes(n.data.kind) ? { text: out } : {}),
+              ...(done && isMedia(n.data.kind) ? { url: out } : {}),
+            },
+          };
+        }),
+      );
+      setRunProgress(job.detail || job.status);
     };
-    const timer = setInterval(tick, 2000);
-    void tick();
+    followJob(runJob.id, apply, { everyMs: 2000, stopped: () => cancelled })
+      .then((job) => {
+        if (cancelled || !job) return;
+        setRunJob(null);
+        setRunProgress("");
+        notify(job.status === "done" ? job.detail || "Run complete" : job.error || `Run ${job.status}`);
+        lastSaved.current = "";
+        setSaveRevision((n) => n + 1);
+        if (job.status === "done") announceQueueChange();
+        // however the run ended, its stills and clips settled or released
+        announceBalanceChange();
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setRunJob(null);
+        setRunProgress("");
+        notify(`Lost the run: ${error instanceof Error ? error.message : "connection lost"}`);
+      });
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runJob?.id]);
