@@ -1554,8 +1554,11 @@ is yours, in Resolve, by hand.
   by door: the operator's static key reaches the full server exactly as
   before, a signed-in person reaches `build_server(listed=True)`, which
   registers `mcp_server.LISTED_TOOLS` only -- `board`, `idea`, `search`,
-  `capture`, `pick`, `shoot`, `archive`, `stats`, `elements`, `write_scene`,
-  `quote`, `approve`, `job`. Never the engine tools (whatever the flag says),
+  `capture`, `pick`, `shoot`, `archive`, `stats`, `projects`, `project`,
+  `project_chat`, `create_project`, `save_chat` (the project tools joined it
+  2026-10-08, Mike's call: a person's own rows, nothing spent), `elements`,
+  `write_scene`, `quote`, `approve`, `job` -- in `build_server`'s registration
+  order, which the mount's test compares. Never the engine tools (whatever the flag says),
   never the spark bank (`scout_findings` / `scout_bin` are SHARED tables and
   one person's directions must not be listed to another), never
   `images_for` / `reference` / `imagine_reference`. **Claude does the ideation
@@ -1643,7 +1646,13 @@ is yours, in Resolve, by hand.
   render under the project -- in the generations row's params and the Assets row's metadata,
   NOT as a scene (that would be adding to the board) -- so `project` lists it on the next visit
   and the Assets wall names the project (`api._project_of`, after the scene link). A project that
-  is not the caller's reads as "no project N" everywhere. **The cost of the choice:** the
+  is not the caller's reads as "no project N" everywhere. All five project tools are on the
+  studio, board AND listed servers (the listed one since the same day, Mike's call; isolation is
+  tested through the real transport in `tests/test_mcp_mount.py`), and because the listed one is a
+  public door the writes and reads are bounded: `save_chat` takes at most 100 turns and 200,000
+  characters a call (`projects.SAVE_CHARS_MAX`), a `project_chat` page stops at 200,000
+  characters (`CHAT_PAGE_CHARS`, the rest left for the next page) and `project` shows the newest
+  50 scenes and 60 references. **The cost of the choice:** the
   idea-agent skill drives BOARD tools, which Claude Desktop no longer has unless a second
   server entry runs `--surface board`. The studio surface was ported onto main from the
   stale `claude/remove-brands` branch on 2026-10-08; that branch's own `STILL_MODELS` image

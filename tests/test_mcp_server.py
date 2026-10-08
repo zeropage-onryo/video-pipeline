@@ -1583,12 +1583,15 @@ def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypat
     assert len(stills) == 1
 
 
-def test_the_project_tools_are_on_the_studio_surface_and_never_listed(tmp_db, monkeypatch):
+def test_the_project_tools_are_on_every_surface(tmp_db, monkeypatch):
+    """Studio, board and -- since 2026-10-08, Mike's call -- the listed
+    server: a person's projects are their own rows."""
     monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
-    tools = {"projects", "project", "project_chat", "create_project"}
-    studio = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, surface="studio"))}
-    listed = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, listed=True))}
-    assert tools <= studio and not tools & listed
+    tools = {"projects", "project", "project_chat", "create_project", "save_chat"}
+    for kwargs in ({"surface": "studio"}, {}, {"listed": True}):
+        names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, **kwargs))}
+        assert tools <= names, kwargs
+    assert tools <= set(mcp_server.LISTED_TOOLS)
 
 
 def test_save_chat_files_the_conversation_and_reopening_shows_it(tmp_db, monkeypatch):
@@ -1612,7 +1615,7 @@ def test_save_chat_files_the_conversation_and_reopening_shows_it(tmp_db, monkeyp
         mcp_server.save_project_chat(999999, turns, dsn=path)
 
 
-def test_save_chat_through_the_tool_and_never_on_the_listed_server(tmp_db, monkeypatch):
+def test_save_chat_through_the_tool_on_the_studio_and_listed_servers(tmp_db, monkeypatch):
     import asyncio
 
     from mcp.server.mcpserver.exceptions import ToolError
@@ -1625,8 +1628,12 @@ def test_save_chat_through_the_tool_and_never_on_the_listed_server(tmp_db, monke
     with pytest.raises(ToolError):
         asyncio.run(server.call_tool("save_chat", {
             "project_id": pid, "turns": [{"role": "system", "content": "x"}]}))
-    listed = {t.name for t in _tools(mcp_server.build_server(dsn=path, listed=True))}
-    assert "save_chat" not in listed
+    listed = mcp_server.build_server(dsn=path, listed=True)
+    out = _result(asyncio.run(listed.call_tool("save_chat", {
+        "project_id": pid, "turns": [{"role": "assistant", "content": "hi back"}]})))
+    assert out["saved"] == 1
+    assert [t["content"] for t in mcp_server.project_history(pid, dsn=path)["turns"]] == [
+        "hello", "hi back"]
 
 
 def test_another_accounts_project_takes_no_chat(pg):
@@ -1645,3 +1652,17 @@ def test_another_accounts_project_takes_no_chat(pg):
         mcp_server.save_project_chat(theirs["id"], [{"role": "user", "content": "x"}],
                                      dsn=pg, account_id=mine)
     assert projects.messages(theirs["id"], pg, account_id=other)["items"] == []
+
+
+def test_a_long_chat_page_stops_before_it_is_too_big_to_carry(tmp_db, monkeypatch):
+    from src import projects
+    path = _project_db(tmp_db, monkeypatch)
+    pid = mcp_server.make_project("Long", dsn=path)["id"]
+    monkeypatch.setattr(mcp_server, "CHAT_PAGE_CHARS", 250)
+    for i in range(6):
+        projects.append_message(pid, "user", f"{i}" + "x" * 99, path, account_id=None)
+    page = mcp_server.project_history(pid, limit=6, dsn=path)
+    assert [t["content"][0] for t in page["turns"]] == ["4", "5"]
+    assert page["has_more"] is True
+    rest = mcp_server.project_history(pid, before=page["next_before"], limit=6, dsn=path)
+    assert [t["content"][0] for t in rest["turns"]] == ["2", "3"] and rest["has_more"]

@@ -98,6 +98,7 @@ MESSAGE_MAX = 20000          # characters of one turn (creative_guide.Message)
 MESSAGES_PAGE = 40           # turns loaded when a workspace opens
 TOOL_CALLS_MAX = 60_000      # bytes of extras kept beside one turn
 SAVE_TURNS_MAX = 100         # turns one append_turns call takes
+SAVE_CHARS_MAX = 200_000     # characters one append_turns call takes
 
 
 def init(dsn: Optional[str] = None) -> None:
@@ -502,6 +503,11 @@ def append_turns(project_id: int, turns, dsn: Optional[str] = None, *,
             empty += 1
     if len(clean) > SAVE_TURNS_MAX:
         raise ValueError(f"at most {SAVE_TURNS_MAX} turns per call, got {len(clean)}")
+    # the listed server is a public door (2026-10-08): one call writes a
+    # bounded amount, whatever the per-turn cap would allow in total
+    if sum(len(c) for _, c in clean) > SAVE_CHARS_MAX:
+        raise ValueError(f"at most {SAVE_CHARS_MAX:,} characters per call -- "
+                         "save the conversation in parts")
     if get(project_id, dsn, account_id=account_id) is None:
         raise ValueError(f"no project {project_id}")
     history = [(m["role"], m["content"]) for m in

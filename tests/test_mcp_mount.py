@@ -902,3 +902,36 @@ def test_writing_pricing_and_approving_stay_in_the_callers_account(two_people, m
         [("clip", aid, w["a"]), ("keyframes", aid, w["a"])]
     assert w["approved"][0][3]["provider"] == "fal"
     assert not e8 and bob_els["count"] == 0 and "upload" in bob_els["note"]
+
+
+def test_projects_and_their_chat_are_each_persons_own(two_people, pg):
+    """The project tools on the listed door (2026-10-08): Alice's project,
+    its chat and save_chat are hers -- Bob lists none of it, and her id
+    reads to him exactly like one that does not exist. One transport run
+    (the session manager runs once), so Alice's project is made up front
+    and `create_project` is called through the door alongside."""
+    from src import projects
+    projects.init(pg)
+    w = two_people
+    pid = projects.create("Alice's ad", "cold light", pg, account_id=w["a"])["id"]
+    turns = [{"role": "user", "content": "colder"}, {"role": "assistant", "content": "ok"}]
+    results = _calls(w, [
+        ("alice", "save_chat", {"project_id": pid, "turns": turns}),
+        ("alice", "project", {"project_id": pid}),
+        ("bob", "create_project", {"title": "Bob's short"}),
+        ("alice", "projects", {}),
+        ("bob", "projects", {}),
+        ("bob", "project", {"project_id": pid}),
+        ("bob", "project_chat", {"project_id": pid}),
+        ("bob", "save_chat", {"project_id": pid, "turns": turns}),
+    ])
+    (e1, saved), (e2, opened), (e3, bobs), (e4, mine), (e5, theirs) = results[:5]
+    assert not (e1 or e2 or e3 or e4 or e5)
+    assert saved["saved"] == 2
+    assert [t["content"] for t in opened["chat"]] == ["colder", "ok"]
+    assert [p["title"] for p in mine["projects"]] == ["Alice's ad"]
+    assert [p["title"] for p in theirs["projects"]] == ["Bob's short"] == [bobs["title"]]
+    for is_error, payload in results[5:]:
+        assert is_error and f"no project {pid}" in payload
+        assert "Alice" not in str(payload) and "colder" not in str(payload)
+    assert len(projects.messages(pid, pg, account_id=w["a"])["items"]) == 2

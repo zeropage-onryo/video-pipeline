@@ -435,7 +435,9 @@ def test_append_turns_refuses_what_it_cannot_file(tmp_db):
     project = projects.create("Strict", "", tmp_db, account_id=None)
     for turns, match in [([{"role": "system", "content": "x"}], "each turn"),
                          (["just text"], "each turn"),
-                         ([{"role": "user", "content": "x"}] * 101, "at most 100")]:
+                         ([{"role": "user", "content": "x"}] * 101, "at most 100"),
+                         ([{"role": "user", "content": "x" * 15000}] * 14,
+                          "characters per call")]:
         with pytest.raises(ValueError, match=match):
             projects.append_turns(project["id"], turns, tmp_db, account_id=None)
     with pytest.raises(ValueError, match="no project"):

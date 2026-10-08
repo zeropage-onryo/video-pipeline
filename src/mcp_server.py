@@ -380,25 +380,27 @@ DESCRIPTIONS = {
         "One project in full, by its id from `projects`: its brief and look, "
         "what it learned from earlier picks and passes, its scenes (status, "
         "the start of each scene prompt, its still or clip), every reference "
-        "image those scenes used (each with a `ref` you can pass back as a "
-        "reference, what it shows and the page it came from), the renders "
-        "made for it (`gen:<id>`), and the latest turns of its chat. "
-        "`chat_turns` sets how many turns (default 12, maximum 40); page "
-        "further back with `project_chat`. Read-only."
+        "image those scenes used (each with its `ref`, what it shows and the "
+        "page it came from; a render or an effect takes a `ref` as a "
+        "reference), the renders made for it (`gen:<id>`), and the latest "
+        "turns of its chat. Up to 50 scenes and 60 references, newest scenes "
+        "first; `chat_turns` sets how many turns (default 12, maximum 40); "
+        "page further back with `project_chat`. Read-only."
     ),
     "project_chat": (
         "A project's chat history: each turn's role, words and time, oldest "
         "first within the page. Returns the newest `limit` turns (default 40, "
-        "maximum 200); pass `before` (the oldest turn id you already hold) to "
-        "page further back; `has_more` says whether older turns exist. "
-        "Read-only."
+        "maximum 200, and fewer when the turns are long); pass `before` (the "
+        "oldest turn id you already hold) to page further back; `has_more` "
+        "says whether older turns exist. Read-only."
     ),
     "create_project": (
         "Start a new project: a name, an optional brief (who it is for, what "
         "it must always have and never show) and an optional look (the style "
         "every prompt in it is held to). It appears on your projects board in "
-        "the studio. Pass its id as `project_id` to a render or an effect to "
-        "file the result under it. Spends nothing."
+        "the studio. `save_chat` keeps a conversation with it, and a tool that "
+        "takes `project_id` (a render, an effect) files its result under it. "
+        "Spends nothing."
     ),
     "save_chat": (
         "Save turns of this conversation into one of your projects' chat "
@@ -406,7 +408,8 @@ DESCRIPTIONS = {
         "project is reopened -- here, or in the studio, where the project's "
         "assistant picks the conversation up. `turns` are the person's "
         "messages and your replies, in order, each {role: user or assistant, "
-        "content}; up to 100 per call. Turns the history already ends with are "
+        "content}; up to 100 turns and 200,000 characters per call. Turns the "
+        "history already ends with are "
         "skipped, so re-sending the conversation from its start saves only "
         "what is new. Save when the person wants this conversation kept with "
         "the project. Spends nothing."
@@ -462,9 +465,14 @@ HINTS = {
 # table (db.SHARED_TABLES) -- stays on the operator's own server, where one
 # person's directions are not listed to another. `build_server(listed=True)`
 # registers exactly these; the static-token door and stdio keep everything.
+# The project tools joined it on 2026-10-08 (Mike's call): a person's
+# projects, their chat and save_chat are that person's own rows (OWNED
+# tables, `_account` -> CALLER_ACCOUNT), so they are safe to offer a
+# stranger, and `create_project` / `save_chat` spend nothing.
 LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
-                "archive", "stats", "elements", "write_scene", "quote",
-                "approve", "job")
+                "archive", "stats", "projects", "project", "project_chat",
+                "create_project", "save_chat", "elements", "write_scene",
+                "quote", "approve", "job")
 
 # THE STUDIO SURFACE (2026-10-07, Mike's call). What `python -m
 # src.mcp_server` serves by default -- what Claude Desktop launches: work
@@ -1549,6 +1557,8 @@ CHAT_EXCERPT = 1500      # characters of one turn in the preview
 PROJECT_REFS_MAX = 60    # reference images listed on `project`
 PROJECT_RENDERS_MAX = 50
 PROJECT_MEMORY = 20      # newest lessons shown
+PROJECT_SCENES_MAX = 50  # newest scenes shown on `project`
+CHAT_PAGE_CHARS = 200_000  # words one `project_chat` page carries at most
 
 
 def _project_or_refuse(project_id, dsn, account_id) -> dict:
@@ -1639,7 +1649,7 @@ def get_project(project_id: int, chat_turns: int = CHAT_PREVIEW,
     concepts = preprod.list_concepts(limit=200, dsn=dsn, account_id=account_id,
                                      project_id=pid)
     scenes = []
-    for c in concepts:
+    for c in concepts[:PROJECT_SCENES_MAX]:
         shot = (c.get("shots") or [{}])[0] or {}
         scenes.append({**_card(c),
                        "prompt": (shot.get("prompt") or "")[:400],
@@ -1690,15 +1700,17 @@ def get_project(project_id: int, chat_turns: int = CHAT_PREVIEW,
             "updated_at": project.get("updated_at"),
             "learned": (project.get("memory") or [])[-PROJECT_MEMORY:],
             "scenes": scenes,
+            "scenes_truncated": len(concepts) > PROJECT_SCENES_MAX,
             "references": references,
             "references_truncated": len(refs) > PROJECT_REFS_MAX,
             "renders": renders,
             "chat": [_turn(m, CHAT_EXCERPT) for m in chat["items"]],
             "chat_has_more": bool(chat["has_more"]),
-            "next": ("pass a reference's `ref` (or a render's `gen:<id>`) to "
-                     "generate_image / generate_video / apply_effect with "
-                     f"project_id={pid} to keep working in it; `project_chat` "
-                     "pages back through the conversation")}
+            "next": ("a reference's `ref` or a render's `gen:<id>` goes wherever "
+                     f"a tool takes a reference, and project_id={pid} files new "
+                     "work under this project where a tool takes it; "
+                     "`save_chat` keeps this conversation with it; "
+                     "`project_chat` pages back through its history")}
 
 
 def project_history(project_id: int, before: Optional[int] = None,
@@ -1711,10 +1723,19 @@ def project_history(project_id: int, before: Optional[int] = None,
     page = projects.messages(project["id"], dsn, account_id=account_id,
                              limit=max(1, min(int(limit or 40), 200)),
                              before=int(before) if before is not None else None)
-    items = [_turn(m) for m in page["items"]]
+    # newest first until the page is full: a reply a client can still
+    # carry, the oldest turns of an over-long page left for the next one
+    kept, size = [], 0
+    for m in reversed(page["items"]):
+        size += len(m.get("content") or "")
+        if kept and size > CHAT_PAGE_CHARS:
+            break
+        kept.append(m)
+    items = [_turn(m) for m in reversed(kept)]
+    more = bool(page["has_more"]) or len(kept) < len(page["items"])
     return {"project_id": project["id"], "title": project["title"],
-            "count": len(items), "turns": items, "has_more": bool(page["has_more"]),
-            **({"next_before": items[0]["id"]} if page["has_more"] and items else {}),
+            "count": len(items), "turns": items, "has_more": more,
+            **({"next_before": items[0]["id"]} if more and items else {}),
             **({} if items else {"note": "no chat in this project yet"})}
 
 
@@ -1758,8 +1779,8 @@ def make_project(title: str, brief: str = "", look: str = "",
     made = projects.create(title, brief, dsn, account_id=account_id, look=look)
     return {"id": made["id"], "title": made["title"], "brief": made.get("brief") or "",
             "look": made.get("look") or "",
-            "next": (f"pass project_id={made['id']} to generate_image / "
-                     "generate_video / apply_effect to file work under it")}
+            "next": (f"project_id={made['id']} files work under it where a tool "
+                     "takes one; `save_chat` keeps this conversation with it")}
 
 
 # --- the night's direction -------------------------------------------------
