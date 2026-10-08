@@ -201,8 +201,11 @@ the exact client rather than every client the person approved. Not done.
 
 ## Findings from the live walk (2026-10-08)
 
-**Finding 4 -- Chrome's lookalike warning on the consent page (OPEN, a
-dashboard change).** Supabase sends the person to `<Site URL>/oauth/consent`,
+**Finding 4 -- Chrome's lookalike warning on the consent page (DONE
+2026-10-08: Site URL moved to `https://api.zeropage.studio` in the dashboard,
+on Mike's word; checked live -- Supabase's authorize now 302s to
+`https://api.zeropage.studio/oauth/consent`, which hands off to its own
+`/signin`).** Supabase sends the person to `<Site URL>/oauth/consent`,
 the Site URL is `https://zeropage-studio.fly.dev`, and Chrome shows its
 "did you mean zeropage.studio?" interstitial on that host -- the warning
 `api.zeropage.studio` was set up to avoid for the studio's own Sign in on

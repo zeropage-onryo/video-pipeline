@@ -46,7 +46,7 @@ function Still({ tile, sizes, className = "" }: { tile: MakeTile; sizes: string;
     );
   }
   if (!tile.src) return <div aria-hidden className="absolute inset-0" style={{ background: tile.plate ?? "var(--plate-1)" }} />;
-  return <Image src={tile.src} alt={tile.title} fill sizes={sizes} quality={72} className={`object-cover ${className}`} />;
+  return <Image src={tile.src} alt={tile.title} fill sizes={sizes} quality={70} className={`object-cover ${className}`} />;
 }
 
 function Explore({ page }: { page: MakePage }) {

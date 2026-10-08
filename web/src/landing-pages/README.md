@@ -7,7 +7,7 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
   Solutions menu, the footer's Tools column and the FAQ JSON-LD all read this list.
 - `entries/<slug>.ts` — one typed `MakePage` per page (the Ad Generator, the five
   video models: LTX 2.5, Wan 3.0, Kling 3 Turbo Pro, Seedance 2.5, Veo 3.1, and the
-  five image models: Nano Banana Pro, FLUX.2 Pro, Seedream 4.5, GPT Image 2,
+  five image models: Nano Banana Pro, FLUX.2 Pro, Seedream 4.5, GPT Image 2.5,
   Ideogram 4.5). Every claim is checked against the code and the comment at the top of
   each file says where.
 - `shared.ts` — what entries build from: the video-model readers off `@/lib/catalog`
@@ -27,7 +27,7 @@ The SEO landing pages under `/make/<slug>` live here, in one folder:
   Seedance page's is ByteDance's four), `signatures` (the page's ONE
   signature interaction, keyed by `signature` on the entry; nothing when
   unset: `shot-timeline`, `reference-stack`, `frame-picker`, `edit-loop`,
-  `type-frame`, `poster-type`; `use-fit` sizes a frame of a given ratio
+  `type-frame` (unused since the GPT page moved to 2.5), `poster-type`, `ad-types`; `use-fit` sizes a frame of a given ratio
   inside a fixed stage), `ad-wall` (one heavy uppercase line, an eight-tile wall on Motion --
   tilt, lift, label slide -- and the Explore button; a tile with no `src` is
   a gradient plate off the accent), `features-section` (nine cards on Motion,
