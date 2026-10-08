@@ -186,11 +186,42 @@ def test_a_person_who_consented_before_goes_straight_back(gotrue):
     assert response.headers["location"].startswith(CLAIMS_CALLBACK + "?code=again")
 
 
-def test_an_unknown_authorization_is_a_page_with_the_reason(gotrue):
+def test_an_expired_authorization_says_so_in_plain_words(gotrue):
+    """Supabase forgets an authorization after about ten minutes and says
+    "authorization not found" -- which, to the person who just signed in,
+    reads like our bug (the 2026-10-08 walk hit it twice). The page says
+    it expired and where to start again."""
     gotrue.requests.clear()
     _arrive_and_sign_in()
     page = _get()
-    assert page.status_code == 400 and "authorization not found" in page.text
+    assert page.status_code == 400
+    assert "has expired" in page.text and "connect again" in page.text
+    assert "authorization not found" not in page.text
+
+
+def test_a_request_that_expires_before_allow_says_so_too(gotrue):
+    _arrive_and_sign_in()
+    csrf = _csrf(_get().text)
+    gotrue.requests.clear()          # the ten minutes ran out on this page
+    response = client.post("/oauth/consent", data={"authorization_id": AUTHZ,
+                                                   "decision": "approve", "csrf": csrf},
+                           follow_redirects=False)
+    assert response.status_code == 400 and "has expired" in response.text
+    assert "location" not in response.headers
+
+
+def test_any_other_refusal_still_shows_supabases_reason(gotrue, monkeypatch):
+    _arrive_and_sign_in()
+    real = gotrue.__call__
+
+    def refusing(method, path, **kwargs):
+        if path.startswith("/oauth/authorizations/"):
+            return 400, {"msg": "client is disabled"}
+        return real(method, path, **kwargs)
+
+    monkeypatch.setattr(auth_mod, "gotrue", refusing)
+    page = _get()
+    assert page.status_code == 400 and "client is disabled" in page.text
 
 
 # ---------- the decision ----------

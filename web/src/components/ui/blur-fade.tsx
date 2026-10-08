@@ -5,6 +5,7 @@ import {
   AnimatePresence,
   motion,
   useInView,
+  useReducedMotion,
   type MotionProps,
   type UseInViewOptions,
   type Variants,
@@ -47,6 +48,9 @@ export function BlurFade({
   const ref = useRef(null)
   const inViewResult = useInView(ref, { once: true, margin: inViewMargin })
   const isInView = !inView || inViewResult
+  // Reduced motion: render the visible state and never animate (the only
+  // place on the public site that animates `filter`, 2026-10-05).
+  const still = !!useReducedMotion()
   const defaultVariants: Variants = {
     hidden: {
       [direction === "left" || direction === "right" ? "x" : "y"]:
@@ -74,8 +78,8 @@ export function BlurFade({
     <AnimatePresence>
       <motion.div
         ref={ref}
-        initial="hidden"
-        animate={isInView ? "visible" : "hidden"}
+        initial={still ? false : "hidden"}
+        animate={still || isInView ? "visible" : "hidden"}
         exit="hidden"
         variants={combinedVariants}
         transition={{

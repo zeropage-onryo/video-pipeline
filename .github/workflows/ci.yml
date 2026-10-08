@@ -51,9 +51,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg
           # 3.3 both require 3.10+, so the install step had no version to
@@ -127,20 +127,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
       - name: Test web/ with node:test
         working-directory: web
         # The glob, not `node --test tests/`: the directory form does not
-        # find these files. NODE_OPTIONS reaches each test file's process and
-        # mutes one warning per imported .ts, which says web/package.json has
-        # no "type" -- adding one is a change to the Next app, not to CI.
-        env:
-          NODE_OPTIONS: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+        # find these files.
         run: node --test tests/*.test.mjs
 
   # Everything in this job needs a real GEMINI_API_KEY -- it makes real
@@ -187,7 +183,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Skip -- no GEMINI_API_KEY secret configured
         if: ${{ env.GEMINI_API_KEY == '' }}
@@ -195,7 +191,7 @@ jobs:
           echo "::notice::GEMINI_API_KEY secret is not set on this repo, so the eval gate is" \
                "skipped. Add it under Settings -> Secrets -> Actions to turn this job on."
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: ${{ env.GEMINI_API_KEY != '' }}
         with:
           # 3.12, not the 3.9 this used to pin: `mcp>=2` (2026-08-31) and psycopg

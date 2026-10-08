@@ -35,7 +35,9 @@ import {
   Plug,
   Scissors,
   Settings,
+  X,
 } from "lucide-react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { API_URL, ApiError, goToSignIn, signOut } from "@/lib/api";
 import {
   BALANCE_EVENT,
@@ -89,6 +91,25 @@ const VIEW_BY_PATH: [string, ViewId][] = [
   ["/studio", "studio"],
 ];
 
+/* A toast can carry ONE action (Undo, nearly always) and a deferred half.
+   `onClose` runs once when the toast leaves WITHOUT its action pressed --
+   it timed out, was dismissed, was pushed off the stack, or the page is
+   being left -- so a change the server cannot take back (an element's
+   delete is a hard DELETE) is held until then, and Undo simply cancels
+   it. A change the server can reverse is made at once and its action
+   calls the inverse route instead. */
+export type ToastOpts = {
+  action?: { label: string; run: () => unknown };
+  onClose?: () => void;
+};
+type ToastItem = { id: number; text: string; kind: "ok" | "err"; action?: ToastOpts["action"] };
+
+/** how long a toast stays: an error or an Undo gets longer to be read and
+ *  answered; hovering one holds it */
+const toastMs = (kind: "ok" | "err", action: boolean) => (kind === "err" || action ? 7000 : 4200);
+/** the most toasts on screen at once; an older one is pushed off */
+const TOAST_MAX = 4;
+
 /* what the pages read from the shell: who, and a way to say something */
 type ShellContext = {
   me: Me | null;
@@ -98,7 +119,7 @@ type ShellContext = {
   /** /api/billing/balance for the active account; null until it answers,
    *  and null for good when it cannot (signed out, no account, older API) */
   balance: Balance | null;
-  toast: (text: string, kind?: "ok" | "err") => void;
+  toast: (text: string, kind?: "ok" | "err", opts?: ToastOpts) => void;
   setBar: (node: ReactNode) => void;
 };
 const Ctx = createContext<ShellContext>({
@@ -180,9 +201,13 @@ export function StudioShell({ children }: { children: ReactNode }) {
   // keyed by the account it was read for, so a switch never shows the
   // previous account's number while the new one is being asked
   const [balanceRead, setBalanceRead] = useState<{ account: number; value: Balance | null } | null>(null);
-  const [toastState, setToastState] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [bar, setBarNode] = useState<ReactNode>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // per toast: its timer and its deferred half, outside React state so the
+  // page-leave flush below can reach them synchronously
+  const toastTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const toastClose = useRef(new Map<number, () => void>());
+  const toastSeq = useRef(0);
 
   const loadMe = useCallback(
     () =>
@@ -295,11 +320,94 @@ export function StudioShell({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("pointerdown", off);
   }, [hmenu]);
 
-  const toast = useCallback((text: string, kind: "ok" | "err" = "ok") => {
-    setToastState({ text, kind });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastState(null), kind === "err" ? 7000 : 4200);
+  /* THE TOAST STACK (2026-10-08). It was one slot that overwrote itself, so
+     two things said in a row lost the first, and a destructive action had
+     no way back. Now: up to TOAST_MAX, newest on top, each on its own
+     timer (held while hovered), each dismissible, and an Undo where the
+     caller gives one. `acted` says the action was pressed, which is the one
+     way to leave WITHOUT running the deferred half. */
+  const dropToast = useCallback((id: number, acted: boolean) => {
+    const timer = toastTimers.current.get(id);
+    if (timer) clearTimeout(timer);
+    toastTimers.current.delete(id);
+    const close = toastClose.current.get(id);
+    toastClose.current.delete(id);
+    setToasts((all) => all.filter((t) => t.id !== id));
+    if (!acted && close) close();
   }, []);
+  const armToast = useCallback(
+    (id: number, ms: number) => {
+      const old = toastTimers.current.get(id);
+      if (old) clearTimeout(old);
+      toastTimers.current.set(
+        id,
+        setTimeout(() => dropToast(id, false), ms),
+      );
+    },
+    [dropToast],
+  );
+  const holdToast = useCallback((id: number) => {
+    const timer = toastTimers.current.get(id);
+    if (timer) clearTimeout(timer);
+    toastTimers.current.delete(id);
+  }, []);
+  // what is on screen, oldest first, readable synchronously by toast()
+  const toastList = useRef<ToastItem[]>([]);
+  useEffect(() => {
+    toastList.current = toasts;
+  }, [toasts]);
+  const toast = useCallback(
+    (text: string, kind: "ok" | "err" = "ok", opts?: ToastOpts) => {
+      const newest = toastList.current[toastList.current.length - 1];
+      // the same plain message again (a retried error, a double click) is
+      // the same toast held longer, not a second copy of it
+      if (newest && !opts && !newest.action && newest.text === text && newest.kind === kind) {
+        armToast(newest.id, toastMs(kind, false));
+        return;
+      }
+      const id = ++toastSeq.current;
+      if (opts?.onClose) toastClose.current.set(id, opts.onClose);
+      const item: ToastItem = { id, text, kind, action: opts?.action };
+      toastList.current = [...toastList.current, item];
+      setToasts((all) => [...all, item]);
+      armToast(id, toastMs(kind, !!opts?.action));
+      // past the cap the oldest goes -- and its deferred half runs, since
+      // nobody undid it
+      while (toastList.current.length > TOAST_MAX) {
+        const oldest = toastList.current[0];
+        toastList.current = toastList.current.slice(1);
+        dropToast(oldest.id, false);
+      }
+    },
+    [armToast, dropToast],
+  );
+  // Leaving the page runs every deferred half still waiting: the change
+  // was asked for and never undone. (Moving between studio pages does not
+  // leave it -- the shell, and so the stack, stays mounted.)
+  useEffect(() => {
+    const closers = toastClose.current;
+    const flush = () => {
+      for (const close of closers.values()) {
+        try {
+          close();
+        } catch {
+          /* a failed deferred half has nobody left to tell */
+        }
+      }
+      closers.clear();
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
+  const actOnToast = (t: ToastItem) => {
+    dropToast(t.id, true);
+    Promise.resolve()
+      .then(() => t.action?.run())
+      .catch((e) => toast(e instanceof Error ? e.message : "That could not be undone", "err"));
+  };
   const setBar = useCallback((node: ReactNode) => setBarNode(node), []);
 
   // The switch is a cookie on THIS origin (the proxy forwards POST /brand),
@@ -490,11 +598,38 @@ export function StudioShell({ children }: { children: ReactNode }) {
 
         {connect ? <ConnectClaude me={me} onClose={() => setConnect(false)} toast={toast} /> : null}
 
-        {toastState ? (
-          <div className={`ztoast${toastState.kind === "err" ? " err" : ""}`} role="status">
-            {toastState.text}
+        <MotionConfig reducedMotion="user">
+          <div className="ztoasts">
+            <AnimatePresence initial={false}>
+              {toasts.map((t) => (
+                <motion.div
+                  key={t.id}
+                  layout
+                  initial={{ opacity: 0, y: -12, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.98, transition: { duration: 0.14 } }}
+                  transition={{ duration: 0.22, ease: [0.22, 0.61, 0.36, 1] }}
+                  className={`ztoast${t.kind === "err" ? " err" : ""}`}
+                  role={t.kind === "err" ? "alert" : "status"}
+                  onMouseEnter={() => holdToast(t.id)}
+                  onMouseLeave={() => armToast(t.id, 2500)}
+                  onFocus={() => holdToast(t.id)}
+                  onBlur={() => armToast(t.id, 2500)}
+                >
+                  <span className="ztext">{t.text}</span>
+                  {t.action ? (
+                    <button type="button" className="zact" onClick={() => actOnToast(t)}>
+                      {t.action.label}
+                    </button>
+                  ) : null}
+                  <button type="button" className="zx" aria-label="Dismiss" onClick={() => dropToast(t.id, false)}>
+                    <X size={12} strokeWidth={2} />
+                  </button>
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
-        ) : null}
+        </MotionConfig>
       </div>
     </Ctx.Provider>
   );

@@ -157,7 +157,7 @@ export function RefImg({
       <span
         role="img"
         aria-label={deadLabel || `unavailable: ${fileName(url)}`}
-        className={`flex items-center justify-center overflow-hidden bg-[#1c1716] text-center font-plex text-[9px] leading-tight tracking-[0.08em] text-noir-red2 [overflow-wrap:anywhere] ${deadClassName || "size-full"}`}
+        className={`flex items-center justify-center overflow-hidden bg-noir-raise text-center font-plex text-[9px] leading-tight tracking-[0.08em] text-noir-red2 [overflow-wrap:anywhere] ${deadClassName || "size-full"}`}
       >
         {deadLabel}
       </span>
@@ -186,7 +186,7 @@ export const TAG_DARK = "bg-[rgb(11_11_11/0.78)] text-bone";
 
 export function NoReferenceSlate() {
   return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-[#1c1716] font-plex text-[11px] tracking-[0.16em] text-noir-red2">
+    <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-noir-raise font-plex text-[11px] tracking-[0.16em] text-noir-red2">
       <span>NO REFERENCE</span>
       <small className="text-[11px] tracking-normal text-bone/55">cannot render yet</small>
     </span>

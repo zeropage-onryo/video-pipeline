@@ -1,17 +1,30 @@
 // The SEO landing pages under /make/<slug> (2026-10-01). ONE typed entry
 // per page, ONE template (app/make/[slug]/page.tsx) -- adding a page is
-// adding an entry here, and the sitemap, the static params, the metadata
-// and the FAQ JSON-LD all read this list.
+// adding an entry under entries/ and listing it here, and the sitemap, the
+// static params, the metadata, the header's Solutions menu, the footer's
+// Tools column and the FAQ JSON-LD all read this list.
 //
 // Every claim in an entry is something the studio does today. Check the
 // code before writing a new one (the first page's audit is in the PR):
 // the composer takes `?spark=` and `?attach=` only, the Queue is the one
-// spend, prices come from the catalog below and are never typed by hand.
+// spend, prices come from the catalog (shared.ts) and are never typed by hand.
 //
-import { MODELS, num } from "@/lib/catalog";
+import type { MakeAccent } from "./theme";
+import type { SignatureKey } from "./components/signatures";
+import { AD_GENERATOR } from "./entries/ai-product-ad-generator";
+import { SEEDANCE } from "./entries/seedance-video-generator";
+import { LTX } from "./entries/ltx-video-generator";
+import { WAN } from "./entries/wan-video-generator";
+import { KLING } from "./entries/kling-video-generator";
+import { VEO } from "./entries/veo-video-generator";
+import { NANO_BANANA } from "./entries/nano-banana-image-generator";
+import { FLUX } from "./entries/flux-image-generator";
+import { SEEDREAM } from "./entries/seedream-image-generator";
+import { GPT_IMAGE } from "./entries/gpt-image-generator";
+import { IDEOGRAM } from "./entries/ideogram-image-generator";
 
 // One tile in the wall under the hero (the InVideo-style wall, 2026-10-01).
-// A tile with no `src` draws as a soft gradient plate, the way the
+// A tile with no `src` draws as a gradient plate, the way the
 // reference wall leaves two slots as colour. Up to eight are laid out; the
 // layout itself is the wall's (ad-wall.tsx), not the entry's.
 export type MakeTile = {
@@ -23,11 +36,27 @@ export type MakeTile = {
   meta?: string;
   /** A still: a path under public/ or an R2 URL. Absent = gradient plate. */
   src?: string;
+  /** The plate's own gradient (CSS). Absent = the accent's two, alternating. */
+  plate?: string;
   /** mp4/webm; when present the tile loops it muted, `src` as poster. */
   video?: string;
+  /** The showcase wall only (2026-10-07): the prompt the clip was made
+   *  from, shown under the tile when it is clicked. */
+  prompt?: string;
+  /** The showcase wall only: the generation mode chip ("I2V", "T2V"). */
+  mode?: string;
+  /** The showcase wall only: the tile's frame, "w:h" (default "3:4"). */
+  aspect?: string;
 };
 
-export type MakeCard = { title: string; body: string };
+export type MakeCard = {
+  title: string;
+  body: string;
+  /** This card's own starting line for the composer (default: the page's). */
+  spark?: string;
+  /** A plain link instead of the sign-up door, e.g. the full model list. */
+  link?: { href: string; label: string };
+};
 /** A feature card: the icon is a key features-grid.tsx maps to a glyph. */
 export type MakeFeature = MakeCard & { icon: FeatureIcon };
 export type FeatureIcon =
@@ -39,7 +68,80 @@ export type FeatureIcon =
   | "model"
   | "export"
   | "guide"
-  | "assets";
+  | "assets"
+  | "frame"
+  | "sound"
+  | "clock"
+  | "open"
+  | "type"
+  | "edit";
+/** One statement block in the overview (2026-10-07, Mike: the shape of
+ *  ByteDance's own Seedance 2.5 page -- a heading, one or two sentences,
+ *  a demo beside it): the eyebrow, the serif line, the body, optional
+ *  points, and a media slot drawn like a wall tile (plate until a still or
+ *  a clip lands). */
+export type MakeOverviewBlock = {
+  eyebrow?: string;
+  title: string;
+  body: string;
+  points?: string[];
+  media?: MakeTile;
+  /** The clip carries sound worth hearing: the slot gets an unmute toggle
+   *  (autoplay is always muted). */
+  sound?: boolean;
+  /** A second clip under a draggable divider, e.g. a 480p draft against
+   *  the 720p final: `media` is the right side, this is the left. */
+  compare?: { media: MakeTile; label: string; mediaLabel: string };
+};
+/** The sections after the hero, by name, for `layout.order`. */
+export type MakeSectionKey =
+  | "overview"
+  | "signature"
+  | "wall"
+  | "features"
+  | "models"
+  | "howTo"
+  | "faq"
+  | "related"
+  | "final";
+
+/** A page's own arrangement (2026-10-08, Mike: "make sure every layout
+ *  varies so neither one is identical"). Everything defaults to the shape
+ *  the Ad Generator and Seedance pages already have, so an entry without a
+ *  `layout` renders byte for byte as before. */
+export type MakeLayout = {
+  /** The hero's shape (make-hero.tsx): "center" (the default: one serif
+   *  line over the buttons), "split" (the copy left, `hero.media[0]` large
+   *  right with the rest pinned to it as reference chips), "cover" (the
+   *  first media full-bleed behind the copy), "stack" (centered copy over
+   *  a row of the media), "fan" (centered copy over the media fanned like
+   *  a hand of cards), and for a clip: "reel" (centered copy over one wide
+   *  letterboxed clip), "phone" (the copy left, the clip in a phone frame
+   *  right) or "theater" (a dark panel, the clip large under the copy with
+   *  the sound toggle front and centre). A clip in any hero keeps its
+   *  sound behind a toggle. */
+  hero?: "center" | "split" | "cover" | "stack" | "fan" | "reel" | "phone" | "theater";
+  /** The order of the sections after the hero. Absent = DEFAULT_ORDER. A
+   *  section left out is not drawn. */
+  order?: MakeSectionKey[];
+  /** How the nine features are drawn: "grid" (cards, the default), "list"
+   *  (two hairline columns, numbered) or "split" (the title pinned left,
+   *  the nine as rows on the right). */
+  features?: "grid" | "list" | "split";
+};
+
+export const DEFAULT_ORDER: MakeSectionKey[] = [
+  "overview",
+  "signature",
+  "wall",
+  "features",
+  "models",
+  "howTo",
+  "faq",
+  "related",
+  "final",
+];
+
 export type MakeFaq = {
   q: string;
   /** Plain text: it is also the FAQPage JSON-LD answer. */
@@ -48,8 +150,19 @@ export type MakeFaq = {
   link?: { href: string; label: string };
 };
 
+/** Where a page lives: /make/<slug> (a thing to make) or /models/<slug>
+ *  (a model's page, listed on /models under "Image models"; 2026-10-05,
+ *  Mike's call). The template is the same; the route, the menu and the
+ *  footer column follow the section. */
+export type MakeSection = "make" | "models";
+
 export type MakePage = {
   slug: string;
+  section: MakeSection;
+  /** The model ids this page is about -- catalog `model` ids for a video
+   *  page, shared.ts IMAGE_MODELS ids for an image page -- so the /models
+   *  listing can link each model to its page. */
+  modelIds?: string[];
   /** <title> without the site suffix (layout.tsx adds " — Zero Page"). */
   title: string;
   description: string;
@@ -57,15 +170,58 @@ export type MakePage = {
   /** The short line in the header's Solutions menu (site-header.tsx). */
   menu: string;
   subhead: string;
-  cta: { label: string; /** carried into the composer as ?spark= */ spark: string };
+  cta: {
+    label: string;
+    /** carried into the composer as ?spark= */
+    spark: string;
+    /** The outline button beside it. Default: "See examples" -> #examples. */
+    secondary?: { label: string; href: string };
+    /** The small link at the foot of every model and how-to card. Default "Start now". */
+    startLabel?: string;
+  };
   /** Which starting shape the composer opens with. Only "spark" exists
    *  today; a real `?template=` the composer reads is the follow-up. */
   template: "spark";
   /** The skin's tone. "light" is white ground, black type (2026-10-01). */
   tone: "light" | "dark";
+  /** The page's own colours (theme.ts), published as CSS variables on the
+   *  skin wrapper. `RED` is the light tone's original palette. */
+  accent: MakeAccent;
+  /** The page's arrangement: hero shape, section order, features shape. */
+  layout?: MakeLayout;
+  /** What a "split", "cover", "stack" or "fan" hero draws: stills or
+   *  clips, drawn like wall tiles. */
+  heroMedia?: MakeTile[];
+  /** The page's one signature interaction, drawn between the hero and the
+   *  wall (components/signatures.tsx). Absent = none. */
+  signature?: SignatureKey;
+  /** The overview between the hero and the signature (overview-section.tsx):
+   *  the model's own headline claims, each a block with a demo slot, in
+   *  the shape of the model maker's page. Absent = none. */
+  overview?: { items: MakeOverviewBlock[] };
   /** The wall right under the hero (ad-wall.tsx): its own big line, up
    *  to eight tiles, and the button under them. */
-  wall: { title: string; tiles: MakeTile[]; explore: { label: string; href: string } };
+  wall: {
+    title: string;
+    tiles: MakeTile[];
+    explore: { label: string; href: string };
+    /** "bento" (default) is the four-column wall; "showcase" is three
+     *  masonry columns of mixed-frame tiles, each opening its prompt
+     *  underneath on click (showcase-wall.tsx, after ByteDance's own
+     *  "Creativity Unleashed" grid; 2026-10-07, Mike's call). The rest
+     *  came 2026-10-08 so no two pages share a wall (walls.tsx):
+     *  "filmstrip" is one scrolling row at a fixed height, each tile at its
+     *  own frame, captioned underneath; "prompts" is a grid where every
+     *  still shows the prompt that drew it, with the words it had to get
+     *  right marked `[[like this]]`; "editorial" is one large plate beside
+     *  a column of numbered figures; "posters" is a staggered row of 2:3
+     *  posters on a tinted ground; "reels" is a row of vertical clips in
+     *  phone frames, each with its sound (clips.tsx). */
+    layout?: "bento" | "showcase" | "filmstrip" | "prompts" | "editorial" | "posters" | "reels";
+  };
+  /** The signature's own frames, when they are not the wall's first tiles
+   *  (shot-timeline.tsx reads these first). */
+  signatureFrames?: MakeTile[];
   /** Nine feature cards under one big line (features-grid.tsx). */
   features: { title: string; items: MakeFeature[] };
   /** Four model cards under one big line, each with a Start now. */
@@ -79,212 +235,32 @@ export type MakePage = {
   finalCta: { eyebrow: string; title: string; body: string };
 };
 
-const model = (id: string) => {
-  const m = MODELS.find((x) => x.model === id);
-  if (!m) throw new Error(`make-pages: no model ${id} in pricing.json`);
-  return m;
-};
-
-// The three models the model cards quote, read off the generated catalog so
-// a re-export of src/pricing.py changes the page and nothing has to be
-// remembered. The FAQ names every model and no price (2026-10-02).
-const ltx = model("ltx2.3");
-const kling = model("kling3-turbo-pro");
-const veo = model("veo3.1");
-
-// The model cards: three renderers off the catalog (name, blurb and price
-// are the catalog's own) and a fourth for the rest of the list.
-const PLAN_FOR = { standard: "every plan", creator: "Creator and up", premium: "the Studio plan" } as const;
-const modelCard = (m: typeof ltx): MakeCard => ({
-  title: m.name,
-  body: `${m.blurb} ${num(m.credits)} credits for a ${m.seconds}-second clip, on ${PLAN_FOR[m.tier]}.`,
-});
-// Every model name off the catalog, "A, B and C", for the FAQ.
-const MODEL_NAMES = (() => {
-  const n = MODELS.map((m) => m.name);
-  return n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : n.join("");
-})();
-
-const MODEL_CARDS: MakeCard[] = [
-  modelCard(ltx),
-  modelCard(kling),
-  modelCard(veo),
-  {
-    title: `${MODELS.length} Models`,
-    body: `Every video model the Queue renders on, ${MODELS.filter((m) => ![ltx, kling, veo].includes(m))
-      .map((m) => m.name)
-      .join(", ")} included, with the price on the card before you approve.`,
-  },
-];
-
-// The wall's stills are eight product ads generated in the studio (Mike,
-// 2026-10-02; 928x1152 JPEGs under public/make/<slug>/, named by product
-// type). Every slot carries one, so no gradient plate is drawn. The slot
-// order follows the wall's bento (ad-wall.tsx): 0 is the short tile, 1 and
-// 4 the tall narrow ones, 5 the wide one, 6 and 7 the pair at the end.
-const ADS = "/make/ai-product-ad-generator";
-const TILES: MakeTile[] = [
-  { title: "Lip tint", tag: "", src: `${ADS}/lip-tint.jpg` },
-  { title: "Fragrance", tag: "", src: `${ADS}/fragrance.jpg` },
-  { title: "Energy drink", tag: "", src: `${ADS}/energy-drink.jpg` },
-  { title: "Headphones", tag: "", src: `${ADS}/headphones.jpg` },
-  { title: "Sneaker", tag: "", src: `${ADS}/sneaker.jpg` },
-  { title: "Tumbler", tag: "", src: `${ADS}/tumbler.jpg` },
-  { title: "Hot sauce", tag: "", src: `${ADS}/hot-sauce.jpg` },
-  { title: "Matcha", tag: "", src: `${ADS}/matcha.jpg` },
-];
-
+// In the order the Solutions menu and the Tools column list them.
 export const MAKE_PAGES: MakePage[] = [
-  {
-    slug: "ai-product-ad-generator",
-    title: "AI Ad Generator",
-    description:
-      "Upload your product, pick a look, and render a short ad on Kling, Seedance, LTX, Wan or Veo.",
-    h1: "AI Ad Generator",
-    menu: "AI Ad Generator",
-    subhead: "Upload your product, pick a look, and render a short ad on the model you choose.",
-    cta: {
-      label: "Create your ad",
-      spark:
-        "A 10-second product ad for my [product]: a reveal, a detail, the product in use. Clean, premium look.",
-    },
-    template: "spark",
-    tone: "light",
-    wall: {
-      title: "ZeroPage Ad Generator",
-      tiles: TILES,
-      explore: { label: "Explore more", href: "#features" },
-    },
-    features: {
-      title: "Ad Generator Features",
-      items: [
-        {
-          icon: "references",
-          title: "Product references",
-          body: "Your product photos ride into the prompt, the keyframe and the clip. Every shot anchors on a still drawn from them.",
-        },
-        {
-          icon: "elements",
-          title: "Reusable elements",
-          body: "Save the product as an element once and every ad after is held to the same frames.",
-        },
-        {
-          icon: "shots",
-          title: "Timed shots",
-          body: "A scene is written as timed shots, 4 to 30 seconds in all, and each shot renders as its own clip.",
-        },
-        {
-          icon: "keyframe",
-          title: "Keyframe first",
-          body: "See each shot's first frame and redraw it until it is right, before a clip is rendered.",
-        },
-        {
-          icon: "price",
-          title: "Price before spend",
-          body: "The Queue shows the credits for the exact model and length you picked, and that number is what is charged.",
-        },
-        {
-          icon: "model",
-          title: "Pick the model",
-          body: "Kling, Seedance, LTX and Wan, plus Veo on the Studio plan, chosen per approve through one Queue.",
-        },
-        {
-          icon: "export",
-          title: "Export one MP4",
-          body: "Assemble the clips in shot order into one MP4, with a music bed you upload under the clips' own sound.",
-        },
-        {
-          icon: "guide",
-          title: "Guided writing",
-          body: "Describe the ad, or let the Guide work through story, look and pacing with you before anything is written.",
-        },
-        {
-          icon: "assets",
-          title: "Everything on one wall",
-          body: "Every render lands on your Assets wall to view, star, sort into folders and download.",
-        },
-      ],
-    },
-    models: {
-      title: `${MODELS.length} Video Generator Models`,
-      items: MODEL_CARDS,
-    },
-    howTo: {
-      title: "How to make a product ad",
-      items: [
-        {
-          title: "Upload your product",
-          body: "Sign in, drop a few product photos into the composer, and write one line about the ad. Or save the product as an element and reuse it across ads.",
-        },
-        {
-          title: "Pick a look and approve",
-          body: "Describe the look, or let the Guide work through story, look and pacing with you. In the Queue, pick the model, length and frame, with the price on the card.",
-        },
-        {
-          title: "Render and export",
-          body: "Clips render one shot at a time. Download each from Assets, or export the whole scene as one MP4 in shot order.",
-        },
-      ],
-    },
-    faq: {
-      // One line at the title's full size; longer wraps (measured 2026-10-02).
-      title: "FAQs about AI Ad Generator",
-      // The reference's questions (what it is, how to, the prompt, people,
-      // styles, references, models, length, commercial use), each answer
-      // checked against the code on 2026-10-02. Cost stays out of this
-      // section (Mike's call): prices live on /pricing and /models.
-      items: [
-        {
-          q: "What is an AI product ad generator?",
-          a: "A studio that writes a short ad from your product photos and one line about it. The scene is written as timed shots, each shot's first frame is drawn from your photos, and each shot renders as its own clip on the video model you pick. The clips assemble into one MP4.",
-        },
-        {
-          q: "How do I make a product ad with it?",
-          a: "Sign in, drop a few product photos into the composer, write one line about the ad, and press Create. Pick the scene on the board, which draws its keyframes, then approve each shot in the Queue. The clips land on your Assets wall, and Export joins them in shot order into one MP4.",
-        },
-        {
-          q: "How do I write the prompt for the best ad?",
-          a: "Name the product, one action per shot, and the look you want. The studio writes the full scene prompt as timed shots from that line and your photos. If you would rather talk it through, the Guide works through story, look and pacing with you first. Then check each shot's keyframe before you render: that still is what the clip anchors on, and the Director lets you edit the prompt, swap a reference and redraw it.",
-        },
-        {
-          q: "Can I upload my own product photos as references?",
-          a: "Yes. Upload photos into the composer for one ad, or save the product as an element with its photos and reuse it across ads. Every keyframe is drawn from the references attached to the scene, and a scene with no references never reaches the Queue.",
-        },
-        {
-          q: "Can it show a real person or the same product every time?",
-          a: "Save the person or product as an element with a few photos, and every scene written against it is held to those frames, keyframe and clip. Video models still vary between renders, so look at the keyframe before you approve. No pixel match is promised, and you need the consent of anyone whose likeness you upload.",
-        },
-        {
-          q: "What looks and styles can it make?",
-          a: "Whatever you can describe: the prompt carries the look, the lighting and the camera, and the keyframe shows it before a clip renders. Attach a reference image for the mood and the writing is grounded in it. The Guide can work through the look with you if you have not settled on one.",
-        },
-        {
-          q: "Which video models does it render on?",
-          a: `${MODEL_NAMES}, chosen per shot in the Queue with a length and a frame.`,
-          link: { href: "/models", label: "See every model" },
-        },
-        {
-          q: "How long can an ad be?",
-          a: "A scene runs 4 to 30 seconds, written as timed shots. Each shot renders as its own clip, fitted to the lengths the model you picked supports.",
-        },
-        {
-          q: "Can I use the ads commercially?",
-          a: "What the studio generates for your account is yours to use, subject to the terms of the model that rendered it. The output is AI-made, so review it before you publish it.",
-          link: { href: "/terms", label: "Read the terms" },
-        },
-      ],
-    },
-    related: [],
-    finalCta: {
-      eyebrow: "Your first ad",
-      title: "Make your first product ad.",
-      body: "Upload the product, pick a look, see the price, render.",
-    },
-  },
+  AD_GENERATOR,
+  LTX,
+  WAN,
+  KLING,
+  SEEDANCE,
+  VEO,
+  NANO_BANANA,
+  FLUX,
+  SEEDREAM,
+  GPT_IMAGE,
+  IDEOGRAM,
 ];
 
-export function getMakePage(slug: string): MakePage | undefined {
-  return MAKE_PAGES.find((p) => p.slug === slug);
+export function getMakePage(slug: string, section?: MakeSection): MakePage | undefined {
+  return MAKE_PAGES.find((p) => p.slug === slug && (!section || p.section === section));
 }
 
-export const makePath = (slug: string) => `/make/${slug}`;
+/** The pages in one section, in list order. */
+export const pagesIn = (section: MakeSection) => MAKE_PAGES.filter((p) => p.section === section);
+
+/** A page's path, from its section: /make/<slug> or /models/<slug>. */
+export function makePath(slugOrPage: string | MakePage): string {
+  const page = typeof slugOrPage === "string" ? getMakePage(slugOrPage) : slugOrPage;
+  const section = page?.section ?? "make";
+  const slug = typeof slugOrPage === "string" ? slugOrPage : slugOrPage.slug;
+  return `/${section}/${slug}`;
+}

@@ -83,7 +83,7 @@ export function DeleteProjectDialog({
         <Dialog.Backdrop className="fixed inset-0 z-[950] bg-black/70" />
         <Dialog.Popup
           initialFocus={keep}
-          className={`${cardFonts} fixed left-1/2 top-1/2 z-[951] flex max-h-[85vh] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-[10px] border border-noir-line bg-[#121211] p-6 font-tight text-sm leading-normal text-bone outline-none max-sm:p-4`}
+          className={`${cardFonts} fixed left-1/2 top-1/2 z-[951] flex max-h-[85vh] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-[10px] border border-noir-line bg-noir-panel p-6 font-tight text-sm leading-normal text-bone outline-none max-sm:p-4`}
         >
           {project ? (
             <>

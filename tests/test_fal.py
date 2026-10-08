@@ -711,13 +711,13 @@ def test_image_usd_prices_megapixels_rounded_up_and_per_image_models_flat():
     assert all(fal.image_usd("flux-pro1.1", a) == 0.04 for a in fal.IMAGE_SIZES)  # every frame ~1MP
     assert fal.megapixels(1024, 1024) == 1 and fal.megapixels(1025, 1024) == 2
     assert fal.megapixels(2048, 2048) == 4
-    assert fal.image_usd("seedream4", "21:9") == fal.image_usd("seedream4", "1:1")
+    assert fal.image_usd("seedream4.5", "21:9") == fal.image_usd("seedream4.5", "1:1")
     # FLUX.2 Pro (verified 2026-10-04): $0.03 for the first output megapixel,
     # $0.015 per further megapixel of input and output -- a reference counts
     # as an input megapixel; a per-image model ignores references
     assert fal.image_usd("flux2-pro", "1:1") == 0.03
     assert fal.image_usd("flux2-pro", "1:1", references=2) == 0.06
-    assert fal.image_usd("seedream4", "1:1", references=2) == 0.03
+    assert fal.image_usd("seedream4.5", "1:1", references=2) == 0.04
     assert fal.image_usd("flux-pro1.1", "1:1", references=2) == 0.04   # no edit: refs never sent
     with pytest.raises(ValueError):
         fal.image_usd("dall-e")
@@ -737,8 +737,14 @@ def test_references_go_to_the_edit_endpoint_only_where_one_exists():
     assert (body["width"], body["height"]) == (912, 1136)
     # the two other frame shapes
     assert fal.image_request("nano-banana-pro", "x", aspect="9:16")[1]["aspect_ratio"] == "9:16"
-    assert fal.image_request("ideogram3", "x", aspect="16:9")[1]["image_size"] == "landscape_16_9"
-    assert fal.image_request("ideogram3", "x", aspect="7:5")[1]["image_size"] == "square_hd"
+    assert fal.image_request("ideogram4.5", "x", aspect="16:9")[1]["image_size"] == "landscape_16_9"
+    assert fal.image_request("ideogram4.5", "x", aspect="7:5")[1]["image_size"] == "square_hd"
+    assert fal.image_request("ideogram4.5", "x")[1]["quality"] == "medium"   # not high, ~4x the price
+    # Seedream 4.5 (2026-10-08) refuses under ~3.7MP: the frame goes out doubled
+    assert fal.image_request("seedream4.5", "x", aspect="4:5")[1]["image_size"] == {"width": 1824, "height": 2272}
+    for a in fal.IMAGE_SIZES:
+        w, h = fal.image_request("seedream4.5", "x", aspect=a)[1]["image_size"].values()
+        assert 2560 * 1440 <= w * h <= 4096 * 4096 and max(w, h) <= 4096
     # GPT Image 2 (2026-10-04): named sizes by orientation, quality sent
     # explicitly (fal's default is high at ~4x), up to 16 references, priced
     # per size at medium
@@ -765,14 +771,14 @@ def test_a_composer_still_is_charged_held_settled_and_banked(tmp_db, approved, k
     ledger.grant(account_id, 1000, "purchase", dsn=tmp_db)
     http = FakeHttp(result={"images": [{"url": "https://v3.fal.media/i.png"}]})
     result = fal.generate_image_from_prompt(
-        "a can on steel", db_path=tmp_db, http=http, model="seedream4", aspect="4:5",
+        "a can on steel", db_path=tmp_db, http=http, model="seedream4.5", aspect="4:5",
         reference_urls=["https://r2.example/can.jpg"], account_id=account_id)
     assert result["ok"] is True, result["error"]
     assert result["references"] == 1
     url, body = http.calls[0]
-    assert url.endswith(fal.IMAGE_MODELS["seedream4"]["edit"])
+    assert url.endswith(fal.IMAGE_MODELS["seedream4.5"]["edit"])
     assert body["image_urls"] == ["https://r2.example/can.jpg"]
-    expected = pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4", "4:5", references=1)))
+    expected = pricing.credits_for(pricing.usd_micros(fal.image_usd("seedream4.5", "4:5", references=1)))
     assert result["credits"] == expected
     spent = -sum(e["delta"] for e in ledger.entries(account_id, tmp_db) if e["kind"] != "grant")
     assert spent == expected
@@ -780,12 +786,12 @@ def test_a_composer_still_is_charged_held_settled_and_banked(tmp_db, approved, k
     with generative.connect(tmp_db) as conn:
         row = conn.execute("SELECT tool, cost_usd, params_json FROM generations").fetchone()
     assert row["tool"] == "fal"
-    assert float(row["cost_usd"]) == fal.image_usd("seedream4", "4:5")
+    assert float(row["cost_usd"]) == fal.image_usd("seedream4.5", "4:5")
     params = json.loads(row["params_json"])
-    assert params["model"] == "seedream4" and params["references"] == 1
+    assert params["model"] == "seedream4.5" and params["references"] == 1
     assert params["aspect"] == "4:5" and "ledger_ref" in params
     wall = render_assets.list_all(tmp_db, account_id=account_id)
-    assert [a["model"] for a in wall] == ["seedream4"]
+    assert [a["model"] for a in wall] == ["seedream4.5"]
 
 
 def test_a_failed_fal_still_releases_its_hold(tmp_db, approved, keys, monkeypatch):
@@ -810,3 +816,29 @@ def test_an_unknown_image_model_is_refused_before_any_call(tmp_db, approved, key
     result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http, model="dall-e")
     assert result["ok"] is False and "image model" in result["error"]
     assert http.calls == []
+
+
+
+def test_a_still_filed_under_a_project_says_so_on_its_row_and_the_wall(
+        tmp_db, approved, keys, fake_download, monkeypatch):
+    """The MCP's project_id (2026-10-08): a still no scene carries is
+    filed under the project it was made for -- on the generations row's
+    params and the Assets wall's metadata -- and one made without it is
+    filed under nothing."""
+    from src import render_assets
+    monkeypatch.setattr(render_assets, "_ingest",
+                        lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
+    http = FakeHttp(result={"images": [{"url": "https://v3.fal.media/i.png"}]})
+    result = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
+                                            model="seedream4.5", project_id=7)
+    assert result["ok"] is True, result["error"]
+    plain = fal.generate_image_from_prompt("a can", db_path=tmp_db, http=http,
+                                           model="seedream4.5")
+    assert plain["ok"] is True, plain["error"]
+    with generative.connect(tmp_db) as conn:
+        rows = [json.loads(r["params_json"]) for r in conn.execute(
+            "SELECT params_json FROM generations ORDER BY id").fetchall()]
+    assert rows[0]["project_id"] == 7 and "project_id" not in rows[1]
+    wall = {a["id"]: a["metadata"] for a in render_assets.list_all(tmp_db, account_id=None)}
+    assert wall[result["asset_id"]]["project_id"] == 7
+    assert "project_id" not in wall[plain["asset_id"]]

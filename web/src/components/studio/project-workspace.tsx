@@ -149,11 +149,19 @@ export function ProjectWorkspace({ id }: { id: number }) {
     else go(href);
   };
 
-  const act = async (c: Concept, fn: () => Promise<unknown>, done?: string) => {
+  /** `undo`, when given, puts an Undo on the toast that runs through this
+   *  same path -- the server's inverse route, then the list re-read */
+  const act = async (
+    c: Concept,
+    fn: () => Promise<unknown>,
+    done?: string,
+    undo?: { run: () => Promise<unknown>; done: string },
+  ) => {
     setBusy((b) => ({ ...b, [c.id]: true }));
     try {
       await fn();
-      if (done) toast(done);
+      if (done)
+        toast(done, "ok", undo ? { action: { label: "Undo", run: () => act(c, undo.run, undo.done) } } : undefined);
       loadScenes();
       void loadProject(); // a pick or a pass is a lesson the memory just learned
       announceQueueChange();
@@ -207,7 +215,7 @@ export function ProjectWorkspace({ id }: { id: number }) {
       </nav>
       <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)_300px] max-lg:grid-cols-1 max-2xl:grid-cols-[260px_minmax(0,1fr)_260px]">
         {/* ── the scenes ── */}
-        <aside className={`${paneClass("scenes")} flex min-h-0 flex-col border-r border-noir-line bg-[#0e0e0d]`} aria-label="Scenes">
+        <aside className={`${paneClass("scenes")} flex min-h-0 flex-col border-r border-noir-line bg-noir-well`} aria-label="Scenes">
           <div className="flex items-center gap-2 border-b border-noir-line px-3 py-2.5">
             <Link href="/studio/projects" className={`${ICON_BTN} size-9!`} title="All projects" aria-label="All projects">
               <ArrowLeft size={16} strokeWidth={2} aria-hidden />
@@ -255,7 +263,7 @@ export function ProjectWorkspace({ id }: { id: number }) {
                   <article
                     key={c.id}
                     data-id={c.id}
-                    className={`${CARD} ${on ? "border-noir-red shadow-[0_0_0_2px_#E23B2E]" : "border-noir-line2"} ${c.archived ? "opacity-50 hover:opacity-100" : ""}`}
+                    className={`${CARD} ${on ? "border-noir-red shadow-[0_0_0_2px_var(--signal)]" : "border-noir-line2"} ${c.archived ? "opacity-50 hover:opacity-100" : ""}`}
                   >
                     <Hero concept={c} label={`Open ${c.title} on the canvas`} onOpen={() => select(c.id)}>
                       {status ? (
@@ -284,7 +292,7 @@ export function ProjectWorkspace({ id }: { id: number }) {
                           title="Put back in the project"
                           aria-label={`Put ${c.title} back`}
                           disabled={busy[c.id]}
-                          onClick={() => act(c, () => archiveConcept(c.id, false), "Back in the project")}
+                          onClick={() => act(c, () => archiveConcept(c.id, false), `${c.n} is back in the project`)}
                         >
                           <Undo2 size={16} strokeWidth={2} aria-hidden />
                         </button>
@@ -309,7 +317,12 @@ export function ProjectWorkspace({ id }: { id: number }) {
                             title="Not this one — archive"
                             aria-label={`Archive ${c.title}`}
                             disabled={busy[c.id]}
-                            onClick={() => act(c, () => archiveConcept(c.id, true), "Archived — it still counts")}
+                            onClick={() =>
+                              act(c, () => archiveConcept(c.id, true), `${c.n} archived — it still counts`, {
+                                run: () => archiveConcept(c.id, false),
+                                done: `${c.n} is back in the project`,
+                              })
+                            }
                           >
                             <Archive size={16} strokeWidth={2} aria-hidden />
                           </button>
@@ -363,7 +376,7 @@ export function ProjectWorkspace({ id }: { id: number }) {
         </div>
 
         {/* ── the brief, the look, the memory ── */}
-        <aside className={`${paneClass("brief")} min-h-0 overflow-y-auto border-l border-noir-line bg-[#0e0e0d]`} aria-label="Project brief">
+        <aside className={`${paneClass("brief")} min-h-0 overflow-y-auto border-l border-noir-line bg-noir-well`} aria-label="Project brief">
           {project ? (
             <ProjectPanel
               key={project.id}
@@ -388,7 +401,7 @@ export function ProjectWorkspace({ id }: { id: number }) {
           <Dialog.Backdrop className="fixed inset-0 z-[900] bg-black/60" />
           <Dialog.Popup
             initialFocus={drawerClose}
-            className={`${cardFonts} fixed inset-y-0 right-0 z-[901] flex w-[520px] max-w-full flex-col gap-[22px] overflow-y-auto border-l border-noir-line bg-[#121211] px-8 py-7 font-tight text-sm leading-normal text-bone outline-none max-sm:px-4 max-sm:py-5 [&>*]:flex-none`}
+            className={`${cardFonts} fixed inset-y-0 right-0 z-[901] flex w-[520px] max-w-full flex-col gap-[22px] overflow-y-auto border-l border-noir-line bg-noir-panel px-8 py-7 font-tight text-sm leading-normal text-bone outline-none max-sm:px-4 max-sm:py-5 [&>*]:flex-none`}
           >
             {shown ? (
               <DrawerBody
@@ -483,8 +496,18 @@ function ProjectPanel({
   };
   const toggleArchive = async () => {
     try {
-      await archiveProject(project.id, !project.archived);
-      toast(project.archived ? "Back on the board" : "Archived — nothing in it was deleted");
+      const was = project.archived;
+      await archiveProject(project.id, !was);
+      toast(was ? "Back on the board" : "Archived — nothing in it was deleted", "ok", {
+        action: {
+          label: "Undo",
+          run: () =>
+            archiveProject(project.id, was).then(() => {
+              toast(was ? "Archived — nothing in it was deleted" : "Back on the board");
+              onChanged();
+            }),
+        },
+      });
       onChanged();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Could not archive", "err");

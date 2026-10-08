@@ -203,6 +203,45 @@ VIDEO_MODELS: dict[str, dict] = {
         "checked": "2026-09-26",
         "source": "https://fal.ai/models/fal-ai/ltx-2.3/image-to-video/api",
     },
+    # LTX 2.5 (added 2026-10-08, Mike: "use ltx 2.5 on runway, switch to
+    # that" -- the LTX page is the 2.5 page), read off fal's queue OpenAPI
+    # schemas and model pages that day. NOTE THE NAMESPACE: `lightricks/`,
+    # and the tier is the LAST path segment. Sound is generated with the
+    # picture by default (`generate_audio: true`) and is in the rate. Fast:
+    # 6-20 s in even steps, 720p $0.09/s, 1080p $0.13, 1440p $0.19, 2160p
+    # $0.30. Pro: 6/8/10 s, 720p $0.12/s, 1080p $0.17. Duration is an INT
+    # enum on the wire (2.3's lesson). camera_motion, fps and end_image_url
+    # exist and are not wired. 2.3 stays the platform default: at $0.06/s
+    # for 1080p it is still the cheapest credible LTX. Both 2.5 tiers default
+    # to 720p, the house rule wherever a model offers it.
+    "ltx2.5-fast": {
+        "t2v": "lightricks/ltx-2.5/text-to-video/fast",
+        "i2v": "lightricks/ltx-2.5/image-to-video/fast",
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (6, 20),
+        "duration_values": (6, 8, 10, 12, 14, 16, 18, 20),
+        "duration_wire": "int",
+        "resolutions": ("720p", "1080p", "1440p", "2160p"),
+        "default_resolution": "720p",
+        "prices": {"720p": 0.09, "1080p": 0.13, "1440p": 0.19, "2160p": 0.30},
+        "platform": "ltx",
+        "checked": "2026-10-08",
+        "source": "https://fal.ai/models/lightricks/ltx-2.5/text-to-video/fast",
+    },
+    "ltx2.5": {
+        "t2v": "lightricks/ltx-2.5/text-to-video/pro",
+        "i2v": "lightricks/ltx-2.5/image-to-video/pro",
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (6, 10),
+        "duration_values": (6, 8, 10),
+        "duration_wire": "int",
+        "resolutions": ("720p", "1080p"),
+        "default_resolution": "720p",
+        "prices": {"720p": 0.12, "1080p": 0.17},
+        "platform": "ltx",
+        "checked": "2026-10-08",
+        "source": "https://fal.ai/models/lightricks/ltx-2.5/text-to-video/pro",
+    },
     # NOTE THE NAMESPACE: `alibaba/`, not `fal-ai/`. The older
     # fal-ai/wan-i2v and fal-ai/wan-pro routes still exist and are a
     # different, older model -- do not "fix" this prefix. The endpoint's own
@@ -270,6 +309,30 @@ VIDEO_MODELS: dict[str, dict] = {
         "platform": "seedance",
         "checked": "2026-09-26",
         "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
+    },
+    # Seedance 2.5 (added 2026-10-06, Mike's call: the Seedance page is the
+    # 2.5 page). Read off the model page's rate card and the /api schema
+    # that day: 4-30 s a clip as a string enum ("auto" or "4".."30" -- we
+    # always send a number), 480p/720p/1080p, audio generated with the
+    # picture by default and included in the rate ("720p with audio
+    # ~$0.4730 / second"; 480p $0.2205, 1080p $1.164 -- fal's own Aug-13
+    # comparison still listed 2.5 as 480p/720p only, the schema and rate
+    # card today carry 1080p). No fast tier exists for 2.5. 1080p is the
+    # premium band (providers.BAND_BY_FRAME), as on 2.0. image_url is the
+    # start frame; `end_image_url` and the reference-to-video endpoint
+    # (`image_urls`, up to 30) are not wired.
+    "seedance2.5": {
+        "t2v": "bytedance/seedance-2.5/text-to-video",
+        "i2v": "bytedance/seedance-2.5/image-to-video",
+        "params": ("duration", "resolution", "aspect_ratio"),
+        "durations": (4, 30),
+        "duration_wire": "str",
+        "resolutions": ("480p", "720p", "1080p"),
+        "default_resolution": "720p",
+        "prices": {"480p": 0.2205, "720p": 0.4730, "1080p": 1.164},
+        "platform": "seedance",
+        "checked": "2026-10-06",
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video",
     },
     # Veo 3.1 through fal (2026-09-26). It was deliberately absent while
     # src/veo.py owned the platform on the Gemini key -- two adapters, one
@@ -391,16 +454,25 @@ IMAGE_MODELS: dict[str, dict] = {
         "checked": "2026-10-04 (fal page via search: 1K/2K $0.15; 4K $0.30, not offered here)",
         "source": "https://fal.ai/models/fal-ai/nano-banana-pro",
     },
-    "seedream4": {
-        "label": "Seedream 4.0",
-        "note": "ByteDance; photographic, cheap, takes references.",
-        "endpoint": "fal-ai/bytedance/seedream/v4/text-to-image",
-        "edit": "fal-ai/bytedance/seedream/v4/edit",
+    # Seedream 4.5 replaced 4.0 on 2026-10-08 (Mike: "upgrade those models
+    # in my python with fal"), read off the queue OpenAPI schema that day.
+    # Its floor is ~3.7 megapixels (width and height 1920-4096, or a total
+    # between 2560x1440 and 4096x4096), so the composer's ~1MP frames go out
+    # doubled (`scale`): 2048x2048 square, 1824x2272 at 4:5, all inside the
+    # bounds. Flat per image whatever the size, references to the edit
+    # endpoint as `image_urls` (up to 10).
+    "seedream4.5": {
+        "label": "Seedream 4.5",
+        "note": "ByteDance; photographic, about 4 megapixels, generates and edits with up to 10 references.",
+        "endpoint": "fal-ai/bytedance/seedream/v4.5/text-to-image",
+        "edit": "fal-ai/bytedance/seedream/v4.5/edit",
         "size": "wh",
+        "scale": 2,
+        "max_references": 10,
         "params": ("image_size", "seed"),
-        "usd_per_image": 0.03,
-        "checked": "2026-10-04 (fal page via search: $0.03/image; image_size >= 960x960 px, all IMAGE_SIZES are)",
-        "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4/text-to-image",
+        "usd_per_image": 0.04,
+        "checked": "2026-10-08 (fal page + queue OpenAPI: $0.04/image; image_size 2560x1440..4096x4096)",
+        "source": "https://fal.ai/models/fal-ai/bytedance/seedream/v4.5/text-to-image",
     },
     "gpt-image-2": {
         "label": "GPT Image 2",
@@ -420,16 +492,25 @@ IMAGE_MODELS: dict[str, dict] = {
                     "$0.042; 1536x1024 assumed the same as its portrait twin -- re-check)"),
         "source": "https://fal.ai/models/openai/gpt-image-2",
     },
-    "ideogram3": {
-        "label": "Ideogram 3",
+    # Ideogram 4.5 replaced 3 on 2026-10-08 (same call), read off the queue
+    # OpenAPI schema that day: `ideogram/v4.5` (no fal-ai/ prefix), fal's
+    # named sizes, `quality` low/medium/high at $0.03/$0.06/$0.22 an image
+    # whatever the size -- sent at medium, the old BALANCED price. Prompt
+    # expansion (Ideogram's magic prompt) is on by default and left on. Its
+    # edit endpoint edits ONE source image (`image_url`, plus up to four
+    # `reference_image_urls`), which is not what a composer reference means,
+    # so the studio draws on it from text only, as it did on 3.
+    "ideogram4.5": {
+        "label": "Ideogram 4.5",
         "note": "Graphic, typographic, poster-like. Text-only.",
-        "endpoint": "fal-ai/ideogram/v3",
+        "endpoint": "ideogram/v4.5",
         "edit": None,
         "size": "enum",
-        "params": ("image_size", "rendering_speed"),
+        "quality": "medium",
+        "params": ("image_size", "quality"),
         "usd_per_image": 0.06,
-        "checked": "2026-10-04 (fal page via search: $0.06 at BALANCED, the default; TURBO $0.03, QUALITY $0.09)",
-        "source": "https://fal.ai/models/fal-ai/ideogram/v3",
+        "checked": "2026-10-08 (fal page + queue OpenAPI: low $0.03, medium $0.06, high $0.22)",
+        "source": "https://fal.ai/models/ideogram/v4.5",
     },
 }
 IMAGE_MODEL_NAMES = tuple(IMAGE_MODELS)
@@ -505,6 +586,17 @@ def image_options() -> list[dict]:
             for name, spec in IMAGE_MODELS.items()]
 
 
+def image_max_refs(model: str) -> int:
+    """How many reference images `model` is actually handed: none without
+    an `edit` endpoint, else its own `max_references` (8 when the row
+    does not say). The one reading -- image_request trims to it and the
+    MCP's generate_image refuses past it (2026-10-08)."""
+    spec = IMAGE_MODELS.get(model)
+    if spec is None:
+        raise ValueError(f"image model must be one of {IMAGE_MODEL_NAMES}, got {model!r}")
+    return int(spec.get("max_references", 8)) if spec.get("edit") else 0
+
+
 def image_request(model: str, prompt: str, *, aspect: Optional[str] = None,
                   reference_urls=None) -> tuple[str, dict, int]:
     """(endpoint, body, references used) for one still. References go to
@@ -519,7 +611,7 @@ def image_request(model: str, prompt: str, *, aspect: Optional[str] = None,
     used = 0
     if refs and spec.get("edit"):
         endpoint = spec["edit"]
-        body["image_urls"] = refs[:spec.get("max_references", 8)]
+        body["image_urls"] = refs[:image_max_refs(model)]
         used = len(body["image_urls"])
     size = spec.get("size", "wh")
     w, h = image_dims(aspect)
@@ -534,7 +626,8 @@ def image_request(model: str, prompt: str, *, aspect: Optional[str] = None,
     elif "width" in spec["params"]:
         body["width"], body["height"] = w, h
     else:
-        body["image_size"] = {"width": w, "height": h}
+        k = int(spec.get("scale", 1))
+        body["image_size"] = {"width": w * k, "height": h * k}
     return endpoint, body, used
 # The tool name an image attempt is logged under -- generative.IMAGE_TOOLS,
 # beside midjourney and nano, never a video platform.
@@ -1558,10 +1651,26 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          model: str = DEFAULT_MODEL, resolve_photo=None,
                          http=None, approved: Optional[bool] = None,
                          account_id: Optional[int] = None,
-                         quote=None) -> dict:
+                         quote=None, duration: Optional[int] = None,
+                         resolution: Optional[str] = None,
+                         aspect_ratio: Optional[str] = None,
+                         source: str = "workflow", bank: bool = False,
+                         project_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
     The free-standing render behind the Director canvas's Generate node.
+
+    `duration` / `resolution` / `aspect_ratio` (2026-10-07, the MCP's
+    generate_video) are the caller's pick, priced and sent as given; None
+    keeps what this door always did (DEFAULT_DURATION, the model's default
+    resolution, DEFAULT_ASPECT). The caller refuses a value the model does
+    not take (providers.check_render_choice) -- build_body only clamps.
+    `source` labels the generations row (still "workflow" for the canvas).
+    `bank` (the MCP's) files the finished clip on the Assets wall like a
+    still or a Queue clip; off, this door never has (the canvas keeps what
+    it does), and the result then carries no asset_id. `project_id`
+    (2026-10-08) files the clip under a project -- on the row's params and
+    so on the Assets wall's metadata -- for a render no scene carries.
     """
     kwargs = {"dsn": db_path} if db_path is not None else {}
 
@@ -1580,23 +1689,27 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         image_url = as_image_url(reference_image, resolve_photo=resolve_photo,
                                  account_id=account_id)
 
+        seconds = duration if duration is not None else DEFAULT_DURATION
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         out_path = RENDER_DIR / f"wf-{stamp}.mp4"
         key_source = KEY_SOURCE
+        usd = estimate_cost(1, model=model, duration=seconds, resolution=resolution)
         charge = charging.Charge(
             account_id, provider="fal", ref=out_path.name,
-            estimate_usd=estimate_cost(1, model=model),
-            key_source=key_source, source="workflow", dsn=db_path,
+            estimate_usd=usd,
+            key_source=key_source, source=source, dsn=db_path,
             quote=quote)
         platform = model_spec(model)["platform"]
         base_params = {"provider": "fal", "model": model,
-                       "duration": DEFAULT_DURATION, "source": "workflow",
+                       "duration": seconds, "source": source,
+                       **({"resolution": resolution} if resolution else {}),
+                       **({"project_id": int(project_id)} if project_id else {}),
                        "prompt_image": bool(image_url),
                        "key_source": key_source,
                        **fal_requests.ref_params(charge.ref)}
         track = {"kind": "row", "platform": platform, "prompt": prompt,
                  "shot_id": None, "params": base_params,
-                 "cost_usd": estimate_cost(1, model=model),
+                 "cost_usd": usd,
                  "note": "auto-created by fal.generate_from_prompt"}
 
         def row_params():
@@ -1613,7 +1726,10 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                 dsn=db_path, account_id=account_id):
             generate_video(prompt, out_path, model=model, image_url=image_url,
                            http=http, db_path=db_path, approved=approved,
-                           account_id=account_id, charge=charge, track=track)
+                           account_id=account_id, charge=charge, track=track,
+                           **({"duration": seconds} if duration is not None else {}),
+                           **({"resolution": resolution} if resolution else {}),
+                           **({"aspect_ratio": aspect_ratio} if aspect_ratio else {}))
 
         shot_row_id = shot_row()
         generation_id = generative.record_generation(
@@ -1626,9 +1742,18 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         charge.settle(generation_id=generation_id)
         fal_requests.resolve(charge.ref, "rendered", account_id=account_id,
                              generation_id=generation_id, dsn=db_path)
-        return {"ok": True, "media_url": _publish(out_path, "video/mp4", account_id),
+        media_url = _publish(out_path, "video/mp4", account_id)
+        extra = {}
+        if bank:
+            from . import render_assets
+            asset = render_assets.record_best_effort(
+                account_id=account_id, generation_id=generation_id, tool=platform,
+                model=model, media_kind="video", prompt=prompt, media_url=media_url,
+                output_path=str(out_path), metadata=row_params(), dsn=db_path)
+            extra = {"asset_id": asset.get("id")}
+        return {"ok": True, "media_url": media_url,
                 "generation_id": generation_id, "path": str(out_path),
-                "error": None}
+                "error": None, **extra}
     except ledger.InsufficientCredit as e:
         return {"ok": False, "error": charging.refusal(e)}
     except Exception as e:
@@ -1643,7 +1768,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                                reference_urls=None,
                                concept_id: Optional[int] = None,
                                source: str = "workflow",
-                               bank: bool = True) -> dict:
+                               bank: bool = True,
+                               project_id: Optional[int] = None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error",
     "references", "asset_id"}.
@@ -1710,6 +1836,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                   "key_source": KEY_SOURCE, "references": used,
                   **({"aspect": aspect} if aspect else {}),
                   **({"concept_id": concept_id} if concept_id else {}),
+                  # a still no scene carries, filed under a project (2026-10-08)
+                  **({"project_id": int(project_id)} if project_id else {}),
                   **charge.params()}
         try:
             shot_row_id = _shot_row_for_prompt(

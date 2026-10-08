@@ -142,6 +142,9 @@ export const renameProject = (id: string, title: string) =>
   });
 export const deleteProject = (id: string) =>
   cutFetch<{ ok: boolean }>(`/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+/** the Undo on deleteProject; 409 `taken` when the scene's cut was opened again since */
+export const restoreProject = (id: string) =>
+  cutFetch<{ project: Project }>(`/projects/${encodeURIComponent(id)}/restore`, { method: "POST" });
 
 /* ── edits: every change to a doc is one of these ── */
 export const applyOp = (id: string, base_id: number, op: string, args: Record<string, unknown>) =>

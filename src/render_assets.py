@@ -299,6 +299,33 @@ def soft_delete(id: int, dsn: Optional[str] = None, *,
         return bool(cur.rowcount)
 
 
+def restore(id: int, dsn: Optional[str] = None, *,
+            account_id: Optional[int]) -> bool:
+    """Put a render taken off the wall back on it -- the studio's Undo
+    (2026-10-08). The exact inverse of soft_delete plus drop_chunk: the
+    mark is cleared and the prompt goes back on the assets shelf
+    (best-effort, the ingest's own contract). Returns whether a deleted
+    row of this account's was restored."""
+    with db.connect(dsn) as conn:
+        row = conn.execute(
+            "UPDATE generated_assets SET deleted_at = NULL "
+            "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s AND deleted_at IS NOT NULL "
+            "RETURNING *",
+            (id, account_id)).fetchone()
+    if row is None:
+        return False
+    row = dict(row)
+    try:
+        meta = json.loads(row.get("metadata_json") or "{}")
+    except (TypeError, ValueError):
+        meta = {}
+    from . import accounts
+    _ingest(int(row["id"]), generation_id=row["generation_id"], tool=row["tool"],
+            model=row["model"], media_kind=row["media_kind"], prompt=row["prompt"],
+            project=accounts.slug_of(account_id, dsn=dsn), metadata=meta)
+    return True
+
+
 def drop_chunk(id: int) -> None:
     """Forget the render's prompt on the assets shelf -- best-effort,
     the ingest's own contract."""

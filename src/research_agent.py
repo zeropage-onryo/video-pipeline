@@ -27,9 +27,10 @@ of "what an agent may do to the board" is the drift bug this repo has
 already paid for in asset_shelf and refbin, and this copy would be the
 one nobody reads.
 
-Going over stdio means the tools the 6am run gets are the SAME twelve
-Claude Desktop shows, from the same registration in `build_server`. What
-Mike tests by hand is what runs unattended. That is worth a subprocess.
+Going over stdio means the tools this run gets come from the same
+registration in `build_server` that every other door reads -- the BOARD
+surface, asked for by name since Claude Desktop's default became the
+generation-only studio surface (2026-10-07). That is worth a subprocess.
 
 WHY NOT `langchain-mcp-adapters`, WHICH DOES EXACTLY THIS.
 
@@ -356,7 +357,11 @@ async def _research(brand: str, count: int, dsn, *, python: str) -> dict:
         command=python,
         # No --engine. See the module docstring.
         # no --db when none was given: the child inherits DATABASE_URL
-        args=["-m", "src.mcp_server"] + (["--db", str(dsn)] if dsn else []),
+        # --surface board: since 2026-10-07 the stdio default is the
+        # generation-only "studio" server Claude Desktop launches, which
+        # has none of the board tools this agent drives.
+        args=["-m", "src.mcp_server", "--surface", "board"]
+             + (["--db", str(dsn)] if dsn else []),
         cwd=str(PROJECT_ROOT),
         env=_server_env(),
     )
