@@ -2552,8 +2552,9 @@ it (402 `subscribe_or_top_up`) for an account with no plan and no balance, and t
 `research` / `generate` tools ask the same predicate. **Since 2026-10-08 every route that
 spends model text asks it too** (`api._create_gate`: the Guide, the brief draft, an element's
 describe, Direct / Polish, the canvas's Ground / Enhance / Run all, the scout, the evals, the
-cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`); a trial account can
-still think without limit until its credits go (BACKLOG #24, deferred). **The studio shows
+cut's index and agent -- `docs/tasks/task-spend-holes-and-credits.md`). There is NO daily cap
+on model text, by Mike's call (2026-10-08): its cost goes into the plan prices, so a trial
+account can think without limit until its credits go (BACKLOG #24). **The studio shows
 credits, never dollars** (`tests/test_studio_shows_credits.py` guards it); a new open sign-up gets a one-time
 **100-credit trial** (`ZEROPAGE_SIGNUP_CREDITS`); and **`NANO_DAILY_CAP` is gone** for
 everyone (`nano_banana.DAILY_CAP is None`) -- the balance is the limit.
