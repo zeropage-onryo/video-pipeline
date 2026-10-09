@@ -20,7 +20,9 @@ So the deciding is what this exposes.
 TWO SURFACES SINCE 2026-10-07 (Mike's call). `python -m src.mcp_server`
 -- what Claude Desktop launches -- serves the STUDIO surface: no board at
 all, only images, video and effects on fal, each one quoted first and
-spent only after the person says yes in chat (`approval_gate`). The
+spent only after the person says yes in chat (`approval_gate`: a price in
+credits and a signed token bound to the exact request, redeemed once --
+`start_approved`). The
 BOARD surface (`--surface board`) is what the Guide, the HTTP mount and
 the research agent get, and the next paragraph is about it -- written
 before `imagine_reference` and `approve`, the board tools that spend.
@@ -154,11 +156,15 @@ _CAP = f"Returns at most `limit` rows (default {LIST_LIMIT}, maximum 100)"
 # and the ids a render or an effect is pointed at -- said once, the same
 # way in every description that needs them.
 _APPROVAL = (
-    "Two calls: the first (no `approve_usd`) spends nothing and returns the "
-    "quote -- exactly what will run and its price in dollars. Show the person "
-    "and wait for a yes; only then call again with the SAME arguments and "
-    "`approve_usd` set to the quoted price. A price above `approve_usd` is "
-    "refused, never charged."
+    "Two calls: the first (no `quote_token`) spends nothing and returns the "
+    "quote -- exactly what will run, its price in credits, the balance and the "
+    "balance after it, and a `quote_token`. Show the person and wait for a yes; "
+    "only then call again with the SAME arguments plus that `quote_token`. A "
+    "token is good for one hour, for exactly that request, and once: a changed "
+    "argument is refused, and a repeated call returns the first job instead of "
+    "charging again. A balance too short comes back as `refused: "
+    "insufficient_credits` with `needs` and `available` -- stop and tell the "
+    "person."
 )
 _REFERENCE_IDS = (
     "References are ids, never URLs: `gen:<id>` (an image from `renders` or "
@@ -513,11 +519,12 @@ STUDIO_INSTRUCTIONS = (
     "Your studio: make images and video, apply effects and draw element "
     "reference sheets with the studio's models, on the studio's credits. "
     "Nothing here touches the idea board. "
-    "EVERY image, clip, effect and sheet is two calls: the first (no approve_usd) "
-    "spends nothing and returns a quote -- show the person what will run and "
-    "its dollar price, and WAIT for a yes; only then call again with the same "
-    "arguments and approve_usd = the quoted price. Never approve on the "
-    "person's behalf. Work can be filed into a project: `projects` lists them, "
+    "EVERY image, clip, effect and sheet is two calls: the first (no quote_token) "
+    "spends nothing and returns a quote -- show the person what will run, its "
+    "price in credits and their balance, and WAIT for a yes; only then call "
+    "again with the same arguments plus the quote's quote_token, which works "
+    "once. Never approve on the person's behalf, and stop when a call is "
+    "refused for credits. Work can be filed into a project: `projects` lists them, "
     "`project` reopens one (its brief, look, scenes, the reference images it "
     "used and its chat), `create_project` starts one, `project_id` on a "
     "render files it there, and `save_chat` keeps this conversation with the "
@@ -1250,25 +1257,170 @@ def _project_refs(dsn, account_id, project_id: Optional[int] = None) -> list[dic
         return []
 
 
-def approval_gate(usd: float, approve_usd, *, what: str) -> Optional[dict]:
-    """The chat approval every spending tool on the studio surface goes
-    through (2026-10-07, Mike: images, video and effects all quote first).
+# The provider each spending tool holds credit under (src/charge.py checks
+# a quote's provider against the hold's): fal for images, clips and effects,
+# the still adapter for an element's sheet.
+SPEND_PROVIDERS = {"generate_image": "fal", "generate_video": "fal",
+                   "apply_effect": "fal", "element_sheet": "nano"}
 
-    approve_usd 0 -> the quote, nothing spent (returned for the caller to
-    show the person). A price above what was approved -> refused, so an
-    agent that changes the model, length or option after the yes is
-    stopped rather than charged. Otherwise None: go ahead."""
-    approved = round(float(approve_usd or 0), 4)
-    if approved <= 0:
-        return {"ok": False, "needs_approval": True,
-                "note": (f"Nothing was spent. {what} would cost about ${usd}. Show "
-                         "the person what it is and the price; if they say yes, "
-                         "call again with the SAME arguments and "
-                         f"approve_usd={usd}.")}
-    if usd > approved:
-        raise ValueError(f"this is priced at ${usd}, above the ${approved} that was "
-                         "approved -- get a new approval for this price")
-    return None
+
+def _project_arg(project_id) -> Optional[int]:
+    """A project id as it is bound into a quote: an int, or None for none."""
+    return None if project_id in (None, "", 0) else int(project_id)
+
+
+def _balance(account_id: Optional[int], dsn) -> Optional[int]:
+    """The account's spendable credits right now, or None when there is no
+    account to read or it cannot be read. A yearly plan's month that is
+    due is released first, as the hold itself does (src/charge.py): a dead
+    cron must not make a quote say "top up" to somebody who paid."""
+    from . import ledger
+    if account_id is None:
+        return None
+    try:
+        try:
+            from . import billing
+            billing.release_due(account_id, dsn=dsn)
+        except Exception:
+            pass
+        return int(ledger.available(account_id, dsn=dsn))
+    except Exception:
+        return None
+
+
+def _when(epoch: int) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(int(epoch), tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def approval_gate(usd: float, quote_token: str, *, tool: str, args: dict, what: str,
+                  account_id: Optional[int], dsn) -> tuple[Optional[dict], Any, dict]:
+    """The chat approval every spending tool on the studio surface goes
+    through (2026-10-07: images, video, effects and sheets all quote first;
+    2026-10-08: in credits, with a signed single-use token).
+
+    Returns (stop, approved, price). `price` is what the quote shows --
+    `credits` (the one conversion every hold uses, ledger.charge_credits),
+    whether this account is `charged` (an exempt one is not), the
+    `balance` and the `balance_after`, and the provider's `usd` as detail.
+
+    - No `quote_token`: `stop` is the quote, nothing spent, carrying a
+      token signed over THIS tool and THESE normalized arguments
+      (pricing.sign_studio). No signing secret: the quote, with no token
+      and a note that nothing can be approved here.
+    - A token: verified (signature, expiry, account, tool, arguments) and
+      re-priced; any refusal raises ValueError with its code. `approved` is
+      the verified pricing.StudioQuote, handed down so the hold is its
+      credits exactly.
+    - Either way, a balance short of the price is `stop` as a STRUCTURED
+      refusal (`refused`, `needs`, `available`) rather than an exception:
+      an agent that sees a tool error retries, and a retry cannot fix an
+      empty balance.
+
+    Single use is the caller's (`start_approved`), which claims the
+    token before the job starts."""
+    from . import ledger, pricing
+    credits = ledger.charge_credits(usd)
+    charged = account_id is not None and not ledger.credit_exempt(account_id, dsn=dsn)
+    balance = _balance(account_id, dsn)
+    price = {"usd": usd, "credits": credits, "charged": charged, "balance": balance,
+             "balance_after": (None if balance is None
+                               else balance - (credits if charged else 0))}
+    short = charged and balance is not None and balance < credits
+    refusal = {"ok": False, "refused": "insufficient_credits", "needs": credits,
+               "available": balance,
+               "note": (f"Nothing was spent. {what} needs {credits} credits and the "
+                        f"balance is {balance}. Tell the person to top up in the "
+                        "studio; do not call again until they have.")}
+    token = (quote_token or "").strip()
+    if not token:
+        if short:
+            return refusal, None, price
+        if not pricing.configured():
+            price["quote_token"] = None
+            return {"ok": False, "needs_approval": True, "can_approve": False,
+                    "note": (f"Nothing was spent. {what} costs {credits} credits. It "
+                             "cannot be approved from here: this installation has no "
+                             f"quote-signing secret ({pricing.SIGNING_ENV} is not set), "
+                             "so nothing can be spent through this connector until it "
+                             "is. Tell the person; quoting still works.")}, None, price
+        signed = pricing.studio_quote(account_id=account_id, tool=tool,
+                                      provider=SPEND_PROVIDERS[tool], args=args, usd=usd)
+        price.update(quote_token=pricing.sign_studio(signed),
+                     expires_at=_when(signed.expires_at))
+        cost = (f"costs {credits} credits" + (
+            f"; the balance is {balance} and would be {balance - credits} after it"
+            if balance is not None else "") if charged else
+            f"prices at {credits} credits; this account is not charged for it")
+        return {"ok": False, "needs_approval": True, "can_approve": True,
+                "note": (f"Nothing was spent. {what} {cost}. Show the person what it "
+                         "is and the price in credits, and WAIT for a yes. Only then "
+                         "call again with the SAME arguments plus quote_token from "
+                         "this quote -- it is good for one hour, for exactly this "
+                         "request, and once.")}, None, price
+    if not pricing.configured():
+        raise Refused("nothing can be approved here: this installation has no "
+                      f"quote-signing secret ({pricing.SIGNING_ENV} is not set)")
+    try:
+        approved = pricing.verify_studio(token, account_id=account_id, tool=tool, args=args)
+    except pricing.QuoteRefused as e:
+        raise ValueError(f"{e.reason}: {e}. Call again WITHOUT quote_token for a fresh "
+                         "quote and ask the person again") from e
+    if approved.credits != credits:
+        raise ValueError("stale_content: the price changed since this quote. Call "
+                         "again WITHOUT quote_token for a fresh quote and ask the "
+                         "person again")
+    if short:
+        return refusal, None, price
+    return None, approved, price
+
+
+def start_approved(fn, args: dict, start) -> dict[str, Any]:
+    """The approved half of a quoted spend, ONCE (2026-10-08).
+
+    `fn(**args, dry_run=True)` runs every check -- the arguments, the
+    token, the balance -- and spends nothing; a structured refusal comes
+    straight back and leaves the token unspent. Then the token is CLAIMED
+    (src/quote_redemptions.py) and only the winner calls `start()`, which
+    starts the job (or, with no job registry, runs it inline). A second
+    call with the same token is handed the first call's answer -- the same
+    job -- and starts and charges nothing. A claim that cannot be recorded
+    refuses: an approval nobody can prove was used once is not spent."""
+    from . import quote_redemptions
+    pre = fn(**args, dry_run=True)
+    if not pre.get("ok"):
+        return pre
+    approved = pre["approved"]
+    acct, dsn = args.get("account_id"), args.get("dsn")
+    try:
+        first = quote_redemptions.claim(approved.token_id, acct, tool=approved.tool,
+                                        credits=approved.credits, dsn=dsn)
+    except Exception as e:
+        raise Refused(f"the approval could not be recorded ({type(e).__name__}), so "
+                      "nothing was started or spent -- try the same call again") from e
+    if first is not None:
+        earlier = dict(first.get("response") or {})
+        job = earlier.get("job_id")
+        return {**earlier, "already_used": True,
+                "note": ("This approval was already used" +
+                         (f" -- it started job {job}; poll `job` for it" if job else
+                          " (its first call is still starting it)") +
+                         ". Nothing new was started or charged. A new render needs a "
+                         "new quote and a new yes.")}
+    try:
+        out = start()
+    except Exception:
+        try:
+            quote_redemptions.forget(approved.token_id, acct, dsn=dsn)
+        except Exception:
+            pass
+        raise
+    try:
+        quote_redemptions.record(approved.token_id, acct, out, dsn=dsn)
+    except Exception as e:      # the claim already stands: a repeat is still refused
+        print(f"note: quote {approved.token_id} redeemed but its job was not recorded "
+              f"({type(e).__name__}: {e})", file=sys.stderr)
+    return {**out, "quote": pre["quote"]} if "quote" not in out else out
 
 
 CRAFT_STEPS = ("refine", "enhance", "still", "beats")
@@ -1355,7 +1507,7 @@ def list_image_models() -> dict[str, Any]:
 
 
 def run_image(prompt: str, model: str = "", aspect: str = "",
-              references: Optional[list] = None, approve_usd: float = 0.0,
+              references: Optional[list] = None, quote_token: str = "",
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
               dry_run: bool = False,
@@ -1364,8 +1516,9 @@ def run_image(prompt: str, model: str = "", aspect: str = "",
     the composer's own door, so the credit hold, the cap, the generations
     row and the Assets wall behave exactly as they do from Studio.
 
-    Quoted first (2026-10-07): with approve_usd at 0 it returns the price
-    and spends nothing; it renders only when approve_usd covers it. The
+    Quoted first (2026-10-07): with no quote_token it returns the price in
+    credits and a signed token and spends nothing; it renders only with that
+    token, for exactly these arguments (`approval_gate`). The
     model, the aspect and the reference count are checked HERE and
     refused with the legal set, never clamped -- an agent that asked for
     one model and got another would file the wrong model's output as a
@@ -1391,15 +1544,20 @@ def run_image(prompt: str, model: str = "", aspect: str = "",
     quote = {"model": model, "label": spec["label"], "aspect": aspect or None,
              "references": named, "usd": usd,
              **_filed_under(project_id, dsn, account_id)}
-    gate = approval_gate(usd, approve_usd, what=f"This {spec['label']} image")
-    if gate is not None:
-        return {**gate, "quote": quote}
+    stop, approved, price = approval_gate(
+        usd, quote_token, tool="generate_image", what=f"This {spec['label']} image",
+        args={"prompt": prompt, "model": model, "aspect": aspect or None,
+              "references": named, "project_id": _project_arg(project_id)},
+        account_id=account_id, dsn=dsn)
+    quote.update(price)
+    if stop is not None:
+        return {**stop, "quote": quote}
     if dry_run:      # every refusal above, none of the spend: the job's pre-flight
-        return {"ok": True, "dry_run": True, "quote": quote}
+        return {"ok": True, "dry_run": True, "quote": quote, "approved": approved}
     res = fal.generate_image_from_prompt(
         prompt, model=model, aspect=aspect or None, reference_urls=urls or None,
         approved=True, account_id=account_id, source="mcp", bank=True,
-        project_id=project_id,
+        project_id=project_id, quote=approved,
         **({"db_path": dsn} if dsn is not None else {}))
     return {**res, "quote": quote}
 
@@ -1460,7 +1618,7 @@ def _sheet_photo_files(urls: list[str], tmp: Path, account_id) -> list[Path]:
     return files
 
 
-def run_element_sheet(kind: str, name: str, approve_usd: float = 0.0,
+def run_element_sheet(kind: str, name: str, quote_token: str = "",
                       dsn: Optional[str] = None, account_id: Optional[int] = None,
                       dry_run: bool = False) -> dict[str, Any]:
     """Draw (or redraw) one element's reference sheet from its real photos
@@ -1504,11 +1662,20 @@ def run_element_sheet(kind: str, name: str, approve_usd: float = 0.0,
              "replaces_sheet": has_sheet, "usd": usd}
     what = (f"Redrawing {item['name']}'s sheet (it replaces the current one)"
             if has_sheet else f"Drawing {item['name']}'s sheet")
-    gate = approval_gate(usd, approve_usd, what=what)
-    if gate is not None:
-        return {**gate, "quote": quote}
+    stop, approved, price = approval_gate(
+        usd, quote_token, tool="element_sheet", what=what,
+        # the photos it is drawn from and whether it replaces a sheet are
+        # part of what was approved: a sheet drawn meanwhile turns a "draw"
+        # into a "replace", which the person has not said yes to
+        args={"kind": kind, "element": item["name"],
+              "photos": [u.rsplit("/", 1)[-1].split("?", 1)[0] for u in photos],
+              "replaces_sheet": has_sheet},
+        account_id=account_id, dsn=dsn)
+    quote.update(price)
+    if stop is not None:
+        return {**stop, "quote": quote}
     if dry_run:
-        return {"ok": True, "dry_run": True, "quote": quote}
+        return {"ok": True, "dry_run": True, "quote": quote, "approved": approved}
 
     slug = asset_shelf.slugify(item["name"])
     out_dir = asset_shelf.PHOTO_DIRS[kind] / slug
@@ -1519,7 +1686,7 @@ def run_element_sheet(kind: str, name: str, approve_usd: float = 0.0,
                     "error": "none of the element's photos could be read"}
         res = sheets.draw(kind, item["name"], files, out_dir,
                           notes=item.get("text") or "", account_id=account_id,
-                          db_path=dsn)
+                          db_path=dsn, quote=approved)
     if not res["ok"]:
         return {"ok": False, "quote": quote, "error": res["error"]}
     plural = {"character": "characters", "prop": "props", "location": "locations"}[kind]
@@ -1543,7 +1710,7 @@ def list_video_models() -> dict[str, Any]:
 
 
 def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
-              frame: str = "", reference: str = "", approve_usd: float = 0.0,
+              frame: str = "", reference: str = "", quote_token: str = "",
               dsn: Optional[str] = None,
               account_id: Optional[int] = None,
               dry_run: bool = False,
@@ -1552,9 +1719,9 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
 
     Priced first by providers.check_render_choice -- the Queue's own
     check, which REFUSES a length or resolution the model does not take
-    rather than clamping it. It renders only when approve_usd covers that
-    price, so an agent that changes the model or length after the person
-    approved a number is refused, not charged.
+    rather than clamping it. It renders only with the quote's signed token,
+    which is bound to these exact arguments, so an agent that changes the
+    model or length after the person said yes is refused, not charged.
 
     The render is fal.generate_from_prompt: the hold before the submit,
     the daily cap, the restart-survivable receipt, the generations row
@@ -1581,16 +1748,22 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
              "from_image": bool(start_frame),
              **({"reference": reference} if reference else {}),
              **_filed_under(project_id, dsn, account_id)}
-    gate = approval_gate(usd, approve_usd, what="This clip")
-    if gate is not None:
-        return {**gate, "quote": quote}
+    stop, approved, price = approval_gate(
+        usd, quote_token, tool="generate_video", what="This clip",
+        args={"prompt": prompt, "model": choice["model"], "seconds": choice["duration"],
+              "frame": choice["frame"], "reference": reference or None,
+              "project_id": _project_arg(project_id)},
+        account_id=account_id, dsn=dsn)
+    quote.update(price)
+    if stop is not None:
+        return {**stop, "quote": quote}
     if dry_run:      # every refusal above, none of the spend: the job's pre-flight
-        return {"ok": True, "dry_run": True, "quote": quote}
+        return {"ok": True, "dry_run": True, "quote": quote, "approved": approved}
     res = fal.generate_from_prompt(
         prompt, reference_image=start_frame, model=choice["model"],
         duration=choice["duration"], resolution=choice["frame"],
         approved=True, account_id=account_id, source="mcp", bank=True,
-        project_id=project_id,
+        project_id=project_id, quote=approved,
         **({"db_path": dsn} if dsn is not None else {}))
     return {**res, "quote": quote}
 
@@ -1633,13 +1806,13 @@ def _video_sources(refs: list[str], dsn, account_id) -> tuple[list[str], dict]:
 
 
 def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
-               options: Optional[dict] = None, approve_usd: float = 0.0,
+               options: Optional[dict] = None, quote_token: str = "",
                dsn: Optional[str] = None, account_id: Optional[int] = None,
                dry_run: bool = False,
                project_id: Optional[int] = None) -> dict[str, Any]:
     """Apply ONE effect (`effects` lists them) to sources named by id,
-    behind the same chat approval as a clip: quoted with approve_usd 0,
-    run only when approve_usd covers the price. Every check -- the effect,
+    behind the same chat approval as a clip: quoted with no quote_token,
+    run only with that quote's token. Every check -- the effect,
     its options, the number and kind of sources, the prompt rule, the
     clip's measured length -- runs before the quote, so the price shown is
     the price of exactly the call that will run."""
@@ -1661,14 +1834,19 @@ def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
              "sources": named, "output": row["output"], "usd": usd,
              **({"source_clip": probe} if probe else {}),
              **_filed_under(project_id, dsn, account_id)}
-    gate = approval_gate(usd, approve_usd, what=f"This {row['label']} pass")
-    if gate is not None:
-        return {**gate, "quote": quote}
+    stop, approved, price = approval_gate(
+        usd, quote_token, tool="apply_effect", what=f"This {row['label']} pass",
+        args={"effect": effect, "options": opts, "sources": named, "prompt": prompt,
+              "project_id": _project_arg(project_id)},
+        account_id=account_id, dsn=dsn)
+    quote.update(price)
+    if stop is not None:
+        return {**stop, "quote": quote}
     if dry_run:
-        return {"ok": True, "dry_run": True, "quote": quote}
+        return {"ok": True, "dry_run": True, "quote": quote, "approved": approved}
     res = effects.run(effect, urls, prompt, opts, usd=usd, sources=named, probe=probe,
                       account_id=account_id, db_path=dsn, source="mcp",
-                      project_id=project_id)
+                      project_id=project_id, quote=approved)
     return {**res, "quote": quote}
 
 
@@ -2780,52 +2958,53 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         return _t(get_prompt_craft, step, prompt, model=model, tool=tool,
                   count=count, dsn=dsn, account_id=account_id)
 
-    # The three spending doors: always on the studio surface, behind the
-    # engine flag on the board (the operator's own key), never listed.
-    # Each answers a call with no approve_usd with the quote, inline and
-    # free; an approved call is checked once more here -- so a price or a
-    # bad id is refused now, not inside a job the agent has to poll for --
-    # and then runs as a job.
+    # The spending doors: always on the studio surface, behind the engine
+    # flag on the board (the operator's own key), never listed. Each
+    # answers a call with no quote_token with the quote, inline and free;
+    # an approved call is checked once more here -- so a stale token, a bad
+    # id or a short balance is answered now, not inside a job the agent has
+    # to poll for -- then its token is claimed and it runs as a job, once
+    # (start_approved).
     if (engine_on or studio) and not listed:
         def _quoted(fn, label: str, **args):
             args.update(dsn=dsn, account_id=_account(account_id, dsn))
-            if not args.get("approve_usd") or float(args["approve_usd"]) <= 0:
+            if not (args.get("quote_token") or "").strip():
                 return _t(fn, **args)                 # a quote: instant, free
-            _t(fn, **args, dry_run=True)
-            return _run(fn, **args, _label=label)
+            return _t(start_approved, fn, args,
+                      lambda: _run(fn, **args, _label=label))
 
         @_reg("generate_image")
         def generate_image(prompt: str, model: str = "", aspect: str = "",
                            references: Optional[list[str]] = None,
-                           approve_usd: float = 0.0,
+                           quote_token: str = "",
                            project_id: Optional[int] = None) -> dict:
             return _quoted(run_image, f"image {model or 'default'}", prompt=prompt,
                            model=model, aspect=aspect, references=references,
-                           approve_usd=approve_usd, project_id=project_id)
+                           quote_token=quote_token, project_id=project_id)
 
         @_reg("generate_video")
         def generate_video(prompt: str, model: str = "", seconds: Optional[int] = None,
                            frame: str = "", reference: str = "",
-                           approve_usd: float = 0.0,
+                           quote_token: str = "",
                            project_id: Optional[int] = None) -> dict:
             return _quoted(run_video, f"video {model or 'default'}", prompt=prompt,
                            model=model, seconds=seconds, frame=frame,
-                           reference=reference, approve_usd=approve_usd,
+                           reference=reference, quote_token=quote_token,
                            project_id=project_id)
 
         @_reg("apply_effect")
         def apply_effect(effect: str, sources: Optional[list[str]] = None,
                          prompt: str = "", options: Optional[dict] = None,
-                         approve_usd: float = 0.0,
+                         quote_token: str = "",
                          project_id: Optional[int] = None) -> dict:
             return _quoted(run_effect, f"effect {effect}", effect=effect,
                            sources=sources, prompt=prompt, options=options,
-                           approve_usd=approve_usd, project_id=project_id)
+                           quote_token=quote_token, project_id=project_id)
 
         @_reg("element_sheet")
-        def element_sheet(kind: ElementKind, name: str, approve_usd: float = 0.0) -> dict:
+        def element_sheet(kind: ElementKind, name: str, quote_token: str = "") -> dict:
             return _quoted(run_element_sheet, f"sheet {name}", kind=kind, name=name,
-                           approve_usd=approve_usd)
+                           quote_token=quote_token)
 
     @_reg("write_scene")
     def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,
@@ -2936,10 +3115,11 @@ def main(argv=None) -> int:
     # fresh database answered a photo ref with "Error executing tool"
     # rather than "not one of your photos" (found running the studio
     # surface over stdio, 2026-10-08).
-    from . import entities, projects, render_assets
+    from . import entities, projects, quote_redemptions, render_assets
     entities.init(dsn)
     render_assets.init(dsn)
     projects.init(dsn)            # after preprod.init: it ALTERs shoot_concepts
+    quote_redemptions.init(dsn)   # an approved quote is spent once
 
     # The job registry, injected here for the same reason app/mcp_mount.py
     # injects it: a graph run takes minutes, and a tool call that blocks

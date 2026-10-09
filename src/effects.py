@@ -648,10 +648,13 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
         account_id: Optional[int] = None, db_path=None, http=None,
         source: str = "mcp", bank: bool = True,
         publish: Optional[Callable] = None,
-        project_id: Optional[int] = None) -> dict[str, Any]:
+        project_id: Optional[int] = None,
+        quote=None) -> dict[str, Any]:
     """Never raises: {"ok", "media_url", "generation_id", "asset_id", "path",
     "error"}. The caller has already checked everything above and had the
-    price approved; `usd` is that approved price, and it is what is held."""
+    price approved; `usd` is that approved price, and it is what is held --
+    as `quote.credits` when the caller passes the verified
+    pricing.StudioQuote (the MCP studio surface, 2026-10-08)."""
     from . import render_assets
     kwargs = {"dsn": db_path} if db_path is not None else {}
     try:
@@ -675,7 +678,8 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
         out_stub = fal.RENDER_DIR / f"fx-{effect}-{stamp}"
         charge = charging.Charge(
             account_id, provider="fal", ref=charging.attempt_ref(out_stub),
-            estimate_usd=usd, key_source=fal.KEY_SOURCE, source=source, dsn=db_path)
+            estimate_usd=usd, key_source=fal.KEY_SOURCE, source=source, dsn=db_path,
+            quote=quote)
         try:
             charge.take()       # an empty balance refuses HERE: nothing submitted
         except ledger.InsufficientCredit as e:

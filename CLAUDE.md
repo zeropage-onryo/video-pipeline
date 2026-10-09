@@ -143,8 +143,10 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # Since 2026-10-07 (Mike's call) the stdio default is the STUDIO surface:
 # generate_image / generate_video / apply_effect (src/effects.py: image edits,
 # Kling + PixVerse template effects, PixVerse camera moves, Topaz upscale/fps,
-# MMAudio sound), each quoted first and spent only after a yes in chat
-# (approve_usd), plus image_models / video_models / effects / elements /
+# MMAudio sound) and element_sheet, each quoted first IN CREDITS and spent only
+# after a yes in chat (quote_token: signed over the exact request, used once --
+# a SIGNING SECRET is needed, QUOTE_SIGNING_SECRET, or nothing can be approved),
+# plus image_models / video_models / effects / elements /
 # renders / images_for / prompt_craft, and PROJECTS (projects / project /
 # project_chat / create_project / save_chat; project_id on a render files it there).
 # NO board tools. --surface board (or
@@ -1616,9 +1618,28 @@ is yours, in Resolve, by hand.
   composer's own door), `generate_video` (`fal.generate_from_prompt`, which gained the
   caller's `duration` / `resolution` / `aspect_ratio`, a `source` label and `bank` for the
   Assets wall) and `apply_effect` (`src/effects.py`) -- each go through
-  `mcp_server.approval_gate`: a call with no `approve_usd` returns the quote and spends
-  nothing, a price above `approve_usd` is refused, and only then does it run as a job with
-  the usual hold / cap / generations row / settle / Assets wall. On the studio surface they
+  `mcp_server.approval_gate`: a call with no `quote_token` returns the quote and spends
+  nothing, and only the quote's own token runs it, as a job with the usual hold / cap /
+  generations row / settle / Assets wall. **Since 2026-10-08 the approval is in CREDITS and
+  the token is signed and single-use** (docs/tasks/task-mcp-studio-v2.md step 1; it was
+  `approve_usd`, dollars Claude repeated back, which any high enough number satisfied and the
+  same yes could spend twice). The quote shows `credits` (`ledger.charge_credits`, the one
+  conversion every hold uses), `charged` (false on an exempt account), `balance` and
+  `balance_after`, the provider `usd` as detail, and a `quote_token` from
+  `pricing.sign_studio`: the shot token's sibling, same secret / TTL / refusal codes, its body
+  binding the TOOL and a hash of the normalized arguments (model, aspect / seconds / frame,
+  prompt, reference ids, effect + options, the element and whether it replaces a sheet, the
+  project), so any change after the yes is `stale_content`, and marked `"k": "studio"` so
+  neither verify() accepts the other kind. The verified `pricing.StudioQuote` is handed down
+  to the adapter (`quote=` on `fal.generate_image_from_prompt`, `fal.generate_from_prompt`,
+  `effects.run`, `element_sheet.draw` -> `nano_banana.generate_from_prompt`) so the hold IS
+  the signed credits. **Single use:** `start_approved` dry-runs every check, then CLAIMS the
+  token in `quote_redemptions` (OWNED, src/quote_redemptions.py, an `INSERT ... ON CONFLICT DO
+  NOTHING` on the token id) before the job starts; a repeat is handed the first job and
+  starts and charges nothing. A short balance is a STRUCTURED refusal (`refused:
+  insufficient_credits`, `needs`, `available`), never a tool error, and leaves the token
+  unspent. No `QUOTE_SIGNING_SECRET` = quotes still answer, with no token and a note, and
+  nothing can be approved (the Mac's `.env` had none on 2026-10-08). On the studio surface they
   are always on (the approval is the gate); on the board surface they sit behind the engine
   flag; the listed server never has them. References are ids, never URLs, in ONE grammar
   shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`

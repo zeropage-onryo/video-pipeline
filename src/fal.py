@@ -1806,7 +1806,8 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
                                concept_id: Optional[int] = None,
                                source: str = "workflow",
                                bank: bool = True,
-                               project_id: Optional[int] = None) -> dict:
+                               project_id: Optional[int] = None,
+                               quote=None) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error",
     "references", "asset_id"}.
@@ -1822,6 +1823,9 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
     hold. `references` on the result says how many of `reference_urls`
     the model was actually handed (0 on a text-only model), so the route
     can tell the person rather than let a dropped reference pass as used.
+    `quote` (2026-10-08) is a verified pricing.StudioQuote when the caller
+    holds one (the MCP studio surface): the hold is then its credits, the
+    number the person said yes to, rather than a re-derivation.
     """
     from . import pricing, render_assets
     kwargs = {"dsn": db_path} if db_path is not None else {}
@@ -1854,7 +1858,7 @@ def generate_image_from_prompt(prompt: str, *, db_path=None, http=None,
 
         charge = charging.Charge(
             account_id, provider="fal", ref=charging.attempt_ref(out_path),
-            estimate_usd=usd, dsn=db_path)
+            estimate_usd=usd, dsn=db_path, quote=quote)
         try:
             charge.take()     # an empty balance refuses HERE: no fal call
         except ledger.InsufficientCredit as e:
