@@ -67,7 +67,7 @@ import {
   type GuideReply,
   type ImageModels,
 } from "@/lib/studio-api";
-import { IMAGE_ASPECTS, isMake, loadImageModel, newMadeId, type Made } from "@/lib/composer";
+import { IMAGE_ASPECTS, isMake, isSheetTool, loadImageModel, newMadeId, type Made } from "@/lib/composer";
 import { StillStep, isStillStep, lineIsPrompt, stepOf } from "@/components/studio/still-step";
 import { headline } from "@/lib/assistant-text";
 import { TypedText } from "@/components/studio/typed-text";
@@ -884,7 +884,7 @@ function Extras({
   // a write the Guide proposed: its card, here. A make proposal is the
   // composer's (it runs on the send) and keep_references is the sheet's Keep.
   const proposal =
-    reply.proposal && !isMake(reply.proposal.tool) && reply.proposal.tool !== "keep_references" ? reply.proposal : null;
+    reply.proposal && !isMake(reply.proposal.tool) && reply.proposal.tool !== "keep_references" && !isSheetTool(reply.proposal.tool) ? reply.proposal : null;
   // a question whose options are just the directions' titles says the
   // same thing twice; the direction cards are the better tap
   const titles = new Set((reply.directions ?? []).map((d) => d.title.trim().toLowerCase()));

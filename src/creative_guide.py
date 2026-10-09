@@ -332,6 +332,14 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
         prompt = str(proposal["args"].get("prompt") or "").strip()
         if guide_tools.is_make(proposal["tool"]) and prompt:
             message = prompt if len(prompt) <= 1200 else prompt[:1200].rsplit(" ", 1)[0] + "…"
+        if proposal["tool"] == guide_tools.SHEET_TOOL:
+            # the step card's own words: who is saved, and what is drawn
+            who = proposal["args"].get("name") or "this character"
+            wear = proposal["args"].get("notes")
+            message = (f"Save {who} as a character from the photos you attached and draw "
+                       "the reference sheet: full-body front, three-quarter, side profile, "
+                       "back and a head-and-shoulders close-up"
+                       + (f", wearing {wear}." if wear else ", in the clothes from the photos."))
         return Reply(message=message, proposal=proposal, tool_runs=runs,
                      sheet=sheet).model_dump()
     reply = _parse_reply(text)

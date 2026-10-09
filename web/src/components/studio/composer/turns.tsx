@@ -20,11 +20,11 @@ import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Clapperboard, Film, ImagePlus, ListVideo, Play, RotateCcw } from "lucide-react";
 import { sceneHref } from "@/lib/studio-api";
-import { cssAspect, isMake, madeMeta, mediaSrc, type Made } from "@/lib/composer";
+import { cssAspect, isMake, isSheetTool, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 import { TypedText } from "@/components/studio/typed-text";
-import { StillStep, isStillStep, lineIsPrompt } from "@/components/studio/still-step";
+import { SheetStep, StillStep, isSheetStep, isStillStep, lineIsPrompt } from "@/components/studio/still-step";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -49,6 +49,10 @@ type Handlers = {
   /** under Approve: the model that draws the still (this one, else the
    *  picker's) and what one costs -- "Nano Banana · 10 credits" */
   stillLine: (modelId?: string) => string;
+  /** an element sheet step's Approve: saves the character, draws the sheet */
+  onApproveSheet: (i: number) => void;
+  /** under the sheet's Approve: "Nano Banana Pro · 36 credits" */
+  sheetLine: string;
 };
 
 function Meta({ m, live, h }: { m: Made; live?: Live; h: Handlers }) {
@@ -260,7 +264,7 @@ export function ComposerStream({
               <div className="zc-reply">
                 {t.looked?.length ? <span className="zc-looked">looked at {t.looked.join(", ")}</span> : null}
                 {/* a still's step card carries its prompt; the line is the same words */}
-                {lineIsPrompt(t) ? null : <p>{t.content}</p>}
+                {lineIsPrompt(t) || isSheetStep(t) ? null : <p>{t.content}</p>}
                 {t.reply?.sheet ? (
                   <ContactSheetView
                     sheet={t.reply.sheet}
@@ -272,7 +276,7 @@ export function ComposerStream({
                     onKeep={(sh) => handlers.onKeep(i, sh)}
                   />
                 ) : null}
-                {t.reply?.proposal && !isMake(t.reply.proposal.tool) ? (
+                {t.reply?.proposal && !isMake(t.reply.proposal.tool) && !isSheetTool(t.reply.proposal.tool) ? (
                   <div className={`ccard${t.decided ? ` ${t.decided}` : ""}`}>
                     <b>{t.reply.proposal.label}</b>
                     <dl>
@@ -303,6 +307,14 @@ export function ComposerStream({
                     line={handlers.stillLine(t.made?.model)}
                     busy={handlers.busy}
                     onApprove={() => handlers.onApprove(i)}
+                  />
+                ) : null}
+                {isSheetStep(t) ? (
+                  <SheetStep
+                    turn={t}
+                    line={handlers.sheetLine}
+                    busy={handlers.busy}
+                    onApprove={() => handlers.onApproveSheet(i)}
                   />
                 ) : null}
                 {i === lastAnswer && choices.length ? (

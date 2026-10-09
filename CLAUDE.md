@@ -1421,6 +1421,21 @@ is yours, in Resolve, by hand.
   and `refs[0]` stays a real photo. `POST /api/assets/{kind}/{id}/sheet` redraws, and is how
   elements saved before today get one (the card's button). Never a gate: no key, no photos
   or a failed draw leaves the element exactly as saved, with the reason on the job.
+  **The character sheet IS the landing page's (2026-10-09, Mike: "exactly as is").**
+  `prompts/element_sheet_character.txt` is now the prompt that drew
+  `web/public/models/nano-banana-image-generator/sheet.jpg` on Higgsfield, word for word:
+  five panels -- full-body front, three-quarter, side profile, back, head-and-shoulders
+  close-up -- light grey, no labels, no text; its one slot is `{outfit}` ("wearing <notes>",
+  else the photo's own clothes). **And the composer's brain draws it** (`make_element_sheet`,
+  `guide_tools.SHEET_TOOL`, a third make tool, composer only -- the pill's `makes` leaves it
+  out): "make an element sheet of me" with photos attached ends the turn on a step card
+  (`still-step.tsx SheetStep`, Ask first / Auto like a still), and Approve posts the
+  composer's references as `photo_urls` to `POST /api/assets/characters` with `sheet=1`,
+  follows the sheet job and lands the sheet as the turn's tile. The create route now draws
+  the sheet from the photos THAT request wrote (`_save_uploaded_photos(into=)` ->
+  `_start_sheet_job(photos=)`), because a name with an older folder (`characters/michael`)
+  grounded on the first six files there; and it answers `sheet_note` when a sheet was asked
+  for and could not start.
 - **`src/mcp_server.py`** + **`app/mcp_mount.py`** — the MCP surface (2026-08-31), so the
   board can be read and decided on from a phone or an agent instead of only from this
   machine. **An adapter, never a store:** every tool is a thin call into `preprod` or

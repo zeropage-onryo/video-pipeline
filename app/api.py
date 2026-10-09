@@ -1623,8 +1623,10 @@ def _photos_from_urls(directory: Path, urls) -> list:
 
 async def _save_uploaded_photos(base_dir: Path, slug: str, photos,
                                 account_id: Optional[int] = None,
-                                photo_urls=None) -> tuple:
-    """(first filename, count) -- mirrors the old dev-console handler."""
+                                photo_urls=None, into: Optional[list] = None) -> tuple:
+    """(first filename, count) -- mirrors the old dev-console handler.
+    `into`, when given, is extended with the paths THIS request wrote
+    (the sheet is drawn from those, not from an older folder's)."""
     images = [p for p in photos
               if getattr(p, "filename", "") and (p.content_type or "").startswith("image/")]
     directory = base_dir / slug
@@ -1636,6 +1638,8 @@ async def _save_uploaded_photos(base_dir: Path, slug: str, photos,
             target.write_bytes(await upload.read())
             saved.append(target)
     saved += _photos_from_urls(directory, photo_urls)
+    if into is not None:
+        into.extend(saved)
     if not saved:
         return "", 0
     _mirror_photos_to_r2(
@@ -1728,9 +1732,11 @@ async def _create_entity(kind: str, request: Request, account_id: int):
         return refused
     field = (form.get(label) or "").strip()
     notes = (form.get("notes") or "").strip()
+    fresh: list = []
     ref, count = await _save_uploaded_photos(base_dir, slug, form.getlist("photos"),
                                              account_id,
-                                             photo_urls=form.getlist("photo_urls"))
+                                             photo_urls=form.getlist("photo_urls"),
+                                             into=fresh)
 
     # resolved against THIS route's base_dir, not asset_shelf's module
     # constant -- they're the same in production, but the photos that
@@ -1757,10 +1763,14 @@ async def _create_entity(kind: str, request: Request, account_id: int):
         else "no photos to describe")
     sheet_job = _maybe_sheet_job(form, "characters" if kind == "character" else "props",
                                  slug, name, detail=field, notes=notes,
-                                 account_id=account_id)
+                                 account_id=account_id, photos=fresh)
+    sheet_note = None
+    if sheet_job is None and _sheet_wanted(form):
+        sheet_note = ("no sheet: GEMINI_API_KEY not set" if not _gemini_key(account_id)
+                      else "no sheet: no photos to draw it from")
     return {"ok": True, "slug": slug, "photos": count,
             "described": vision["ok"], "note": note, "rag": chunk,
-            "sheet_job": sheet_job}
+            "sheet_job": sheet_job, "sheet_note": sheet_note}
 
 
 @router.post("/assets/characters")
@@ -1862,19 +1872,26 @@ def _sheet_wanted(form) -> bool:
 
 
 def _start_sheet_job(plural: str, slug: str, name: str, *, detail: str = "",
-                     notes: str = "", account_id: int) -> dict:
+                     notes: str = "", account_id: int,
+                     photos: Optional[list] = None) -> dict:
     """Draw an element's reference sheet as a job (2026-09-18): it spends
     (cents, Nano Banana Pro, NANO_DAILY_CAP), so it runs off the request
     like every other billed step, and the element is already saved
     whatever happens here. The sheet lands beside the uploads as
     sheet.jpg, mirrored to R2 like any photo, and `_photo_names` lists
-    it last."""
+    it last.
+
+    `photos` (2026-10-09): the files the create request just wrote. An
+    element saved under a name that already has a folder (Mike's
+    characters/michael holds older shoots) would otherwise ground on the
+    first six names in that folder, not the photos the person attached."""
     kind, base_dir = _sheet_kind(plural)
+    chosen = [Path(p) for p in (photos or []) if Path(p).is_file()]
 
     def work(job):
         jobs.progress(job, 0.1, "reading the photos")
         directory = base_dir / slug
-        photos = [directory / n for n in _photo_names(base_dir, slug)]
+        photos = chosen or [directory / n for n in _photo_names(base_dir, slug)]
         jobs.progress(job, 0.3, "drawing the sheet")
         result = element_sheet.draw(kind, name, photos, directory,
                                     detail=detail, notes=notes,
@@ -1892,7 +1909,7 @@ def _start_sheet_job(plural: str, slug: str, name: str, *, detail: str = "",
 
 def _maybe_sheet_job(form, plural: str, slug: str, name: str, *,
                      detail: str = "", notes: str = "",
-                     account_id: int) -> Optional[int]:
+                     account_id: int, photos: Optional[list] = None) -> Optional[int]:
     """The create routes' hook: a job id when a sheet was asked for and
     can be drawn, else None -- with the reason in the response note, not
     an error, because the element itself saved fine."""
@@ -1901,7 +1918,7 @@ def _maybe_sheet_job(form, plural: str, slug: str, name: str, *,
     if not _photo_names(_sheet_kind(plural)[1], slug):
         return None
     return _start_sheet_job(plural, slug, name, detail=detail, notes=notes,
-                            account_id=account_id)["id"]
+                            account_id=account_id, photos=photos)["id"]
 
 
 @router.post("/assets/{plural}/{item_id}/sheet")

@@ -6,8 +6,10 @@ An element -- a character, a prop, a place -- is saved from the photos
 Mike uploads, and until today that was all it had: the frames a shot is
 held to were exactly those photos. This module draws ONE sheet per
 element on top of them, the shape Higgsfield's character sheet has:
-five panels for a person (face close-up, front, back, left, right, an
-info block), a turnaround for a prop, plates for a place. The prompt
+five panels for a person (front, three-quarter, side profile, back and
+a head-and-shoulders close-up -- since 2026-10-09 the exact prompt that
+drew the landing page's sheet on Higgsfield, no labels, no text), a
+turnaround for a prop, plates for a place. The prompt
 per kind is plain text in prompts/element_sheet_<kind>.txt, the
 highest-frequency edit surface in this repo.
 
@@ -60,6 +62,10 @@ def prompt_for(kind: str, name: str, detail: str = "", notes: str = "") -> str:
         detail_line=f", {detail}" if detail else "",
         detail_upper=detail.upper() if detail else "—",
         wardrobe=notes or "as in the attached photos.",
+        # the character sheet's one wardrobe slot (the landing page's
+        # Higgsfield prompt, 2026-10-09): "wearing <notes>", else the
+        # photo's own clothes -- never a description of the face
+        outfit=f"wearing {notes}" if notes else "the same clothes as in the reference photo",
     ).strip()
 
 
