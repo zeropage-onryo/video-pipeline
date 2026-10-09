@@ -14,6 +14,7 @@ import {
   moodFor,
   nameOf,
   sizeFor,
+  smallerSrc,
   DEFAULT_AVATAR,
 } from '../src/lib/mascot.ts';
 
@@ -63,6 +64,9 @@ test('the image url names the look, colour, mood and size', () => {
   assert.match(src, /\/320\/sprout-velvet-lightred-think\.webp$/);
   assert.equal(sizeFor(56), 128);
   assert.equal(sizeFor(96), 320);
+  assert.equal(sizeFor(320), 640); // the floating creature
+  assert.equal(smallerSrc(mascotSrc({ look: 'pip-orig', colour: 'own' }, 'awake', 640)), mascotSrc({ look: 'pip-orig', colour: 'own' }, 'awake', 320));
+  assert.equal(smallerSrc(mascotSrc({ look: 'pip-orig', colour: 'own' }, 'awake', 320)), null);
 });
 
 test('states map to moods, and talking flaps between two frames', () => {

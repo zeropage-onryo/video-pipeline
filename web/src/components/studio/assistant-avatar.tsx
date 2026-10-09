@@ -28,7 +28,7 @@
 /* eslint-disable @next/next/no-img-element -- fixed-size transparent WebPs off R2, already sized per use */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useReducedMotion } from "motion/react";
-import { MOODS, decodeMascot, mascotSrc, moodFor, sizeFor, type FaceState } from "@/lib/mascot";
+import { MOODS, decodeMascot, mascotSrc, moodFor, sizeFor, smallerSrc, type FaceState } from "@/lib/mascot";
 import "@/components/studio/assistant-avatar.css";
 
 export { DEFAULT_AVATAR } from "@/lib/mascot";
@@ -63,8 +63,12 @@ export const STATE_LABEL: Record<AvatarState, string> = {
 /* how fast the mouth flaps while a reply is written: open, shut, open */
 const FLAP_MS = 160;
 
-type Size = "xs" | "sm" | "md" | "lg" | "xl";
-const PX: Record<Size, number> = { xs: 18, sm: 32, md: 56, lg: 60, xl: 96 };
+/* "fill" (2026-10-09) is the floating creature (assistant-creature.tsx):
+   as big as the box it is in, which sets --zav, drawn from the 640 set, and
+   bare -- the creature draws its own floor ring, light, count and z, sized
+   for a 320px body rather than for a 56px badge. */
+type Size = "xs" | "sm" | "md" | "lg" | "xl" | "fill";
+const PX: Record<Size, number> = { xs: 18, sm: 32, md: 56, lg: 60, xl: 96, fill: 320 };
 
 export function AssistantAvatar({
   avatar,
@@ -96,10 +100,14 @@ export function AssistantAvatar({
     return () => clearInterval(t);
   }, [flapping]);
   const mood = moodFor(state, flapping ? open : true);
+  const fill = size === "fill";
   const res = sizeFor(px);
   const moods = size === "xs" ? (["awake"] as const) : MOODS;
   const p = progress == null ? null : Math.max(0, Math.min(1, progress));
-  const style = { "--zav": `${px}px`, "--zav-p": p ?? 0.28 } as CSSProperties;
+  // filling, it takes --zav from the box it is in
+  const vars: Record<string, string | number> = { "--zav-p": p ?? 0.28 };
+  if (!fill) vars["--zav"] = `${px}px`;
+  const style = vars as unknown as CSSProperties;
   return (
     <span
       className={`zav ${className}`}
@@ -112,7 +120,7 @@ export function AssistantAvatar({
       aria-label={title}
       aria-hidden={title ? undefined : true}
     >
-      {size !== "xs" && state === "working" ? <Ring /> : null}
+      {size !== "xs" && !fill && state === "working" ? <Ring /> : null}
       <span className="zav-fig">
         {moods.map((m) => (
           <img
@@ -122,10 +130,14 @@ export function AssistantAvatar({
             draggable={false}
             decoding="async"
             data-on={m === mood || size === "xs" ? "" : undefined}
+            onError={(e) => {
+              const smaller = smallerSrc(e.currentTarget.src);
+              if (smaller) e.currentTarget.src = smaller;
+            }}
           />
         ))}
       </span>
-      {size !== "xs" ? (
+      {size !== "xs" && !fill ? (
         <>
           <span className="zav-tally" />
           <span className="zav-z">z</span>
