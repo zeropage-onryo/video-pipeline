@@ -52,7 +52,10 @@ from .shot import TOOLS, Shot
 # anywhere, filed free. Not a platform a concept may plan a shot on.
 IMAGE_TOOLS = ("midjourney", "nano", "fal")
 MANUAL_TOOLS = ("manual",)
-LOG_TOOLS = TOOLS + IMAGE_TOOLS + MANUAL_TOOLS
+# clips joined into one on this server (src/cut/join.py, 2026-10-09): no
+# provider, no cost -- logged so the joined video can sit on the wall
+CUT_TOOLS = ("cut",)
+LOG_TOOLS = TOOLS + IMAGE_TOOLS + MANUAL_TOOLS + CUT_TOOLS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shots (

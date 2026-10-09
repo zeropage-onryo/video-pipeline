@@ -132,6 +132,7 @@ TITLES = {
     "generate": "Write a scene from a direction (spends)",
     "job": "Check a background job",
     "cancel_job": "Cancel a render, effect or sheet in progress",
+    "assemble_clips": "Join clips into one video (no credits)",
     "elements": "List your elements (reference photos)",
     "write_scene": "Save a scene prompt onto an idea",
     "quote": "Price the keyframes and the clip",
@@ -295,6 +296,21 @@ DESCRIPTIONS = {
         "how it ended (cancelled, or done). Only jobs this connector's render "
         "tools started can be cancelled here."
     ),
+    "assemble_clips": (
+        "Join clips from your Assets wall into ONE video, in the order given: "
+        "`clips` are two to twenty `gen:<id>` videos from `renders` (the same id "
+        "may repeat). `transition` is cut (the default) or crossfade "
+        "(`crossfade_s`, 0.1-2 seconds, at most half the shortest clip). "
+        "`music` is an optional bed under the clips' own sound -- an `asset:<id>` "
+        "from `renders` with kind=audio (audio you uploaded in the editor), "
+        "trimmed to the picture and lowered under the clips' sound. Clips of "
+        "different shapes (9:16 beside 16:9) are refused unless `letterbox` is "
+        "true, which fits them inside the first clip's frame with black bars. "
+        f"{_PROJECT_FILING} Spends no credits: it runs on the studio's own "
+        "server. Runs in the background: poll `job`; the result is a new "
+        "`gen:<id>` on your Assets wall (usable as a source like any clip) and "
+        "an editable cut in the studio's editor."
+    ),
     "elements": (
         "Your elements: the characters, props and places whose photos you "
         "uploaded in the studio, each with its photo refs. Pass a photo's "
@@ -354,8 +370,10 @@ DESCRIPTIONS = {
     "renders": (
         "Your recent renders, newest first, each as the `gen:<id>` that names "
         "it as a reference or an effect source, with its model and the start "
-        "of its prompt. `kind` is image or video (omit for both). Returns at "
-        "most `limit` rows (default 20, maximum 100). Read-only."
+        "of its prompt. `kind` is image or video (omit for both), or audio: the "
+        "sound files you uploaded in the editor, as the `asset:<id>` that "
+        "`assemble_clips` takes as music. Returns at most `limit` rows (default "
+        "20, maximum 100). Read-only."
     ),
     "prompt_craft": (
         "The studio's own prompt-writing guides, for you to apply: nothing is "
@@ -480,6 +498,7 @@ HINTS = {
     "generate":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "job":               {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "cancel_job":        {"read": False, "destructive": False, "idempotent": True,  "open_world": True},
+    "assemble_clips":    {"read": False, "destructive": False, "idempotent": False, "open_world": False},
     "elements":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "write_scene":       {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
     "quote":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
@@ -527,7 +546,7 @@ STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_c
                 "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
                 "generate_video", "apply_effect", "element_sheet", "job",
-                "cancel_job")
+                "cancel_job", "assemble_clips")
 SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
 SURFACES = ("board", "studio")
 STUDIO_INSTRUCTIONS = (
@@ -1524,7 +1543,8 @@ def _cancellable_body(fn, kwargs: dict):
 
 CRAFT_STEPS = ("refine", "enhance", "still", "beats")
 CraftStep = Literal[CRAFT_STEPS]
-RenderKind = Literal["image", "video"]
+RenderKind = Literal["image", "video", "audio"]
+JoinTransition = Literal["cut", "crossfade"]
 
 
 def get_prompt_craft(step: str, prompt: str, model: str = "", tool: str = "",
@@ -1867,6 +1887,42 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
     return {**res, "quote": quote}
 
 
+def run_assemble_clips(clips: Optional[list] = None, transition: str = "cut",
+                       crossfade_s: float = 0.5, music: str = "", letterbox: bool = False,
+                       title: str = "", project_id: Optional[int] = None,
+                       dsn: Optional[str] = None, account_id: Optional[int] = None,
+                       dry_run: bool = False) -> dict[str, Any]:
+    """Join `gen:<id>` clips into one video (2026-10-09, task-mcp-studio-v2
+    step 2a): src/cut/join.py's plan -- every refusal, before anything is
+    written -- then its join, which saves a scratch cut, renders it on this
+    server and files the MP4 on the Assets wall. Spends nothing, so there
+    is no quote: the result says so instead of quoting zero. A render that
+    fails comes back as ok=False with the reason, never as a tool error the
+    agent would retry identically."""
+    from .cut import join, render, sources
+    filed = _filed_under(project_id, dsn, account_id)
+    try:
+        planned = join.plan(list(clips or []), account_id=account_id, transition=transition,
+                            crossfade_s=crossfade_s, music=(music or "").strip() or None,
+                            letterbox=bool(letterbox), dsn=dsn)
+    except join.JoinRefused as e:
+        raise ValueError(str(e)) from e
+    plan = {"clips": planned["handles"], "seconds": planned["seconds"],
+            "canvas": planned["canvas"], "transition": planned["transition"],
+            "crossfade_s": (round(planned["crossfade_frames"] / planned["fps"], 3)
+                            if planned["crossfade_frames"] else None),
+            "music": planned["music"], "letterboxed": planned["letterboxed"],
+            "notes": planned["notes"], "credits": 0, **filed}
+    if dry_run:
+        return {"ok": True, "dry_run": True, "plan": plan}
+    try:
+        res = join.join(planned, account_id=account_id, title=title,
+                        project_id=_project_arg(project_id), dsn=dsn)
+    except (render.RenderError, sources.SourceError, ValueError) as e:
+        return {"ok": False, "error": str(e), "plan": plan, "note": join.FREE_NOTE}
+    return {**res, "plan": plan}
+
+
 def list_effects(effect: str = "", category: str = "") -> dict[str, Any]:
     """The effects `apply_effect` can name -- a projection of
     effects.EFFECTS, so it cannot list one run_effect would refuse.
@@ -1949,16 +2005,42 @@ def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
     return {**res, "quote": quote}
 
 
+def _audio_uploads(cap: int, dsn, account_id) -> dict[str, Any]:
+    """The sound files this account uploaded to the editor's bin, as the
+    `asset:<id>` assemble_clips takes as music (2026-10-09). They live in
+    cut_media, not on the Assets wall -- a music bed is not a render."""
+    from .cut import store
+    out = []
+    try:
+        rows = store.media_bin(account_id=account_id, dsn=dsn)
+    except Exception:
+        rows = []
+    for r in rows:
+        if r.get("origin") != "upload" or r.get("kind") != "audio":
+            continue
+        out.append({"id": f"asset:{r['id']}", "kind": "audio", "model": None,
+                    "provider": None, "prompt": r.get("filename") or "",
+                    "seconds": r.get("seconds"), "media_url": _view(r.get("media_url"), account_id),
+                    "created_at": str(r.get("created_at") or "")})
+        if len(out) >= cap:
+            break
+    return {"count": len(out), "renders": out,
+            "note": "" if out else ("no audio uploaded yet -- add a music file in the "
+                                    "studio's editor (Timeline)")}
+
+
 def list_renders(kind: Optional[str] = None, limit: int = 20, dsn: Optional[str] = None,
                  account_id: Optional[int] = None) -> dict[str, Any]:
     """This account's recent renders on the Assets wall, newest first, as
     the `gen:<id>` a reference or an effect source names. Read-only."""
     from . import media, render_assets
     kind = (kind or "").strip()
-    if kind and kind not in ("image", "video"):
-        raise ValueError("kind is image, video or empty for both")
+    if kind and kind not in ("image", "video", "audio"):
+        raise ValueError("kind is image, video, audio or empty for images and videos")
     cap = max(1, min(int(limit or 20), 100))
     account_id = _account(account_id, dsn)
+    if kind == "audio":
+        return _audio_uploads(cap, dsn, account_id)
     out = []
     for r in render_assets.list_all(dsn, account_id=account_id):
         if kind and r.get("media_kind") != kind:
@@ -3149,6 +3231,26 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         def element_sheet(kind: ElementKind, name: str, quote_token: str = "") -> dict:
             return _quoted(run_element_sheet, f"sheet {name}", kind=kind, name=name,
                            quote_token=quote_token)
+
+        # Joining clips spends nothing, so there is no quote; it is checked
+        # here, in the request (a refusal is a caller error, not a failed
+        # job to poll for), then rendered as a job.
+        @_reg("assemble_clips")
+        def assemble_clips(clips: list[str], transition: JoinTransition = "cut",
+                           crossfade_s: float = 0.5, music: str = "",
+                           letterbox: bool = False, title: str = "",
+                           project_id: Optional[int] = None) -> dict:
+            args = dict(clips=clips, transition=transition, crossfade_s=crossfade_s,
+                        music=music, letterbox=letterbox, title=title,
+                        project_id=project_id, dsn=dsn, account_id=_account(account_id, dsn))
+            plan = _t(run_assemble_clips, **args, dry_run=True)["plan"]
+            out = _run(run_assemble_clips, **args, _label=f"join {len(plan['clips'])} clips")
+            if "job_id" not in out:
+                return out                    # no registry: it ran inline
+            return {**out, "plan": plan,
+                    "note": (f"Joining {len(plan['clips'])} clips (about {plan['seconds']:g}s). "
+                             "It runs on the studio's server -- no credits are spent. Poll "
+                             "`job`: the result is a gen:<id> on your Assets wall.")}
 
     @_reg("write_scene")
     def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,

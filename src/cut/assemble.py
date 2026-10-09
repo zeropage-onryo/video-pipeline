@@ -164,10 +164,17 @@ def _even(x: int) -> int:
 
 def build_doc(clips: list[dict], media: dict[str, dict], *, fps: int = d.DEFAULT_FPS,
               music: Optional[str] = None, voice: Optional[str] = None,
-              captions=None) -> tuple[dict, list[str]]:
+              captions=None, transition_frames: int = 0,
+              transition_style: str = d.DEFAULT_TRANSITION_STYLE) -> tuple[dict, list[str]]:
     """Pure: ordered clips ({"handle", "label"}) + probed media -> (doc,
     notes). Built through the ops, so the assembler cannot make a doc the
-    agent could not."""
+    agent could not.
+
+    `transition_frames` (2026-10-09, the MCP's assemble_clips) crossfades
+    INTO every clip after the first -- added as each clip lands, so its
+    marker and everything laid after it (the music bed, trimmed to the
+    picture) see the shortened cut. 0, Assemble's own use, is hard cuts:
+    a concept's windows were written as cuts."""
     if not clips:
         raise AssembleError("nothing to assemble")
     notes: list[str] = []
@@ -177,12 +184,16 @@ def build_doc(clips: list[dict], media: dict[str, dict], *, fps: int = d.DEFAULT
     doc = d.new_doc(fps, size)
     doc["tracks"] = [{"id": "V1", "kind": "video", "clips": []},
                      {"id": "A1", "kind": "audio", "role": "sfx", "clips": []}]
-    for c in clips:
+    for i, c in enumerate(clips):
         info = media[c["handle"]]
         doc = ops.insert(doc, "V1", {"media": c["handle"], "src_in": 0,
                                      "src_out": info["frames"]},
                          sound_track="A1" if info.get("audio") else None)
-        start = d.track(doc, "V1")["clips"][-1]["at"]
+        landed = d.track(doc, "V1")["clips"][-1]["id"]
+        if transition_frames and i:
+            doc = ops.add_transition(doc, landed, int(transition_frames),
+                                     style=transition_style)
+        start = next(x for x in d.track(doc, "V1")["clips"] if x["id"] == landed)["at"]
         doc = ops.add_marker(doc, start, c.get("label") or c["handle"])
     picture = doc["duration"]
     has_sfx = bool(d.track(doc, "A1")["clips"])
