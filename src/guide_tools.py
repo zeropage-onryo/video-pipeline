@@ -84,9 +84,21 @@ MAX_KEEP_IDS = 12
 # were. `run` refuses them: a server that made a still off a POST body
 # would be the Director's Generate node without its price. Published
 # only when a turn asks (`session(maker=True)`), so the pill is unchanged.
-MAKE_TOOLS = ("make_image", "make_video")
+MAKE_TOOLS = ("make_image", "make_video", "make_element_sheet")
 WRITE_LABELS["make_image"] = "Generate this image"
 WRITE_LABELS["make_video"] = "Write this scene"
+# THE ELEMENT SHEET FROM THE COMPOSER (2026-10-09, Mike: "can you create an
+# element sheet of myself" with five photos attached made a loose 4:5
+# still). A make tool like the other two -- proposed here, run by the
+# studio on the step card's Approve -- but what it runs is the Elements
+# create route (POST /api/assets/characters with the composer's
+# references as photo_urls, sheet on), so the person is saved as a
+# character AND the sheet is element_sheet.draw: the landing page's
+# five-panel prompt, 16:9, on the real photos. Nothing here spends.
+SHEET_TOOL = "make_element_sheet"
+WRITE_LABELS[SHEET_TOOL] = "Save as a character and draw the reference sheet"
+MAX_SHEET_NAME = 80
+MAX_SHEET_NOTES = 300
 MAX_MAKE_PROMPT = 4000
 MAKE_SECONDS = (4, 30)          # timeline.scene_seconds' clamp
 MAKE_SHOTS = (1, 8)
@@ -133,6 +145,33 @@ MAKE_SPECS = (
                           "description": "Optional shot count, only when they named one."},
             },
             "required": ["prompt"],
+        },
+        "write": True,
+    },
+    {
+        "name": SHEET_TOOL,
+        "description": (
+            "Save the PERSON in the attached photos as a character element and draw "
+            "its reference sheet: one wide image, five panels -- full-body front, "
+            "three-quarter, side profile, back, and a head-and-shoulders close-up -- "
+            "the same face and clothes in every panel. Call it when the person asks "
+            "for an element sheet, character sheet, reference sheet or turnaround of "
+            "themselves or of someone in the photos they attached -- never make_image "
+            "for that. It needs attached photos of the person; with none attached, ask "
+            "for them instead of calling. The name is what the person called them "
+            "(their own first name when it is them and you know it, else ask). Notes "
+            "only when they said what the character should wear."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "The character's name, as the person gave it."},
+                "notes": {"type": "string",
+                          "description": "Optional: what they wear in the sheet, only "
+                                         "when the person said. Empty keeps the clothes "
+                                         "in the photos."},
+            },
+            "required": ["name"],
         },
         "write": True,
     },
@@ -293,7 +332,13 @@ def check_args(name: str, args: dict) -> dict:
         k = args.get("k")
         args = {"query": str(args["query"])[:300],
                 "k": k if isinstance(k, int) and not isinstance(k, bool) else 8}
-    if name in MAKE_TOOLS:
+    if name == SHEET_TOOL:
+        who = " ".join(str(args.get("name") or "").split())
+        if not who:
+            raise Refused(f"`{name}` needs the character's name")
+        args = {"name": who[:MAX_SHEET_NAME],
+                "notes": " ".join(str(args.get("notes") or "").split())[:MAX_SHEET_NOTES]}
+    elif name in MAKE_TOOLS:
         prompt = " ".join(str(args.get("prompt") or "").split())
         if not prompt:
             raise Refused(f"`{name}` needs the prompt to make it from")

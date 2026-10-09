@@ -47,6 +47,17 @@ export type Output = "image" | "video";
 export const MAKE_TOOLS: Record<string, Output> = { make_image: "image", make_video: "video" };
 export const isMake = (tool?: string | null) => !!tool && tool in MAKE_TOOLS;
 
+/* The Guide's element sheet (src/guide_tools.SHEET_TOOL, 2026-10-09): a
+   step card like a still's, but its Approve saves the person in the
+   attached photos as a character (POST /api/assets/characters, the
+   composer's references as photo_urls, sheet on) and the sheet is drawn by
+   the Elements route's own job -- the landing page's five-panel prompt,
+   16:9, from the real photos. Never a confirm card, never /creative-guide/act. */
+export const SHEET_TOOL = "make_element_sheet";
+/** the `model` a sheet's Made carries, so its meta line can name it */
+export const SHEET_MODEL = "element-sheet";
+export const isSheetTool = (tool?: string | null) => tool === SHEET_TOOL;
+
 /* Aspect ratios a Nano Banana still can be drawn at. The API keeps its
    own allowlist (app/api.py GENERATE_ASPECTS); an id it does not know
    falls back to the server default, never a failed call. */

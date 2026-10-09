@@ -1207,6 +1207,50 @@ def test_the_sheet_is_opt_out_and_needs_photos_and_a_key(
     assert res.json()["ok"] and res.json()["sheet_job"] is None
 
 
+def test_a_new_element_under_an_old_name_draws_its_sheet_from_the_new_photos(
+        tmp_db, tmp_path, monkeypatch, rag_recorder, fake_vision):
+    """The composer's element sheet (2026-10-09): "Michael" already has a
+    folder of older shoots. The sheet must ground on the photos THIS save
+    attached (handed over as photo_urls), not the first six names there."""
+    root = tmp_path / "characters"
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", root)
+    (root / "michael").mkdir(parents=True)
+    for name in ("07-headshot.jpg", "08-seated.jpg", "IMG_0586.JPG"):
+        (root / "michael" / name).write_bytes(b"old shoot")
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: "k")
+    monkeypatch.setattr(api_mod, "_mirror_photos_to_r2", lambda *a, **k: None)
+    monkeypatch.setattr(api_mod, "_photo_bytes", lambda url: f"new {url}".encode())
+    drawn = []
+
+    def fake_draw(kind, name, photos, out_dir, **kw):
+        drawn.append([p.read_bytes() for p in photos])
+        target = out_dir / "sheet.jpg"
+        target.write_bytes(b"sheet")
+        return {"ok": True, "path": target, "generation_id": 1, "error": None}
+
+    monkeypatch.setattr(api_mod.element_sheet, "draw", fake_draw)
+    res = client.post("/api/assets/characters",
+                      data={"name": "Michael", "sheet": "1",
+                            "photo_urls": ["/refs/a.jpg", "/refs/b.jpg"]})
+    body = res.json()
+    assert body["ok"] and body["sheet_job"] and body["sheet_note"] is None
+    assert wait_for_job(body["sheet_job"])["status"] == "done"
+    assert drawn == [[b"new /refs/a.jpg", b"new /refs/b.jpg"]]
+
+
+def test_a_sheet_that_cannot_start_says_why(tmp_db, tmp_path, monkeypatch,
+                                            rag_recorder, fake_vision):
+    monkeypatch.setattr(api_mod, "CHARACTERS_DIR", tmp_path / "characters")
+    monkeypatch.setattr(api_mod, "_mirror_photos_to_r2", lambda *a, **k: None)
+    monkeypatch.setattr(api_mod, "_gemini_key", lambda a=None: None)
+    res = client.post("/api/assets/characters", data={"name": "A"},
+                      files=[("photos", ("a.jpg", b"x", "image/jpeg"))])
+    assert res.json()["sheet_job"] is None and "GEMINI_API_KEY" in res.json()["sheet_note"]
+    res = client.post("/api/assets/characters", data={"name": "B", "sheet": "0"},
+                      files=[("photos", ("a.jpg", b"x", "image/jpeg"))])
+    assert res.json()["sheet_note"] is None          # not asked for, nothing to say
+
+
 def test_redrawing_an_existing_element(tmp_db, tmp_path, monkeypatch):
     root = tmp_path / "characters"
     monkeypatch.setattr(api_mod, "CHARACTERS_DIR", root)

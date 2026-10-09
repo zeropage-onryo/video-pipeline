@@ -209,6 +209,8 @@ export type AssetCreated = {
   note?: string | null;
   /** the job drawing the element's reference sheet, when one was asked for (2026-09-18) */
   sheet_job?: number | null;
+  /** why no sheet was started when one was asked for (no key, no photos) */
+  sheet_note?: string | null;
 };
 export type ElementKind = "characters" | "locations" | "props";
 /** POST /api/assets/{kind}/{id}/sheet — draw (or redraw) an element's

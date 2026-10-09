@@ -83,6 +83,7 @@ import {
   getAssets,
   getCapabilities,
   getConceptDetail,
+  createAsset,
   getPresets,
   getProject,
   isProjectTool,
@@ -125,6 +126,8 @@ import {
   BASE_COMMANDS,
   IMAGE_ASPECTS,
   MAKE_TOOLS,
+  SHEET_MODEL,
+  SHEET_TOOL,
   GENERATE_MODES,
   loadGenerateMode,
   saveGenerateMode,
@@ -143,6 +146,7 @@ import {
   type SlashCommand,
 } from "@/lib/composer";
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
+import { creditsText } from "@/lib/render-choice";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
 import "@/components/studio/composer/composer.css";
 import { AssistantAvatar } from "@/components/studio/assistant-avatar";
@@ -785,6 +789,71 @@ function Composer() {
       setBusy(false);
     }
   }
+  /* An element sheet's step (2026-10-09): save the person in the attached
+     photos as a character -- the Elements create route, the composer's
+     references handed over as photo_urls, sheet on -- then follow the
+     sheet job the route started and land the sheet as this turn's tile.
+     The route draws the sheet from THESE photos, not from an older folder
+     under the same name. A sheet that failed can be approved again (the
+     character is saved again under the same name; the photos are
+     content-addressed, so the folder does not double). */
+  async function runSheet(t: Turn) {
+    const proposal = t.reply?.proposal;
+    const again = t.made?.status === "failed" || t.made?.status === "stopped";
+    if (!proposal || proposal.tool !== SHEET_TOOL || (t.made && !again)) return;
+    const photos = [...uploads.map((u) => u.url), ...picked];
+    if (!photos.length) {
+      toast("Attach photos of the person first -- the sheet is drawn from them", "err");
+      return;
+    }
+    const args = proposal.args as { name?: unknown; notes?: unknown };
+    const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "Character";
+    const notes = typeof args.notes === "string" ? args.notes.trim() : "";
+    const id = newMadeId();
+    const made: Made = {
+      id,
+      output: "image",
+      refs: photos.filter(drawable).slice(0, 8),
+      status: "running",
+      detail: `Saving ${name} to Elements…`,
+      frame: "16:9",
+      model: SHEET_MODEL,
+      prompt: t.content,
+    };
+    setThread((all) => all.map((m) => (m === t ? { ...m, made } : m)));
+    try {
+      const form = new FormData();
+      form.append("name", name);
+      if (notes) form.append("notes", notes);
+      form.append("sheet", "1");
+      photos.forEach((u) => form.append("photo_urls", u));
+      const saved = await createAsset("characters", form);
+      if (!saved.sheet_job) {
+        throw new Error(`${name} is saved in Elements, but ${saved.sheet_note || "the sheet could not start"}`);
+      }
+      patchMade(id, { jobId: saved.sheet_job, detail: `${name} saved · drawing the sheet…` });
+      const job = await waitForJob(saved.sheet_job, (j) => tick(id, j));
+      if (job.status !== "done" || !job.output) throw new Error(job.error || "The sheet was not drawn.");
+      patchMade(id, { status: "done", image: job.output, detail: job.detail || `${name} · sheet drawn` });
+      toast(`${name} saved to Elements with the sheet`);
+    } catch (e) {
+      patchMade(id, { status: "failed", detail: e instanceof Error ? e.message : "The sheet was not drawn." });
+      toast(e instanceof Error ? e.message : "The sheet was not drawn.", "err");
+    }
+  }
+  async function approveSheet(i: number) {
+    const t = thread[i];
+    if (busy || !t) return;
+    setBusy(true);
+    try {
+      await runSheet(t);
+    } finally {
+      setBusy(false);
+    }
+  }
+  // a sheet is one Nano Banana Pro still, priced like the Elements card's button
+  const sheetLine = `Nano Banana Pro${balance?.prices ? ` · ${creditsText(balance.prices.still, !!balance.exempt)}` : ""}`;
+
   // what a step card says under its Approve: the model that draws the still
   // (the one it was drawn on, or the picker's as it stands) and what one costs
   const stillLine = (modelId?: string) => {
@@ -874,6 +943,12 @@ function Composer() {
           const step: Turn = { role: "assistant", content: reply.message, reply };
           setThread((all) => [...all, step]);
           if (generate === "auto") await runStill(step);
+        } else if (proposal && proposal.tool === SHEET_TOOL) {
+          // AN ELEMENT SHEET (2026-10-09): its step card, held on Approve
+          // with Ask first on, saved and drawn at once with it off
+          const step: Turn = { role: "assistant", content: reply.message, reply };
+          setThread((all) => [...all, step]);
+          if (generate === "auto") await runSheet(step);
         } else if (proposal && isMake(proposal.tool)) {
           // THE BRAIN MADE: its line is the turn, the tiles go under it.
           // The tool says which output -- the switch follows it, so a
@@ -1175,7 +1250,8 @@ function Composer() {
   const frameLabel = ratios.find((r) => r.id === ratio)?.label ?? "Frame";
   const brainLabel = brains.find((b) => b.id === brain)?.label ?? "Model";
   const imageModelLabel = imageModels.find((m) => m.id === imageModel)?.label ?? "Model";
-  const modelLabel = (id?: string) => imageModels.find((m) => m.id === id)?.label;
+  const modelLabel = (id?: string) =>
+    id === SHEET_MODEL ? "Element sheet · Nano Banana Pro" : imageModels.find((m) => m.id === id)?.label;
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
@@ -1212,6 +1288,8 @@ function Composer() {
                 onPick: sendMadeToQueue,
                 onApprove: (i) => void approveStill(i),
                 stillLine,
+                onApproveSheet: (i) => void approveSheet(i),
+                sheetLine,
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
               }}

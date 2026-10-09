@@ -290,6 +290,7 @@ def test_the_pill_is_handed_the_still_and_never_the_scene(monkeypatch):
     specs, _ = guide_tools.session(local=True, maker=True, makes=("make_image",))
     names = {s["name"] for s in specs}
     assert "make_image" in names and "make_video" not in names
+    assert guide_tools.SHEET_TOOL not in names      # the element sheet is the composer's
     from src import creative_guide
     assert creative_guide.MAKES_FOR["still"] == ("make_image",)
     assert creative_guide.MAKES_FOR["image"] is None and creative_guide.MAKES_FOR["video"] is None
@@ -308,6 +309,50 @@ def test_a_make_call_ends_the_turn_as_a_proposal_with_a_clean_prompt(monkeypatch
     # the line above the composer's Approve is what will be drawn, never the
     # stock "I can ...: {json}. Confirm on the card" a board write carries
     assert reply["message"] == "a wet steel counter"
+
+
+# THE ELEMENT SHEET (2026-10-09): "make an element sheet of me" with photos
+# attached is make_element_sheet, never make_image -- the studio saves the
+# person as a character and the Elements route draws the five-panel sheet.
+
+def test_the_element_sheet_is_a_composer_make_tool(monkeypatch):
+    monkeypatch.setattr(guide_tools, "available", lambda: False)
+    specs, run_tool = guide_tools.session(local=True, maker=True)
+    sheet = next(s for s in specs if s["name"] == guide_tools.SHEET_TOOL)
+    assert sheet["write"] and sheet["input_schema"]["required"] == ["name"]
+    assert guide_tools.is_make(guide_tools.SHEET_TOOL)
+    with pytest.raises(guide_tools.Refused):
+        run_tool(guide_tools.SHEET_TOOL, {"name": "Michael"})
+
+
+def test_element_sheet_args_are_a_name_and_optional_notes():
+    clean = guide_tools.check_args(guide_tools.SHEET_TOOL,
+                                   {"name": "  Michael  ", "notes": " a black   leather jacket ",
+                                    "prompt": "ignored"})
+    assert clean == {"name": "Michael", "notes": "a black leather jacket"}
+    assert guide_tools.check_args(guide_tools.SHEET_TOOL, {"name": "M" * 300})["name"] == "M" * 80
+    for bad in ({}, {"name": "   "}, {"name": "see https://x.y/me.jpg"}):
+        with pytest.raises(guide_tools.Refused):
+            guide_tools.check_args(guide_tools.SHEET_TOOL, bad)
+
+
+def test_an_element_sheet_call_ends_the_turn_saying_what_is_saved_and_drawn(monkeypatch):
+    proposal = _Resp(calls=[(guide_tools.SHEET_TOOL, {"name": "Michael"})])
+    reply, _ = _turn(monkeypatch, [proposal], lambda n, a: None)
+    assert reply["proposal"]["tool"] == guide_tools.SHEET_TOOL
+    assert reply["proposal"]["args"] == {"name": "Michael", "notes": ""}
+    assert reply["message"].startswith("Save Michael as a character from the photos you attached")
+    assert "three-quarter" in reply["message"] and "clothes from the photos" in reply["message"]
+    assert "Confirm" not in reply["message"] and "{" not in reply["message"]
+    worn = _Resp(calls=[(guide_tools.SHEET_TOOL, {"name": "Michael", "notes": "white leathers"})])
+    reply, _ = _turn(monkeypatch, [worn], lambda n, a: None)
+    assert reply["message"].endswith("wearing white leathers.")
+
+
+def test_act_refuses_the_element_sheet(client):
+    res = client.post("/api/creative-guide/act",
+                      json={"tool": guide_tools.SHEET_TOOL, "args": {"name": "Michael"}})
+    assert res.status_code == 400 and "studio" in res.text
 
 
 def test_a_board_write_keeps_its_confirm_line(monkeypatch):
