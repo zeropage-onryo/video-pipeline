@@ -50,7 +50,6 @@ clip missing from the Asset Bank) is answered BEFORE a job starts.
 """
 from __future__ import annotations
 
-import hashlib
 import tempfile
 from pathlib import Path
 from typing import Literal, Optional, Union
@@ -73,6 +72,7 @@ from src.cut import projects as cut_projects
 from src.cut import render as cut_render
 from src.cut import sources as cut_sources
 from src.cut import store as cut_store
+from src.cut import uploads as cut_uploads
 from src.cut.doc import parse_handle
 
 from . import auth, jobs
@@ -80,16 +80,14 @@ from . import auth, jobs
 router = APIRouter(prefix="/cut")
 
 MEDIA_DIR = cut_render.CUT_DIR / "media"
-MAX_MEDIA_BYTES = 100 * 1024 * 1024
-# footage is bigger than a music bed; still one request, so still capped
-MAX_VIDEO_BYTES = 500 * 1024 * 1024
-AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
-               ".wav": "audio/wav", ".ogg": "audio/ogg", ".flac": "audio/flac"}
-VIDEO_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
-               ".m4v": "video/x-m4v"}
-IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-               ".webp": "image/webp"}
-UPLOAD_TYPES = {**AUDIO_TYPES, **VIDEO_TYPES, **IMAGE_TYPES}
+# the upload rules live with the one body that applies them (src/cut/uploads.py,
+# shared with the studio MCP's import_file since 2026-10-09)
+MAX_MEDIA_BYTES = cut_uploads.MAX_MEDIA_BYTES
+MAX_VIDEO_BYTES = cut_uploads.MAX_VIDEO_BYTES
+AUDIO_TYPES = cut_uploads.AUDIO_TYPES
+VIDEO_TYPES = cut_uploads.VIDEO_TYPES
+IMAGE_TYPES = cut_uploads.IMAGE_TYPES
+UPLOAD_TYPES = cut_uploads.UPLOAD_TYPES
 
 
 def _error(status: int, code: str, message: str, **extra) -> JSONResponse:
@@ -227,13 +225,7 @@ def cut_assemble_route(body: AssembleBody,
 # --------------------------------------------------------------------------
 
 def _kind_of_upload(ext: str) -> Optional[str]:
-    if ext in AUDIO_TYPES:
-        return "audio"
-    if ext in VIDEO_TYPES:
-        return "video"
-    if ext in IMAGE_TYPES:
-        return "image"
-    return None
+    return cut_uploads.kind_of(ext)
 
 
 def _bin_item(r: dict, account_id: Optional[int]) -> dict:
@@ -310,52 +302,21 @@ async def cut_media_upload(request: Request,
     upload = form.get("file")
     if not getattr(upload, "filename", ""):
         return _error(400, "no_file", "send the media as `file`")
-    ext = Path(upload.filename).suffix.lower()
-    kind = _kind_of_upload(ext)
-    if kind is None:
+    if _kind_of_upload(Path(upload.filename).suffix.lower()) is None:
         return _error(400, "bad_type", "audio, video or an image: "
                       f"{', '.join(sorted(UPLOAD_TYPES))}")
     data = await upload.read()
-    if not data:
-        return _error(400, "empty", "the file is empty")
-    cap = MAX_VIDEO_BYTES if kind == "video" else MAX_MEDIA_BYTES
-    if len(data) > cap:
-        return _error(413, "too_big", f"over {cap // (1024 * 1024)}MB")
-    sha = hashlib.sha256(data).hexdigest()
-    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-    target = MEDIA_DIR / f"{sha[:24]}{ext}"
-    target.write_bytes(data)
     try:
-        info = cut_sources.probe(target, 30)
-    except cut_sources.SourceError as e:
-        target.unlink(missing_ok=True)
-        return _error(400, "unreadable", str(e))
-    refusal = None
-    if kind == "audio" and not info["audio"]:
-        refusal = ("no_audio", "that file has no sound in it")
-    elif kind == "video" and (not info["video"] or info.get("still")):
-        refusal = ("no_video", "that file has no moving picture in it")
-    elif kind == "image" and not info.get("still"):
-        refusal = ("not_an_image", "that file is not a still image")
-    if refusal:
-        target.unlink(missing_ok=True)
-        return _error(400, *refusal)
-    from src import media
-    stored = f"/renders/cut/media/{target.name}"
-    media.mirror(target, stored.lstrip("/"), account_id, content_type=UPLOAD_TYPES[ext],
-                 derive=False)
-    row = cut_store.add_media(account_id=account_id, kind=kind,
-                              filename=Path(upload.filename).name[:200], media_url=stored,
-                              output_path=str(target),
-                              seconds=None if kind == "image" else info["seconds"], sha256=sha)
-    handle = f"asset:{row['id']}"
-    cut_store.put_probe(handle, stored, info, account_id=account_id, size_bytes=len(data),
-                        sha256=sha)
+        saved = cut_uploads.save(data, upload.filename, account_id=account_id,
+                                 media_dir=MEDIA_DIR)
+    except cut_uploads.UploadRefused as e:
+        return _error(413 if e.code == "too_big" else 400, e.code, str(e))
+    row, info, handle, stored = saved["row"], saved["info"], saved["handle"], saved["stored"]
     _start_preview(handle, stored, account_id)
     item = _bin_item({**row, "origin": "upload", "width": info.get("width"),
                       "height": info.get("height"), "has_video": info["video"],
-                      "has_audio": info["audio"], "size_bytes": len(data)}, account_id)
-    return {"handle": handle, "kind": kind, "seconds": item["seconds"],
+                      "has_audio": info["audio"], "size_bytes": saved["size"]}, account_id)
+    return {"handle": handle, "kind": saved["kind"], "seconds": item["seconds"],
             "filename": row["filename"], "item": item}
 
 

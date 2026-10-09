@@ -147,7 +147,8 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # after a yes in chat (quote_token: signed over the exact request, used once --
 # a SIGNING SECRET is needed, QUOTE_SIGNING_SECRET, or nothing can be approved),
 # plus cancel_job (stops one; the money follows fal's own answer), assemble_clips
-# (joins gen:<id> clips into one MP4 on this server, free, filed on the wall), and
+# (joins gen:<id> clips into one MP4 on this server, free, filed on the wall),
+# import_file (a file from ~/Downloads, ~/Desktop or data/ -> asset:<id>; studio only), and
 # image_models / video_models / effects / elements /
 # renders / images_for / prompt_craft, and PROJECTS (projects / project /
 # project_chat / create_project / save_chat; project_id on a render files it there).
@@ -1680,7 +1681,24 @@ is yours, in Resolve, by hand.
   `render.render` and files it on the Assets wall under the new free log tool `cut`
   (`generative.CUT_TOOLS`, `cost_usd` NULL, wall label "Joined clips"). No quote: nothing is
   spent, and the result says so (`credits: 0`). `renders(kind="audio")` lists the editor's
-  audio uploads as the `asset:<id>` music takes. On the studio surface they
+  audio uploads as the `asset:<id>` music takes. **`import_file(path)` (2026-10-09, step
+  3+4's fallback)** reads a file on the computer running the stdio server -- only under
+  `mcp_server.import_roots()` (`ZEROPAGE_IMPORT_DIRS`, else ~/Downloads, ~/Desktop and the
+  checkout's data/), with every symlink resolved, images (jpg/png/webp) and mp4/mov only, under
+  the editor's caps -- and files it through `src/cut/uploads.save`, the editor's upload body
+  lifted out of `app/cut_routes.py` (the route now calls it too), so it lands as an
+  `asset:<id>` in `cut_media`, mirrored and probed. `asset:<id>` is accepted wherever a
+  reference (an image), a clip effect's source or a clip to join (a clip) is; `renders(kind=
+  "upload")` lists them. STUDIO surface only -- never the board (HTTP) or the listed server --
+  and refused for a signed-in caller. Also fixed on the way: the shared upload body now refuses
+  a "still" or "clip" with no width/height (ffprobe calls a text file named .jpg a 0x0 mjpeg
+  still, and the editor used to file it), and the stdio entry point now creates the editor's
+  and the generations tables, without which import_file and assemble_clips crashed on a fresh
+  database. **MCP Apps (the inline viewer + drop zone) are NOT built**: the SDK supports them
+  (`mcp.server.apps`), Claude lists Desktop as a host, but open reports (anthropics/claude-ai-
+  mcp#165, modelcontextprotocol/ext-apps#671) show UIs silently not rendering, a local stdio
+  one in Desktop among them, and a check from inside the Desktop app cannot restart it -- the
+  task's gate says stop and report. On the studio surface they
   are always on (the approval is the gate); on the board surface they sit behind the engine
   flag; the listed server never has them. References are ids, never URLs, in ONE grammar
   shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`

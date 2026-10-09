@@ -27,8 +27,8 @@ spend is quoted first and runs only after his yes in chat.
 | 1. credits + signed single-use quote | built 2026-10-08, PR #200 | see "As built" under step 1 |
 | 6. cancel a job | built 2026-10-09, PR #201 (stacked on #200) | see "As built" under step 6 |
 | 7. structured results | built 2026-10-09, PR #202 (stacked on #201) | see "As built" under step 7 |
-| 2a. join clips | built 2026-10-09, branch `claude/task-mcp-studio-v2-join` (stacked on #202) | see "As built" under step 2a |
-| 3 + 4. viewer + upload | not started | |
+| 2a. join clips | built 2026-10-09, PR #204 (stacked on #202) | see "As built" under step 2a |
+| 3 + 4. viewer + upload | `import_file` built 2026-10-09, branch `claude/task-mcp-studio-v2-import` (stacked on #204); MCP Apps NOT built -- gate not passed, see below | see "Verification" and "As built" under step 3 + 4 |
 | 2b. finish a clip | not started | |
 | 2c. edit by instruction | not started | |
 
@@ -239,6 +239,63 @@ any of an error payload, a 404/410/499, or a finished job with no output as "can
 - Fallback tool `import_file(path)`: reads a file on this Mac (stdio server runs locally) under an
   allow-listed set of folders (e.g. ~/Downloads, ~/Desktop, the repo's data/), refuses anything
   else, size-capped, images and mp4/mov only.
+
+**Verification of MCP Apps (2026-10-09) -- the gate did NOT pass, so only the fallback is built.**
+- The SDK is ready: mcp 2.1.1 ships `mcp.server.apps` (`Apps` extension: declares
+  `io.modelcontextprotocol/ui` at initialize, `@apps.tool(resource_uri="ui://...")` stamps
+  `_meta.ui.resourceUri`, `add_html_resource` serves `text/html;profile=mcp-app` with CSP).
+- The hosts say yes on paper: modelcontextprotocol.io's MCP Apps page and the 2026-01-26 launch
+  post list Claude (web and desktop).
+- In practice it is unreliable: anthropics/claude-ai-mcp#165 ("MCP Apps UI never renders in
+  Claude Desktop", open, 16 comments, last 2026-09-18) and modelcontextprotocol/ext-apps#671
+  (Desktop and claude.ai, open, 24 comments, last 2026-10-06). The capability is negotiated and
+  the resource is read, and no iframe mounts. One report is a LOCAL STDIO extension in Claude
+  Desktop 1.26832.0 (2026-08-07) -- our exact setup. Others got remote connectors rendering only
+  after a list of undocumented server-side fixes (declare the extension at initialize, `_meta.ui`
+  on the tool RESULT too, CSP on the read item, bundle the app SDK rather than load it from a
+  CDN, send `ui/notifications/initialized` unconditionally, content-hash the `ui://` URI and
+  keep the old one as an alias; one release broke on `serverInfo.websiteUrl`).
+- Not tested in Mike's Claude Desktop: Desktop launches the stdio server from the MAIN checkout
+  and only re-reads its config on restart, and this work runs inside Desktop's Code tab, so a
+  restart from here would end the session. A probe is cheap to build; running it is Mike's.
+- So, per this task's rule, the viewer and the drop zone wait. To resume: build a one-tool probe
+  with `mcp.server.apps` following the checklist above, register it, restart Desktop, call it;
+  if a panel renders, build the viewer on `mcp_shapes` (the job and spend shapes are already
+  what it reads).
+
+**As built: `import_file` (2026-10-09).**
+- `import_file(path)` on the STUDIO surface only (stdio, the person's own computer); never on
+  the board (served over HTTP) or the listed server, and refused for a signed-in caller. 20
+  studio tools now.
+- The fence: `mcp_server.import_roots()` -- `ZEROPAGE_IMPORT_DIRS` (os.pathsep-separated), else
+  ~/Downloads, ~/Desktop and the checkout's data/ -- compared with the path's REAL location
+  (`resolve(strict=True)`), so `../` and a symlink out of an allowed folder are both refused; a
+  full path is required. Images (jpg, jpeg, png, webp) and .mp4 / .mov only; the editor's caps
+  (100MB an image, 500MB a clip), checked before the file is read.
+- One body files it: `src/cut/uploads.save`, lifted out of `app/cut_routes.py`'s upload route
+  (which now calls it, same codes and messages): typed, capped, PROBED (and refused if it is
+  not what its extension says), content-addressed under the editor's media folder, mirrored to
+  the bucket under the account, recorded in `cut_media`, probe cached.
+- **The id is `asset:<id>`** -- the editor's existing upload handle rather than a new
+  `upload:<id>` kind: owned per account, already what music takes, already in the editor's bin.
+  It is accepted by `resolve_references` (an image: generate_image references, generate_video's
+  start frame, an image effect), by clip effect sources (`mcp_server._clip_row`) and by
+  `assemble_clips` (a clip). `renders(kind="upload")` lists everything brought in.
+- Fixed on the way: (1) the upload body now refuses a "still" or a "clip" with no width/height --
+  ffprobe reads a text file named .jpg as a 0x0 mjpeg still, and the editor's route used to file
+  it; (2) the stdio entry point now creates the editor's tables and the generations log, without
+  which `import_file` and `assemble_clips` crashed on a fresh database (step 2a's stdio check had
+  created them itself).
+- Verified: tests/test_mcp_import.py (the fence: relative, outside, `../`, symlink out, wrong
+  type, over the cap, a fake image, a signed-in caller; the studio-only registration; an image
+  as a reference, another account's import refused, a clip as an effect source and in a join;
+  the typed answer; the shared body's new refusal). Over the real stdio server against a fresh
+  database: the three escapes refused; a photo, a .mov and an .mp4 imported as asset:1-3 and
+  listed; the two clips joined into one 3.5s video on the wall. The photo as a reference was
+  refused "not in the studio's bucket" there because that worktree has no R2 -- the right
+  refusal; with R2 configured (Mike's .env) it is uploaded.
+- Not taken, on purpose: audio (music still comes in through the editor's bin; adding .m4a/.mp3
+  to `_import_types` is one line if wanted), HEIC, webm.
 
 ## 2b. Finish a clip — extend `src/effects.py`
 
