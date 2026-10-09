@@ -1,5 +1,43 @@
 # The assistant's face: looks and states (2026-10-07)
 
+## The floating creature and the dock (2026-10-09): they replaced the pill
+
+Mike asked for the creatures to be "bigger and floating", to "have thoughts instead of a chat
+box", and for a chat that opens from them; every step was designed and picked on the "Creature
+Companions" canvas (https://claude.ai/artifact/QkzWQd3ZYXsWzwFjMt8DsR) before any code. What he
+picked:
+
+- **320px, floating.** The creature IS the assistant now: no pill. It floats in the bottom-right
+  corner with a glow under it in its own colour (`tintOf`). Drawn from a new **640px** set
+  (`site/mascot/v1/640/`, exported from the same frames as 128 and 320, so the sizes swap in
+  place; `mascot.smallerSrc` falls back to 320 if a 640 file is missing). Smaller where the
+  corner is taken: 200px above the minimap on a canvas page, 120px on a phone.
+- **All eight reactions:** hover (it turns to listen and leans in), press (it squishes), drag
+  (park it on either side at any height, kept per browser), idle (a slow drift on top of the
+  float), working (a red ring fills on the floor), needs you (still, amber light and glow),
+  didn't go through (one shake), asleep (z z z after 10 minutes).
+- **Thoughts, "amber leads":** the one thing waiting on a click (a still to approve, a write to
+  confirm, frames picked and not kept) is the thought nearest its head, edged amber, with the
+  buttons that do it -- Approve there is the same click, at the same price, as on the card.
+  While it works, the thought says what it is doing; after a failed turn, Retry; else a line it
+  wants to say. Above, up to three of the latest answer's quick replies as small thoughts, and
+  "Ask me anything".
+- **Click opens the dock** (layout F): a drawer along the bottom, over the page (the page gets
+  that much room at its end, `--zpa-clear`, so anything behind it can be scrolled into view).
+  Conversation on the left, **On the table** in the middle (directions, the contact sheet, the
+  newest still, a write to confirm, the Queue's price), the creature seated at its end with its
+  head over the top edge -- the left end when it is parked on the left. Drag the handle (or the
+  arrow keys) to resize; kept per browser. On a phone it is a sheet over the bottom bar, the
+  table first.
+- **Double-click makes it small** (80px, no thoughts, the amber light and unread count stay);
+  a click brings it back. A click waits 240ms to tell the two apart (`lib/creature.ts`,
+  `clickIntent`, node-tested); Enter or Space acts at once. The dock's header has a "make
+  small" button too, for a keyboard.
+
+`assistant-pill.tsx` keeps everything the assistant does (asking, keeping, approving,
+confirming) and only draws differently; the creature and its thoughts are
+`assistant-creature.tsx` + `assistant-creature.css`.
+
 ## The mascot (2026-10-08): it replaced the glyphs
 
 Mike rejected the flat SVG round (the glyphs below) for a soft, plush 3D creature, with Meta

@@ -1,0 +1,828 @@
+/* The floating creature, its thoughts and the dock (assistant-creature.tsx,
+   assistant-pill.tsx; the "Creature Companions" design canvas, 2026-10-09).
+
+   Sizes are variables on .zpa so a page or a phone changes them in one
+   place: --zpa-size resting, --zpa-small after a double-click, --zpa-seat in
+   the dock. The thoughts are paper on the dark studio, the one waiting on a
+   click is edged amber, and red stays the studio's buttons. */
+.zpa {
+  --zpa-size: 320px;
+  --zpa-small: 80px;
+  --zpa-seat: 300px;
+  --zpa-edge: 28px;
+  --zpa-rail: 84px;
+  --zpa-min-y: 12px;
+  --zpa-paper: #efe9df;
+  --zpa-paper-2: #e6e0d6;
+  --zpa-inset: #e3dccf;
+  --zpa-ink: #1a1917;
+  --zpa-ink-2: #4a4741;
+  --zpa-amber: var(--warn, #d9a441);
+  --zpa-amber-ink: #835a0c;
+  --zpa-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* ── resting: the creature in its corner, its thoughts above its head ── */
+.zpa .zpa-rest {
+  position: fixed;
+  z-index: 110;
+  right: var(--zpa-edge);
+  bottom: max(var(--zpa-y, 24px), var(--zpa-min-y));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.zpa[data-side="left"] .zpa-rest {
+  right: auto;
+  left: calc(var(--zpa-rail) + var(--zpa-edge));
+  align-items: flex-start;
+}
+.zpa .zpa-holder {
+  position: relative;
+  flex: none;
+  width: var(--zpa-size);
+  height: var(--zpa-size);
+  pointer-events: auto;
+}
+.zpa[data-mode="small"] .zpa-rest .zpa-holder {
+  width: var(--zpa-small);
+  height: var(--zpa-small);
+}
+
+/* ── the creature ── */
+.zpa .zpa-creature {
+  --zav: var(--zpa-size);
+  position: absolute;
+  inset: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.zpa[data-mode="small"] .zpa-rest .zpa-creature {
+  --zav: var(--zpa-small);
+}
+.zpa .zpa-dock .zpa-creature {
+  --zav: var(--zpa-seat);
+}
+.zpa .zpa-creature:focus-visible {
+  outline: 2px solid var(--zpa-tint);
+  outline-offset: 4px;
+  border-radius: 32%;
+}
+.zpa .zpa-squish,
+.zpa .zpa-sway {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+/* hover: it leans in (and turns to listen, assistant-creature.tsx);
+   press: it squishes; held in a drag: it tips */
+.zpa .zpa-squish {
+  transform-origin: 50% 92%;
+  transition: transform 260ms var(--zpa-ease);
+}
+.zpa .zpa-creature:hover .zpa-squish {
+  transform: rotate(-4deg) translateY(-6px);
+}
+.zpa[data-side="left"] .zpa-creature:hover .zpa-squish {
+  transform: rotate(4deg) translateY(-6px);
+}
+.zpa .zpa-creature:active .zpa-squish {
+  transform: scale(1.07, 0.9);
+  transition-duration: 90ms;
+}
+.zpa .zpa-creature[data-dragging] {
+  cursor: grabbing;
+}
+.zpa .zpa-creature[data-dragging] .zpa-squish {
+  transform: rotate(-9deg) scale(1.03);
+}
+/* idle: a slow drift on top of the face's own float */
+.zpa .zpa-rest .zpa-creature[data-face="idle"] .zpa-sway {
+  animation: zpa-sway 11s ease-in-out infinite;
+}
+/* the glow on the floor, in its own colour; amber while it waits on you */
+.zpa .zpa-floor {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: -3%;
+  height: 13%;
+  border-radius: 999px;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--zpa-tint) 42%, transparent), transparent);
+  animation: zpa-shadow 3.4s ease-in-out infinite;
+  pointer-events: none;
+}
+.zpa .zpa-creature[data-face="needs"] .zpa-floor {
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--zpa-amber) 55%, transparent), transparent);
+  animation: none;
+}
+.zpa .zpa-creature[data-face="sleeping"] .zpa-floor {
+  opacity: 0.5;
+}
+/* the floor ring: fills while a job runs, sweeps while it thinks */
+.zpa .zpa-floor-ring {
+  position: absolute;
+  left: 6%;
+  bottom: -7%;
+  width: 88%;
+  height: auto;
+  overflow: visible;
+  pointer-events: none;
+}
+.zpa .zpa-floor-ring ellipse {
+  fill: none;
+  stroke-width: 3;
+}
+.zpa .zpa-floor-track {
+  stroke: rgb(255 255 255 / 0.12);
+}
+.zpa .zpa-floor-arc {
+  stroke: var(--signal);
+  stroke-linecap: round;
+  transition: stroke-dasharray 600ms var(--zpa-ease);
+}
+.zpa .zpa-floor-ring[data-progress="sweep"] .zpa-floor-arc {
+  animation: zpa-sweep 1.6s linear infinite;
+}
+/* needs you: a steady amber light by its head (it does not move) */
+.zpa .zpa-light {
+  position: absolute;
+  right: 24%;
+  top: 29%;
+  width: 5%;
+  height: 5%;
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 999px;
+  background: var(--zpa-amber);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--zpa-amber) 28%, transparent),
+    0 0 18px var(--zpa-amber);
+}
+.zpa[data-mode="small"] .zpa-rest .zpa-light {
+  right: 4%;
+  top: 6%;
+}
+/* answers that landed while the dock was down */
+.zpa .zpa-count {
+  position: absolute;
+  left: 18%;
+  top: 26%;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--signal);
+  color: #fff;
+  font: 600 11px / 1 var(--mono);
+  box-shadow: 0 0 0 2px var(--ground);
+  animation: zav-badge-in 320ms var(--zpa-ease) 1;
+}
+.zpa[data-mode="small"] .zpa-rest .zpa-count {
+  left: -2%;
+  top: 0;
+}
+.zpa .zpa-zs {
+  position: absolute;
+  right: 10%;
+  top: 14%;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  font-family: var(--mono);
+  color: var(--dim);
+  pointer-events: none;
+}
+.zpa .zpa-zs i {
+  font-style: normal;
+  opacity: 0;
+  animation: zpa-z 3.6s ease-in-out infinite;
+}
+.zpa .zpa-zs i:nth-child(1) {
+  font-size: 14px;
+}
+.zpa .zpa-zs i:nth-child(2) {
+  font-size: 18px;
+  animation-delay: 0.5s;
+}
+.zpa .zpa-zs i:nth-child(3) {
+  font-size: 24px;
+  animation-delay: 1s;
+}
+
+/* ── thoughts ── */
+.zpa .zpa-thoughts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  width: min(410px, calc(100vw - var(--zpa-rail) - 2 * var(--zpa-edge)));
+  margin-right: calc(var(--zpa-size) * 0.375);
+  /* the frame's top is empty: the thoughts sit down into it, over the head */
+  margin-bottom: calc(var(--zpa-size) * -0.27);
+  position: relative;
+  z-index: 1;
+}
+.zpa[data-side="left"] .zpa-thoughts {
+  align-items: flex-start;
+  margin-right: 0;
+  margin-left: calc(var(--zpa-size) * 0.375);
+}
+.zpa .zpa-creature[data-dragging],
+.zpa .zpa-rest:has(.zpa-creature[data-dragging]) .zpa-thoughts {
+  transition: opacity 120ms;
+}
+.zpa .zpa-rest:has(.zpa-creature[data-dragging]) .zpa-thoughts {
+  opacity: 0;
+}
+.zpa .zpa-idea {
+  pointer-events: auto;
+  max-width: 100%;
+  min-height: 40px;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--zpa-paper-2);
+  color: var(--zpa-ink);
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.55);
+  animation:
+    zpa-rise 320ms var(--zpa-ease) both,
+    zpa-drift 5s ease-in-out 320ms infinite;
+  animation-delay: 0ms, calc(var(--k, 0) * -1.3s);
+  transition:
+    background var(--t),
+    transform var(--t);
+}
+.zpa .zpa-idea[data-alt] {
+  margin-right: 56px;
+}
+.zpa[data-side="left"] .zpa-idea[data-alt] {
+  margin-right: 0;
+  margin-left: 56px;
+}
+.zpa .zpa-idea:hover:not(:disabled) {
+  background: var(--zpa-paper);
+}
+.zpa .zpa-idea:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.zpa .zpa-idea.open {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px dashed var(--edge-hi);
+  background: var(--well);
+  color: var(--bone-2);
+  box-shadow: none;
+}
+.zpa .zpa-idea.open:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.zpa .zpa-idea.open span {
+  font-size: 16px;
+  line-height: 1;
+}
+.zpa .zpa-lead {
+  pointer-events: auto;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 18px;
+  border: 0;
+  border-radius: 24px;
+  background: var(--zpa-paper);
+  color: var(--zpa-ink);
+  text-align: left;
+  box-shadow: 0 16px 34px rgb(0 0 0 / 0.6);
+  animation: zpa-rise 320ms var(--zpa-ease) both;
+}
+.zpa .zpa-lead p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.zpa .zpa-lead-k {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--zpa-ink-2);
+}
+.zpa .zpa-lead .zpa-lead-body {
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--zpa-inset);
+  font-size: 13px;
+  color: var(--zpa-ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.zpa .zpa-lead.needs {
+  border: 2px solid var(--zpa-amber);
+  box-shadow:
+    0 16px 34px rgb(0 0 0 / 0.6),
+    0 0 36px color-mix(in srgb, var(--zpa-amber) 24%, transparent);
+}
+.zpa .zpa-lead.needs .zpa-lead-k {
+  color: var(--zpa-amber-ink);
+}
+.zpa .zpa-lead.error {
+  border: 2px dashed var(--signal);
+}
+.zpa .zpa-lead.error .zpa-lead-k {
+  color: #b8001f;
+}
+.zpa .zpa-lead.say {
+  font-size: 15px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.zpa .zpa-lead-live {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.zpa .zpa-lead-go {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.zpa .zpa-lead-yes,
+.zpa .zpa-lead-no {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.zpa .zpa-lead-yes {
+  border: 0;
+  background: var(--signal);
+  color: #fff;
+}
+.zpa .zpa-lead-yes:hover {
+  background: var(--signal-deep);
+}
+.zpa .zpa-lead-no {
+  border: 1px solid #cfc7ba;
+  background: transparent;
+  color: var(--zpa-ink-2);
+}
+.zpa .zpa-lead-no:hover {
+  border-color: var(--zpa-ink-2);
+}
+.zpa .zpa-lead-yes:focus-visible,
+.zpa .zpa-lead-no:focus-visible,
+.zpa .zpa-idea:focus-visible,
+.zpa .zpa-lead.say:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+.zpa .zpa-lead-go small {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+  color: var(--zpa-ink-2);
+  text-align: right;
+}
+.zpa .zpa-lead-bar {
+  position: relative;
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: #d9d2c6;
+  overflow: hidden;
+}
+.zpa .zpa-lead-bar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--signal);
+  transition: width 600ms var(--zpa-ease);
+}
+.zpa .zpa-lead-bar[data-progress="sweep"] i {
+  animation: zpa-bar 1.4s ease-in-out infinite;
+}
+/* the two puffs between the lead and the head */
+.zpa .zpa-puffs {
+  position: relative;
+  width: 100%;
+  height: 30px;
+  margin-top: -6px;
+  pointer-events: none;
+}
+.zpa .zpa-puffs i {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--zpa-paper);
+}
+.zpa .zpa-puffs i:nth-child(1) {
+  width: 18px;
+  height: 18px;
+  right: calc(var(--zpa-size) * 0.2);
+  top: 0;
+}
+.zpa .zpa-puffs i:nth-child(2) {
+  width: 11px;
+  height: 11px;
+  right: calc(var(--zpa-size) * 0.26);
+  top: 21px;
+}
+.zpa[data-side="left"] .zpa-puffs i:nth-child(1) {
+  right: auto;
+  left: calc(var(--zpa-size) * 0.2);
+}
+.zpa[data-side="left"] .zpa-puffs i:nth-child(2) {
+  right: auto;
+  left: calc(var(--zpa-size) * 0.26);
+}
+.zpa .zpa-puffs[data-kind="needs"] i {
+  border: 2px solid var(--zpa-amber);
+}
+
+/* ── the dock: up from the bottom, over the page ── */
+.zpa .zpa-dock {
+  position: fixed;
+  z-index: 110;
+  left: var(--zpa-rail);
+  right: 0;
+  bottom: 0;
+  height: clamp(260px, var(--zpa-dock-h, 360px), 72vh);
+  box-sizing: border-box;
+  display: flex;
+  gap: 28px;
+  padding: 24px 28px 18px;
+  border-top: 1px solid var(--edge);
+  border-radius: 22px 22px 0 0;
+  background: #121211;
+  box-shadow: 0 -24px 60px rgb(0 0 0 / 0.6);
+}
+.zpa .zpa-dock[data-needs] {
+  border-top: 2px solid var(--zpa-amber);
+  box-shadow:
+    0 -24px 60px rgb(0 0 0 / 0.6),
+    0 -10px 40px color-mix(in srgb, var(--zpa-amber) 16%, transparent);
+}
+.zpa .zpa-dock.setup {
+  height: min(700px, 86vh);
+}
+.zpa .zpa-grab {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 88px;
+  height: 20px;
+  margin-left: -44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.zpa .zpa-grab::before {
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  top: 8px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--edge-hi);
+}
+.zpa .zpa-grab:hover::before,
+.zpa .zpa-grab:focus-visible::before {
+  background: var(--bone-2);
+}
+.zpa .zpa-dock.setup .zpa-grab {
+  display: none;
+}
+.zpa .zpa-talk {
+  flex: 1 1 440px;
+  max-width: 640px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.zpa .zpa-dock.setup .zpa-talk {
+  max-width: 560px;
+}
+/* the step, in the header: one line, cut short rather than wrapped */
+.zpa .zpa-title > .zpa-where {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zpa .zpa-title > b,
+.zpa .zpa-title > .zpa-state {
+  flex: none;
+}
+.zpa .zpa-rule {
+  flex: none;
+  width: 1px;
+  background: var(--edge-lo);
+}
+.zpa .zpa-table {
+  flex: 1 1 380px;
+  max-width: 540px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zpa .zpa-table-k {
+  line-height: 32px;
+}
+.zpa .zpa-dock[data-needs] .zpa-table-k {
+  color: var(--zpa-amber);
+}
+.zpa .zpa-table-in {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 4px;
+}
+.zpa .zpa-empty {
+  margin: 0;
+  padding: 18px;
+  border: 1.5px dashed var(--edge-hi);
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.zpa .zpa-aside {
+  color: var(--dim) !important;
+  font-size: 13px !important;
+}
+.zpa .zpa-confirm[data-waiting] {
+  border-color: var(--zpa-amber);
+}
+/* the creature's seat at the dock's end: it sits with its head over the top edge */
+.zpa .zpa-seat {
+  position: relative;
+  flex: none;
+  width: var(--zpa-seat);
+  margin-left: auto;
+}
+.zpa[data-side="left"] .zpa-seat {
+  order: -1;
+  margin-left: 0;
+}
+.zpa .zpa-seat .zpa-holder {
+  position: absolute;
+  left: 0;
+  top: calc(var(--zpa-seat) * -0.44 - 24px);
+  width: var(--zpa-seat);
+  height: var(--zpa-seat);
+}
+
+/* ── pages that need the corner ── */
+/* a canvas (a project workspace, a scene): the minimap owns the corner and
+   the prompt bar the bottom middle, so it floats above the minimap, smaller */
+.zps[data-canvas="1"] .zpa {
+  --zpa-size: 200px;
+  --zpa-min-y: 150px;
+}
+/* an open side panel (the Assets detail rail, the canvas inspector) moves it left */
+.zps:has(.adetail) .zpa {
+  --zpa-edge: 400px;
+}
+.zps:has(.flows-workspace.has-inspector) .zpa,
+.zps:has(.flows-workspace.templates-open) .zpa {
+  --zpa-edge: 356px;
+}
+/* a narrower desktop: the dock's creature and its seat get smaller */
+@media (max-width: 1240px) {
+  .zpa {
+    --zpa-seat: 220px;
+  }
+  .zpa .zpa-dock {
+    gap: 20px;
+    padding: 24px 20px 16px;
+  }
+}
+
+/* ── phones: the rail is a 64px bar along the bottom ── */
+@media (max-width: 720px) {
+  .zpa,
+  .zps[data-canvas="1"] .zpa {
+    --zpa-size: 120px;
+    --zpa-small: 60px;
+    --zpa-seat: 112px;
+    --zpa-edge: 12px;
+    --zpa-rail: 0px;
+    --zpa-min-y: calc(64px + 14px + env(safe-area-inset-bottom));
+  }
+  .zps:has(.adetail) .zpa,
+  .zps:has(.flows-workspace.has-inspector) .zpa,
+  .zps:has(.flows-workspace.templates-open) .zpa {
+    --zpa-edge: 12px;
+  }
+  .zpa .zpa-thoughts {
+    width: calc(100vw - 24px);
+    margin-right: 0;
+    margin-bottom: calc(var(--zpa-size) * -0.2);
+  }
+  .zpa[data-side="left"] .zpa-thoughts {
+    margin-left: 0;
+  }
+  .zpa .zpa-idea {
+    font-size: 13.5px;
+  }
+  .zpa .zpa-idea[data-alt] {
+    margin-right: 36px;
+  }
+  .zpa[data-side="left"] .zpa-idea[data-alt] {
+    margin-left: 36px;
+  }
+  .zpa .zpa-lead {
+    padding: 14px 16px 16px;
+  }
+  .zpa .zpa-puffs i:nth-child(1) {
+    right: calc(var(--zpa-size) * 0.47);
+  }
+  .zpa .zpa-puffs i:nth-child(2) {
+    right: calc(var(--zpa-size) * 0.56);
+  }
+  .zpa[data-side="left"] .zpa-puffs i:nth-child(1) {
+    left: calc(var(--zpa-size) * 0.47);
+  }
+  .zpa[data-side="left"] .zpa-puffs i:nth-child(2) {
+    left: calc(var(--zpa-size) * 0.56);
+  }
+  /* the dock is a sheet over the rail: the table first, then the talk */
+  .zpa .zpa-dock {
+    left: 0;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    height: auto;
+    max-height: calc(100dvh - 64px - 90px);
+    flex-direction: column;
+    gap: 12px;
+    padding: 26px 16px 14px;
+    border-radius: 24px 24px 0 0;
+  }
+  .zpa .zpa-dock.setup {
+    height: calc(100dvh - 64px - 90px);
+  }
+  .zpa .zpa-grab {
+    display: none;
+  }
+  .zpa .zpa-rule {
+    display: none;
+  }
+  .zpa .zpa-table {
+    order: -1;
+    flex: none;
+    max-width: none;
+    max-height: 36dvh;
+  }
+  .zpa .zpa-talk {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+  .zpa .zpa-dock.setup .zpa-talk {
+    max-width: none;
+  }
+  .zpa .zpa-empty {
+    padding: 12px 14px;
+  }
+  /* the creature rides the sheet's top corner */
+  .zpa .zpa-seat,
+  .zpa[data-side="left"] .zpa-seat {
+    position: absolute;
+    top: 0;
+    right: 10px;
+    left: auto;
+    margin: 0;
+    height: 0;
+  }
+  .zpa[data-side="left"] .zpa-seat {
+    right: auto;
+    left: 10px;
+  }
+  .zpa .zpa-seat .zpa-holder {
+    top: calc(var(--zpa-seat) * -0.62);
+  }
+  /* the table's label is the sheet's top row (the creature sits over its
+     end); the header below keeps to one line: the step is in the bar */
+  .zpa .zpa-table-k {
+    padding-right: calc(var(--zpa-seat) - 16px);
+  }
+  .zpa[data-side="left"] .zpa-table-k {
+    padding-right: 0;
+    padding-left: calc(var(--zpa-seat) - 16px);
+  }
+  .zpa .zpa-title > .zpa-where {
+    display: none;
+  }
+  .zpa .zpa-title .zpa-icon:first-of-type {
+    margin-left: auto;
+  }
+}
+
+/* ── motion ── */
+@keyframes zpa-sway {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0);
+  }
+  30% {
+    transform: translateX(-7px) rotate(-1.5deg);
+  }
+  70% {
+    transform: translateX(6px) rotate(1deg);
+  }
+}
+@keyframes zpa-shadow {
+  50% {
+    transform: scaleX(0.82);
+    opacity: 0.6;
+  }
+}
+@keyframes zpa-sweep {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+@keyframes zpa-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+@keyframes zpa-bar {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+@keyframes zpa-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 6px) scale(0.7);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(8px, -14px) scale(1.1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zpa .zpa-sway,
+  .zpa .zpa-floor,
+  .zpa .zpa-idea,
+  .zpa .zpa-lead,
+  .zpa .zpa-zs i,
+  .zpa .zpa-floor-arc,
+  .zpa .zpa-lead-bar i {
+    animation: none !important;
+  }
+  .zpa .zpa-squish {
+    transition: none;
+  }
+}

@@ -114,13 +114,19 @@ export const DEFAULT_AVATAR = encodeMascot(DEFAULT_MASCOT);
 export const MASCOT_BASE =
   process.env.NEXT_PUBLIC_MASCOT_BASE || "https://pub-62d6d70ed50d44449d464cd43245b69d.r2.dev/site/mascot/v1";
 
-export type MascotSize = 128 | 320;
-export const sizeFor = (px: number): MascotSize => (px <= 64 ? 128 : 320);
+/* 640 (2026-10-09) is the floating creature's: drawn at 320 CSS px it needs
+   twice that on a sharp screen. Same frames as 128 and 320, so the three
+   sizes swap in place. */
+export type MascotSize = 128 | 320 | 640;
+export const sizeFor = (px: number): MascotSize => (px <= 64 ? 128 : px <= 160 ? 320 : 640);
 export function mascotSrc(m: Mascot, mood: Mood, size: MascotSize = 128): string {
   const look = lookOf(m.look);
   const colour = coloursOf(look.id).some((c) => c.id === m.colour) ? m.colour : "own";
   return `${MASCOT_BASE}/${size}/${look.id}-${colour}-${mood}.webp`;
 }
+/* a 640 image that did not load (a bucket the larger set has not reached)
+   is drawn from the 320 one: softer, never broken */
+export const smallerSrc = (src: string): string | null => (src.includes("/640/") ? src.replace("/640/", "/320/") : null);
 
 /* every image the asset set holds, for the upload check */
 export function allImages(): string[] {
