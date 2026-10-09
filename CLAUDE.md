@@ -1655,7 +1655,21 @@ is yours, in Resolve, by hand.
   2026-10-08), which is why "no output" is the release. An element sheet is one Gemini call
   and cannot be stopped once drawing. The job ends `cancelled` with the adapter's own words
   (`detail`), or `done`. Also fixed on the way: a job cancelled while still `queued` used to
-  run anyway (the worker overwrote the status); it now never starts. On the studio surface they
+  run anyway (the worker overwrote the status); it now never starts. **Every studio tool
+  answers TYPED (2026-10-09, step 7):** `src/mcp_shapes.py` is the one set of pydantic models
+  (`SHAPES[tool]`, open -- `extra="allow"`), and `build_server(surface="studio")` registers each
+  tool through `mcp_server._structured`, a wrapper whose `__signature__` keeps the tool's own
+  arguments and declares `Annotated[CallToolResult, SHAPES[tool]]` -- so the SDK publishes an
+  `outputSchema` and validates every answer (a drifted payload is a crash, never a quiet wrong
+  answer). The answer is `structuredContent` (the payload, enriched additively: a spend's
+  `state` = quote / refused / started / already_used / done / failed, a job's `media_url`,
+  `asset_id`, `ref` = `gen:<id>` and `media_kind` lifted off its result) plus text: a short
+  human line FIRST and, while `mcp_shapes.MIRROR_JSON`, the same payload as JSON -- because what
+  a client shows its model is the client's choice and nothing first-party says what Claude
+  Desktop does (Claude Code reportedly reads structuredContent only, claude.ai forwards both);
+  a client that read only the line would lose the `quote_token`. Turn the mirror off after a
+  live check. The board and listed servers are NOT wrapped and return plain dicts as before.
+  On the studio surface they
   are always on (the approval is the gate); on the board surface they sit behind the engine
   flag; the listed server never has them. References are ids, never URLs, in ONE grammar
   shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`

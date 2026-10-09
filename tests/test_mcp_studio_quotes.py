@@ -13,7 +13,6 @@ model after the yes, an expired quote, a short balance).
 """
 
 import asyncio
-import json
 import time
 import types
 from pathlib import Path
@@ -297,7 +296,7 @@ def funded(pg, monkeypatch):
 
 def _call(server, tool, args):
     out = asyncio.run(server.call_tool(tool, args))
-    return json.loads(out.content[0].text)
+    return out.structured_content          # the studio answers typed (step 7)
 
 
 def _balance(w):

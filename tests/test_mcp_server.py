@@ -674,10 +674,14 @@ def _published(server):
 
 
 def _result(call_result):
-    """The dict a tool returned, read off the SDK's text content (a
-    `-> dict` return is serialised as JSON text, not structured content)."""
+    """The dict a tool returned. The studio surface answers with
+    structuredContent (2026-10-09, step 7) and a human line as its first
+    text block; the board and listed servers still return a `-> dict`,
+    serialised as JSON text."""
     import json
 
+    if call_result.structured_content is not None:
+        return call_result.structured_content
     return json.loads(call_result.content[0].text)
 
 

@@ -25,8 +25,8 @@ spend is quoted first and runs only after his yes in chat.
 | step | state | PR / notes |
 |---|---|---|
 | 1. credits + signed single-use quote | built 2026-10-08, PR #200 | see "As built" under step 1 |
-| 6. cancel a job | built 2026-10-09, branch `claude/task-mcp-studio-v2-cancel` (stacked on #200) | see "As built" under step 6 |
-| 7. structured results | not started | |
+| 6. cancel a job | built 2026-10-09, PR #201 (stacked on #200) | see "As built" under step 6 |
+| 7. structured results | built 2026-10-09, branch `claude/task-mcp-studio-v2-structured` (stacked on #201) | see "As built" under step 7 |
 | 2a. join clips | not started | |
 | 3 + 4. viewer + upload | not started | |
 | 2b. finish a clip | not started | |
@@ -148,6 +148,37 @@ any of an error payload, a 404/410/499, or a finished job with no output as "can
 - Every studio tool returns typed data (MCP `outputSchema` + `structuredContent`): ids, credits,
   balance, `media_url`, `asset_id`, job state. Text content stays as a short human line.
 - Same shapes feed the viewer in step 3+4, so define them once.
+
+**As built (2026-10-09).**
+- `src/mcp_shapes.py` is the one place: a pydantic model per studio tool (`SHAPES`), a
+  one-line summary per tool (`SUMMARIES`), `enrich` (additive only: a spend's `state`; a job's
+  `media_url` / `asset_id` / `ref` / `media_kind` lifted off its result) and `result`, which
+  builds the `CallToolResult`. The models are OPEN (`extra="allow"`): they type what a caller
+  and the viewer rely on -- `SpendResult` (`state`, `quote` with `credits` / `balance` /
+  `balance_after` / `quote_token`, `job_id`, `refused` / `needs` / `available`, `media_url`,
+  `asset_id`, `ref`), `Job` (status as a literal, credits, the lifted media), `CancelResult`,
+  the project / render / element / candidate lists, the catalogues -- and let the rest through.
+  The step 3+4 viewer reads these same models.
+- Only the STUDIO surface is wrapped: `_reg` registers each studio tool through
+  `mcp_server._structured`, which keeps the tool's own argument signature and declares
+  `Annotated[CallToolResult, SHAPES[tool]]`, so the SDK (mcp 2.1.1) publishes the
+  `outputSchema` and validates every answer. The board and the listed (directory) server are
+  unchanged: plain dicts, no schema.
+- **Text: the line first, then the JSON (a deliberate deviation from "text stays a short human
+  line").** What a client puts in front of its model is the client's choice; checked
+  2026-10-09, Claude Code reportedly reads `structuredContent` and drops text, claude.ai
+  forwards both, and nothing first-party covers Claude Desktop. If Desktop read only the text,
+  a line alone would hide the `quote_token` and the ids and break step 1. So
+  `mcp_shapes.MIRROR_JSON = True` keeps the payload as a second text block (the MCP spec's own
+  backwards-compatibility advice). To settle it: a live marker check in Claude Desktop (a value
+  only in structuredContent, one only in text, ask Claude to repeat both); if it reads
+  structuredContent, set the switch to False and the text is the line alone.
+- Verified: tests/test_mcp_structured.py (every studio tool has a shape and a line; schemas
+  published on the studio only; real calls for projects, the catalogues, renders, elements,
+  prompt_craft, a quote, a job and cancel_job validate and read as one line; every spend state;
+  a drifted payload raises) and the existing MCP tests read `structuredContent`. Run over the
+  real stdio transport: 18 tools all with an outputSchema; create_project, projects, a quote,
+  an approval, its job and cancel_job each came back as structuredContent plus the line.
 
 ## 2a. Join clips into one video
 
