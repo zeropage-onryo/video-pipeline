@@ -12,12 +12,15 @@
    shows inside the card). The turn it reads is the shared thread's: a
    brain answer whose proposal is make_image, its `made` once approved. */
 import { useState } from "react";
-import { Check, ImagePlus } from "lucide-react";
+import { Check, ImagePlus, UserRound } from "lucide-react";
 import type { Turn } from "@/lib/assistant";
-import { mediaSrc } from "@/lib/composer";
+import { SHEET_TOOL, mediaSrc } from "@/lib/composer";
 import "@/components/studio/still-step.css";
 
 export type StepState = "waiting" | "running" | "done" | "failed";
+
+/** a brain answer that proposes an element sheet (2026-10-09) */
+export const isSheetStep = (t: Turn) => t.role === "assistant" && t.reply?.proposal?.tool === SHEET_TOOL;
 
 /** a brain answer that proposes a still: a step card, wherever it is drawn */
 export const isStillStep = (t: Turn) => t.role === "assistant" && t.reply?.proposal?.tool === "make_image";
@@ -92,6 +95,57 @@ export function StillStep({
           <span className="ss-ok">
             {state === "done" ? <Check strokeWidth={2.2} /> : <span className="ss-live" aria-hidden />}
             {state === "done" ? "Approved" : "Generating…"}
+          </span>
+        )}
+        {line ? <small>{line}</small> : null}
+      </div>
+    </div>
+  );
+}
+
+const SHEET_LABEL: Record<StepState, string> = {
+  waiting: "Waiting for approval",
+  running: "Drawing",
+  done: "Done",
+  failed: "Not drawn",
+};
+
+/* The element sheet's step (2026-10-09): who is saved and what is drawn
+   (the turn's own line, written by src/creative_guide), Approve, and the
+   price of one still under it -- a sheet is one Nano Banana Pro still. The
+   sheet itself lands below as the turn's tile, like a still. */
+export function SheetStep({
+  turn,
+  line,
+  busy,
+  onApprove,
+}: {
+  turn: Turn;
+  line: string;
+  busy: boolean;
+  onApprove: () => void;
+}) {
+  const { state } = stepOf(turn);
+  const args = (turn.reply?.proposal?.args ?? {}) as { name?: unknown };
+  const name = typeof args.name === "string" ? args.name : "";
+  return (
+    <div className="ss" data-state={state}>
+      <div className="ss-head">
+        <UserRound strokeWidth={1.6} />
+        <b>Element sheet</b>
+        <span>16:9</span>
+        <em>{SHEET_LABEL[state]}</em>
+      </div>
+      <p className="open">{turn.content}</p>
+      <div className="ss-go">
+        {state === "waiting" || state === "failed" ? (
+          <button type="button" disabled={busy} onClick={onApprove}>
+            {state === "failed" ? "Approve again" : "Approve"}
+          </button>
+        ) : (
+          <span className="ss-ok">
+            {state === "done" ? <Check strokeWidth={2.2} /> : <span className="ss-live" aria-hidden />}
+            {state === "done" ? `Saved${name ? ` ${name}` : ""} to Elements` : "Drawing…"}
           </span>
         )}
         {line ? <small>{line}</small> : null}
