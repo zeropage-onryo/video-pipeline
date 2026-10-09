@@ -146,7 +146,8 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # MMAudio sound) and element_sheet, each quoted first IN CREDITS and spent only
 # after a yes in chat (quote_token: signed over the exact request, used once --
 # a SIGNING SECRET is needed, QUOTE_SIGNING_SECRET, or nothing can be approved),
-# plus image_models / video_models / effects / elements /
+# plus cancel_job (stops one; the money follows fal's own answer), and
+# image_models / video_models / effects / elements /
 # renders / images_for / prompt_craft, and PROJECTS (projects / project /
 # project_chat / create_project / save_chat; project_id on a render files it there).
 # NO board tools. --surface board (or
@@ -1639,7 +1640,22 @@ is yours, in Resolve, by hand.
   starts and charges nothing. A short balance is a STRUCTURED refusal (`refused:
   insufficient_credits`, `needs`, `available`), never a tool error, and leaves the token
   unspent. No `QUOTE_SIGNING_SECRET` = quotes still answer, with no token and a note, and
-  nothing can be approved (the Mac's `.env` had none on 2026-10-08). On the studio surface they
+  nothing can be approved (the Mac's `.env` had none on 2026-10-08). **`cancel_job`
+  (2026-10-08, step 6)** stops one of those jobs (`_run(..., _cancellable=True)` makes them
+  cancellable; `app/jobs.cancel` only FLAGS a running job). The flag reaches the adapters
+  through `src/cancellation.py`, a contextvar the job runner binds in its worker thread (the
+  `charge.metering` shape). Two places act on it: `Charge.submitted()` -- the last line before
+  every provider call -- releases the hold and raises `Cancelled` (nothing sent, no failed row
+  owed); and `fal._submit_and_wait`'s poll loop PUTs fal's `cancel_url` (the `fal.CANCEL`
+  sentinel through the same `http` seam) and lets FAL'S ANSWER decide: an error payload
+  (`client_cancelled`), a 404/410/499 or no output after a `CANCELLATION_REQUESTED` ->
+  `Cancelled`, released; an output anyway, or `ALREADY_COMPLETED` -> kept, settled, filed, the
+  job's result marked `cancel_too_late`; `NOT_FOUND` -> released; no answer (network) ->
+  nothing assumed, asked again next poll. fal bills only successful outputs (its pricing page,
+  2026-10-08), which is why "no output" is the release. An element sheet is one Gemini call
+  and cannot be stopped once drawing. The job ends `cancelled` with the adapter's own words
+  (`detail`), or `done`. Also fixed on the way: a job cancelled while still `queued` used to
+  run anyway (the worker overwrote the status); it now never starts. On the studio surface they
   are always on (the approval is the gate); on the board surface they sit behind the engine
   flag; the listed server never has them. References are ids, never URLs, in ONE grammar
   shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`

@@ -189,7 +189,18 @@ class Charge:
         return int(self.quote.credits)
 
     def submitted(self) -> None:
-        """The last line before the provider call."""
+        """The last line before the provider call -- and so the last moment
+        a cancel costs nothing (2026-10-08, src/cancellation.py): if the
+        person asked to stop, the hold is released HERE and Cancelled is
+        raised, before `attempted` is set, so no provider call is made and
+        no failed-attempt row is owed."""
+        from . import cancellation
+        if cancellation.requested():
+            given_back = self.release("cancelled before the provider was called")
+            raise cancellation.Cancelled(
+                "cancelled before anything was sent to the provider -- nothing "
+                "was charged" + (f" ({given_back} credits held were released)"
+                                 if given_back else ""))
         self.attempted = True
         if self.hold_id is not None:
             ledger.mark_submitted(self.hold_id, dsn=self.dsn)

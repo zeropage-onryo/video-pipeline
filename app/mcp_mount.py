@@ -376,7 +376,7 @@ def guarded(app, secret: str, resolve=None, limiter: Optional[RateLimiter] = Non
 
 
 def build(dsn=None, start_job=None, job_status=None, approve_render=None,
-          approve_keyframes=None):
+          approve_keyframes=None, cancel_job=None):
     """The (asgi_app, session_manager) pair, or (None, None) when MCP is
     off or misconfigured.
 
@@ -406,6 +406,9 @@ def build(dsn=None, start_job=None, job_status=None, approve_render=None,
             job_status=job_status,
             approve_render=approve_render,
             approve_keyframes=approve_keyframes,
+            # the operator's door has the spending tools under the engine
+            # flag, so it can stop them; the listed server has neither
+            cancel_job=cancel_job,
         )
         listed = mcp_server.build_server(
             dsn=dsn,

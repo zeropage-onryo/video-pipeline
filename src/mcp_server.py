@@ -131,6 +131,7 @@ TITLES = {
     "research": "Run a research pass (spends)",
     "generate": "Write a scene from a direction (spends)",
     "job": "Check a background job",
+    "cancel_job": "Cancel a render, effect or sheet in progress",
     "elements": "List your elements (reference photos)",
     "write_scene": "Save a scene prompt onto an idea",
     "quote": "Price the keyframes and the clip",
@@ -281,6 +282,18 @@ DESCRIPTIONS = {
         "started in the studio: status, "
         "label, progress detail and the result or error when it finished. "
         "Jobs live in memory, so a server restart forgets them. Read-only."
+    ),
+    "cancel_job": (
+        "Stop an image, clip, effect or sheet this connector started, by its "
+        "`job_id`. What is given back depends on how far it got, and the reply "
+        "says which: not yet sent to the renderer -- stopped, nothing charged; "
+        "waiting in the renderer's queue -- removed, nothing charged; already "
+        "rendering -- the renderer is asked to stop, and if it still finishes "
+        "the result is kept and charged at the quoted price, otherwise nothing "
+        "is charged; already finished or being saved -- too late, charged and "
+        "kept. A sheet that is already being drawn finishes. Poll `job` to see "
+        "how it ended (cancelled, or done). Only jobs this connector's render "
+        "tools started can be cancelled here."
     ),
     "elements": (
         "Your elements: the characters, props and places whose photos you "
@@ -466,6 +479,7 @@ HINTS = {
     "research":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "generate":          {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "job":               {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "cancel_job":        {"read": False, "destructive": False, "idempotent": True,  "open_world": True},
     "elements":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "write_scene":       {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
     "quote":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
@@ -512,7 +526,8 @@ LISTED_TOOLS = ("board", "idea", "search", "capture", "pick", "shoot",
 STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_chat",
                 "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
-                "generate_video", "apply_effect", "element_sheet", "job")
+                "generate_video", "apply_effect", "element_sheet", "job",
+                "cancel_job")
 SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
 SURFACES = ("board", "studio")
 STUDIO_INSTRUCTIONS = (
@@ -1421,6 +1436,90 @@ def start_approved(fn, args: dict, start) -> dict[str, Any]:
         print(f"note: quote {approved.token_id} redeemed but its job was not recorded "
               f"({type(e).__name__}: {e})", file=sys.stderr)
     return {**out, "quote": pre["quote"]} if "quote" not in out else out
+
+
+FINISHED = ("done", "failed", "cancelled")
+
+# What a cancel gives back, said once and the same way to the person and in
+# the tool's reply (2026-10-08). The money follows fal's own answer: fal
+# bills only successful outputs (fal.ai/docs/documentation/model-apis/
+# pricing), so a job that ends with no output is released, and one that
+# finishes anyway is kept and charged at the quoted price.
+CANCEL_OUTCOMES = (
+    "How it ends depends on how far it got: not yet sent to the renderer -> "
+    "stopped, nothing charged; waiting in the renderer's queue -> removed, "
+    "nothing charged; already rendering -> the renderer is asked to stop, and "
+    "if it finishes anyway the result is kept and charged at the quoted price, "
+    "otherwise nothing is charged; finished or being saved -> too late, "
+    "charged and kept. A sheet already being drawn finishes."
+)
+
+
+def _spent_line(snap: dict) -> str:
+    credits = snap.get("credits")
+    if not credits:
+        return ""
+    return (f" It cost {credits} credits." if snap.get("charged", True)
+            else f" It would have cost {credits} credits; this account is not charged.")
+
+
+def cancel_studio_job(job_id: int, *, job_status, cancel,
+                      account_id: Optional[int]) -> dict[str, Any]:
+    """Ask the job registry to stop one of this account's jobs, and say
+    honestly what that will and will not give back.
+
+    The registry only FLAGS a running job (app/jobs.cancel); the job's own
+    worker acts on it where it still changes the money -- before the
+    provider call (charge.Charge.submitted) and while fal has the job
+    (fal._submit_and_wait, which asks fal's cancel URL and lets fal's
+    answer decide). So the answer here is "requested", and `job` says how
+    it ended. A job nobody made cancellable (not one of this connector's
+    render tools) is reported as such, never pretended at."""
+    snap = job_status(int(job_id), account_id=account_id)
+    if snap is None:
+        raise ValueError(f"no job {job_id} -- jobs live in memory and a restart "
+                         "clears them")
+    base = {"job_id": snap["id"], "label": snap.get("label")}
+    if snap["status"] in FINISHED:
+        return {**base, "status": snap["status"], "cancelled": snap["status"] == "cancelled",
+                "note": (f"Job {snap['id']} already finished ({snap['status']}); there is "
+                         "nothing to cancel." + _spent_line(snap))}
+    if not snap.get("cancellable"):
+        return {**base, "status": snap["status"], "cancelled": False,
+                "note": ("This job cannot be cancelled from here: only the images, "
+                         "clips, effects and sheets this connector starts can be. It "
+                         "will finish on its own.")}
+    after = cancel(int(job_id), account_id=account_id) or snap
+    if after["status"] == "cancelled":
+        return {**base, "status": "cancelled", "cancelled": True,
+                "note": "Cancelled before it started: nothing was held or spent."}
+    return {**base, "status": after["status"], "cancelled": False, "cancel_requested": True,
+            "note": (f"Cancel requested. {CANCEL_OUTCOMES} Poll `job`: it ends as "
+                     "`cancelled` (nothing charged) or `done` (it finished first: "
+                     "charged, and the result is filed).")}
+
+
+def _cancellable_body(fn, kwargs: dict):
+    """A spending job's body (2026-10-08): the tool, then the truth about a
+    cancel. When the person asked to stop and the work came back with
+    nothing, the job ends `cancelled` with the adapter's own words (which
+    say what was released); when it came back WITH a result, the cancel was
+    too late and the result says so -- charged and kept."""
+    from . import cancellation
+
+    def body(job):
+        out = fn(**kwargs)
+        if cancellation.requested():
+            if not (isinstance(out, dict) and out.get("ok")):
+                raise cancellation.Cancelled(
+                    (out or {}).get("error") or "cancelled -- nothing was charged",
+                    result=out)
+            out = {**out, "cancel_too_late": True,
+                   "note": ("The cancel came too late: the renderer had already "
+                            "finished it, so it was charged at the quoted price and "
+                            "is filed like any render.")}
+        return {"result": out}
+    return body
 
 
 CRAFT_STEPS = ("refine", "enhance", "still", "beats")
@@ -2686,7 +2785,7 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                  start_job=None, job_status=None, account_id: Optional[int] = None,
                  engine: Optional[bool] = None, listed: bool = False,
                  approve_render=None, approve_keyframes=None,
-                 surface: str = "board"):
+                 surface: str = "board", cancel_job=None):
     """Wrap the functions above as an MCP server.
 
     `surface` (2026-10-07, Mike's call) picks WHICH server. "board" is
@@ -2791,14 +2890,21 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
     def _run(fn, *args, **kwargs):
         """Engine tools go through the job registry when one was
         injected, and return a job id instead of a result. The job is
-        the caller's (resolved here, in the request)."""
+        the caller's (resolved here, in the request). `_cancellable`
+        (the spending tools) makes it one `cancel_job` can stop."""
         label = kwargs.pop("_label", fn.__name__)
+        cancellable = kwargs.pop("_cancellable", False)
         if start_job is None:
             return _t(fn, *args, **kwargs)
-        job = start_job("mcp", label, lambda job: {"result": fn(*args, **kwargs)},
-                        account_id=_account(account_id, dsn))
+        if cancellable:
+            job = start_job("mcp", label, _cancellable_body(fn, kwargs), cancellable=True,
+                            account_id=_account(account_id, dsn))
+        else:
+            job = start_job("mcp", label, lambda job: {"result": fn(*args, **kwargs)},
+                            account_id=_account(account_id, dsn))
         return {"job_id": job["id"], "status": job["status"], "label": label,
-                "note": "started; poll with the `job` tool"}
+                "note": ("started; poll with the `job` tool"
+                         + ("; `cancel_job` stops it" if cancellable else ""))}
 
     @_reg("board")
     def board(brand: Optional[Brand] = None, status: Status = "open",
@@ -2971,7 +3077,7 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
             if not (args.get("quote_token") or "").strip():
                 return _t(fn, **args)                 # a quote: instant, free
             return _t(start_approved, fn, args,
-                      lambda: _run(fn, **args, _label=label))
+                      lambda: _run(fn, **args, _label=label, _cancellable=True))
 
         @_reg("generate_image")
         def generate_image(prompt: str, model: str = "", aspect: str = "",
@@ -3054,6 +3160,15 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                 )
             return snap
 
+    # Stopping a render (2026-10-08, task-mcp-studio-v2 step 6): wherever the
+    # spending tools are, and only with a registry to ask -- never listed.
+    if cancel_job is not None and job_status is not None \
+            and (engine_on or studio) and not listed:
+        @_reg("cancel_job")
+        def cancel_job_tool(job_id: int) -> dict:
+            return _t(cancel_studio_job, job_id, job_status=job_status, cancel=cancel_job,
+                      account_id=_account(account_id, dsn))
+
     return server
 
 
@@ -3135,11 +3250,11 @@ def main(argv=None) -> int:
     # registry with an odd import beats two implementations that drift.
     try:
         from app import jobs
-        start_job, job_status = jobs.start, jobs.get
+        start_job, job_status, cancel_job = jobs.start, jobs.get, jobs.cancel
     except Exception as exc:                    # surfaced, never silent
         print(f"note: no job registry ({type(exc).__name__}: {exc}) -- engine "
               "tools will run inline and may time out", file=sys.stderr)
-        start_job = job_status = None
+        start_job = job_status = cancel_job = None
 
     # The STUDIO surface unless asked otherwise (2026-10-07, Mike's call):
     # this is what Claude Desktop launches, and it is for making things,
@@ -3148,7 +3263,7 @@ def main(argv=None) -> int:
     if surface not in SURFACES:
         surface = "studio"
     build_server(dsn=dsn, start_job=start_job, job_status=job_status,
-                 surface=surface).run("stdio")
+                 cancel_job=cancel_job, surface=surface).run("stdio")
     return 0
 
 
