@@ -29,8 +29,8 @@ spend is quoted first and runs only after his yes in chat.
 | 7. structured results | built 2026-10-09, PR #202 (stacked on #201) | see "As built" under step 7 |
 | 2a. join clips | built 2026-10-09, PR #204 (stacked on #202) | see "As built" under step 2a |
 | 3 + 4. viewer + upload | `import_file` built 2026-10-09, PR #205 (stacked on #204); MCP Apps NOT built -- gate not passed, see below | see "Verification" and "As built" under step 3 + 4 |
-| 2b. finish a clip | built 2026-10-10, branch `claude/task-mcp-studio-v2-finish` (stacked on #205) | see "As built" under step 2b |
-| 2c. edit by instruction | not started | |
+| 2b. finish a clip | built 2026-10-10, PR #207 (stacked on #205) | see "As built" under step 2b |
+| 2c. edit by instruction | researched and built 2026-10-10, branch `claude/task-mcp-studio-v2-edit` (stacked on #207) | see "Findings" and "As built" under step 2c |
 
 ## 1. Approve in studio credits, with a signed single-use quote
 
@@ -351,6 +351,96 @@ model page embeds (`billing_unit` + `price`), which is more exact than the page'
 - Build as `edit_clip(source gen:<id>, instruction, ...)` with a two-stage flow: edit ONE frame as
   a cheap still and show it (quote 1), then the full video edit (quote 2) after Mike approves the
   frame.
+
+**Findings (2026-10-10), written before building.** Method: fal's own catalogue
+(`fal.ai/api/models?categories=video-to-video`, 202 models that day), then for every candidate its
+OpenAPI schema and the price on its model page -- the endpoint's OWN `pricingInfoOverride` and
+its `endpointBilling` record (a page also embeds its siblings' price texts, so a number is only
+used when it is pinned to the endpoint id). "Frame" = whether an edited still can steer the edit,
+which is what the two-stage flow needs.
+
+| endpoint | what it is | limits (source clip) | price | frame |
+|---|---|---|---|---|
+| `fal-ai/kling-video/o1/standard/video-to-video/edit` | Kling O1 Edit: natural-language edit of subjects, settings, style | mp4/mov, 3.0-10.05s, 720-2160px each side, 24-60fps, <=200MB | $0.126 / s | `image_urls` (<=4), named `@Image1` in the prompt, "for style/appearance" |
+| `fal-ai/kling-video/o1/video-to-video/edit` | the same, Pro | same | $0.168 / s | same |
+| `fal-ai/kling-video/o3/{standard,pro}/video-to-video/edit` | Kling O3 Edit | mp4/mov, 3-15s, 720-3840px, <=200MB | page text $0.126 / $0.168 per s, billing record 0.14 for BOTH -- they disagree | `image_urls` |
+| `fal-ai/kling-video/o3/4k/video-to-video/edit` | Kling O3 Edit, native 4K | same | $0.42 / s | `image_urls` |
+| `blackforestlabs/flux-3/edit-video` | FLUX.3 Edit Video [FAST]: "re-rendered preserving motion, timing, and framing" | MP4, under 50MB, under 15s; 720p out | $0.03 / s generated | none (prompt only) |
+| `fal-ai/wan/v2.7/edit-video` | Wan 2.7 edit / style transfer | mp4/mov, 2-10s, <=100MB; 720p or 1080p out | own text: $0.10 (720p) / $0.15 (1080p) per OUTPUT second; a sibling text says input + output seconds are both billed | `reference_image_url` (one) |
+| `alibaba/happy-horse/video-edit` | HappyHorse edit by instruction | mp4/mov, 3-60s, longer side <=2160, shorter >=320, >8fps, <=100MB | $0.28 / s at 720p, $0.56 at 1080p (input + output seconds); billing record "units 0.14" | `reference_image_urls` (<=5, `@Image1`) |
+| `luma/agent/ray/v3.2/video-to-video` | Luma Ray 3.2 re-render, `edit_strength` adhere/flex/reimagine | output is 5s or 10s, not the source's length | 5s: $0.72 / 1.08 / 2.16 at 540/720/1080p; 10s: double | `start_image_url`: "a restyled version of the source's opening frame to steer the look of the edit" -- the closest fit on paper; `keyframes` (<=64) |
+| `fal-ai/id-v2v` (+ `/relight`) | restyle scene/lighting FROM an edited first frame, keeping a segmented subject | <=241 frames; 480p or 720p out | $0.20 / s | `image_url` REQUIRED (the restyled first frame) |
+| `google/gemini-omni-flash/v1.1/edit` | Gemini Omni Flash 1.1 edit | none published | per output second: $0.03 (360p), $0.10 (720p), $0.15 (1080p), $0.30 (4K) | none |
+| `google/gemini-omni-flash/edit` | the older one | none published | billed per TOKEN ("approximately $0.13 / s") | none |
+| `xai/grok-imagine-video/edit-video` | Grok Imagine edit | resized to max 854x480 area, truncated to 8s | $0.06 / s at 480p, $0.08 at 720p (output + input) | none |
+| `fal-ai/bernini-r/edit-video`, `/reference-edit-video` | Bernini-R instruction edit | <=121 frames (7.5s at 16fps), long edge <=1280 | $0.08 / s at 848px, x0.5 at <=576px, x2 at 1280px | reference variant: `reference_image_urls` (<=5, required) |
+| `fal-ai/editto`, `fal-ai/wan-vace-apps/video-edit` | Wan-VACE instruction edits | 81-241 frames at 16fps | $0.04-0.10 per "video second" at 16fps by resolution | VACE app: `image_urls` |
+| `decart/lucy-restyle` | whole-look restyle | "up to 30 min" | $0.01 / s | none |
+| `fal-ai/krea-wan-14b/video-to-video` | fast v2v | 16:9 at 480p only | $0.025 / output s at 16fps | none |
+
+What the research decides:
+- **Built: Kling O1 Edit (Standard, default; Pro) and FLUX.3 Edit Video.** Kling O1 has ONE
+  unambiguous per-second price, published limits that fit this studio's clips (3-10s, >=720px), and
+  takes the approved frame as `@Image1`. FLUX.3 is the cheap one ($0.03 / s, about a quarter of
+  Kling), prompt only -- there the frame is a preview of the instruction, not a steer, and the
+  quote says so.
+- **Not built, and why:** Kling O3 -- its page text and its billing record give different prices,
+  so a quote could be wrong either way (re-check; it adds 15s clips). Wan 2.7 and HappyHorse --
+  whether input seconds are billed on top of output seconds is stated two ways. Luma Ray 3.2 --
+  `start_image_url` is the best fit for "approve a frame, then the video", but its output is a
+  fixed 5s or 10s rather than the clip's own length, and what it does with an 8s source is not
+  published; worth a live look before wiring. id-v2v -- a first-frame restyle that keeps a
+  SEGMENTED subject, a narrower tool than "edit by instruction". Gemini Omni (v1) -- token
+  billing, no price to quote. Grok -- 480p and 8s. Bernini-R, Editto, VACE -- priced on a
+  resampled frame count at a forced resolution, the Wan VACE outpaint's problem (step 2b).
+- **The two stages:** (1) one frame of the clip (`at` seconds in, the first by default) is pulled
+  with ffmpeg here, free, and edited as a still by the studio's identity-keeping image editor
+  (`nano-banana-edit`, $0.039) -- QUOTE 1; the still lands on the Assets wall and is shown.
+  (2) `stage="video"` takes that still's `gen:<id>` as `frame`, and refuses any other image: it
+  must be a frame this tool made from THIS clip with THIS instruction -- QUOTE 2, priced off the
+  measured clip. Both quotes are the signed single-use kind (step 1).
+
+**As built (2026-10-10).**
+- `edit_clip(source, instruction, stage="frame"|"video", frame="", model="", at=0.0,
+  keep_audio=true, quote_token="", project_id=None)` -- ONE tool with a `stage` argument (21
+  studio tools; the board has it under the engine flag; never listed). `source` is a `gen:<id>`
+  clip or an imported `asset:<id>` clip.
+- `src/clip_edit.py`: the dated table (`MODELS`, `CHECKED` 2026-10-10), `check_clip` (each
+  model's published limits, refused BEFORE the quote), `video_usd` (clip seconds x rate),
+  `options_for` (every model priced or explained for this clip), `frame_prompt`, `video_body`
+  (Kling: `image_urls=[frame]` + "Match @Image1..." appended, `keep_audio`; FLUX.3: `prompt` +
+  `video_url` only) and `extract_frame` (ffmpeg). The models are NOT `effects.EFFECTS` rows --
+  there they would be one `apply_effect` call away with no frame -- so `effects.run` gained
+  `row` / `endpoint_body` / `extra`, and the video still takes that body's key check, cap, hold,
+  generations row and wall record.
+- Stage `frame`: the clip is measured, `at` must be inside it, the quote is one still edit
+  (`nano-banana-edit`, $0.039 = 10 credits) and carries `then`: each model's price in dollars
+  and credits for THIS clip, or `cannot` with the limit it breaks. After the yes: the frame is
+  pulled, made fetchable (the bucket), edited with "<instruction>. Keep everything else in the
+  frame exactly as it is...", filed on the wall with `metadata.edit_clip = {stage: frame,
+  source, instruction, at}`, and the result names it (`frame: gen:<id>`) with the next call.
+- Stage `video`: `_approved_frame` refuses a missing frame, an image this tool did not make, a
+  frame of another clip and a frame made with a different instruction (the instruction is
+  compared whitespace-collapsed; the frame's own is echoed in the refusal). Then the model's
+  limits, then the quote off the measured clip. The token binds stage, source, instruction,
+  frame, model, keep_audio and project.
+- `kling-o1` is the default; `kling-o1-pro` and `flux-3` are named explicitly. For FLUX.3 the
+  quote carries `frame_steers: false`: the frame was a preview of the instruction, the model
+  never sees it.
+- Verified: tests/test_mcp_edit_clip.py (38) -- the table, prices and every limit; the wire
+  bodies; a real ffmpeg frame pull; every refusal before a quote; the frame gate; a changed
+  model after the yes refused; and the conversation on the REAL ledger and wall with only fal's
+  wire, the bucket and the frame pull stood in for: the video cannot be bought first, the frame
+  costs 10 credits, a frame does not approve a different instruction, the video costs 242 for
+  8s, the same yes again starts and charges nothing. Over the real stdio server with real
+  clips: the frame quote measured each clip and listed the models (a 360x640 clip and a 13s
+  clip each got Kling's `cannot` and FLUX.3's price), the video stage was refused without a
+  frame, and an approved frame ran the real ffmpeg pull and stopped at "the studio's bucket is
+  not configured" (that worktree has no R2) with nothing spent. **No live fal call was made**:
+  the Kling prompt wording around `@Image1` in particular is unproven until a real edit.
+- To add a model: re-read the findings table, add a `MODELS` row with its limits, price and
+  how it takes the frame (`"reference"` or None), and a `video_body` branch if its wire differs.
+  Luma Ray 3.2's `start_image_url` is the one worth a live look next.
 
 ## 8. Alongside every step
 

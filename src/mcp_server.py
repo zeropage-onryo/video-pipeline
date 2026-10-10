@@ -134,6 +134,7 @@ TITLES = {
     "cancel_job": "Cancel a render, effect or sheet in progress",
     "assemble_clips": "Join clips into one video (no credits)",
     "import_file": "Import an image or clip from this computer",
+    "edit_clip": "Edit a clip by instruction, a frame first (quoted, spends credits)",
     "elements": "List your elements (reference photos)",
     "write_scene": "Save a scene prompt onto an idea",
     "quote": "Price the keyframes and the clip",
@@ -312,6 +313,23 @@ DESCRIPTIONS = {
         "server. Runs in the background: poll `job`; the result is a new "
         "`gen:<id>` on your Assets wall (usable as a source like any clip) and "
         "an editable cut in the studio's editor."
+    ),
+    "edit_clip": (
+        "SPENDS CREDITS. Change something IN a clip by instruction (\"make the "
+        "jacket red\", \"turn day to dusk\"), in two stages, each quoted and "
+        "approved on its own. `source` is a clip (`gen:<id>` or an imported "
+        "`asset:<id>`). Stage `frame` (the default) edits ONE frame of it as a "
+        "still, for a few credits -- `at` is the second to take it from (0 = "
+        "the first) -- and its quote also lists what the whole clip would cost "
+        "on each model, or why a model cannot take this clip. Show the person "
+        "that still and wait. Stage `video` then edits the whole clip and takes "
+        "that still's `gen:<id>` as `frame`, with the SAME source and "
+        "instruction; any other image is refused. `model` is kling-o1 (the "
+        "default: clips of 3-10s and at least 720px, the approved frame steers "
+        "it), kling-o1-pro, or flux-3 (far cheaper, mp4 under 15s, 720p out, "
+        "follows the instruction only). `keep_audio` keeps the clip's sound "
+        f"where the model can. {_APPROVAL} {_PROJECT_FILING} After each yes it "
+        "runs in the background: poll `job`."
     ),
     "import_file": (
         "Bring an image or a clip from this computer into the studio, by its "
@@ -515,6 +533,7 @@ HINTS = {
     "cancel_job":        {"read": False, "destructive": False, "idempotent": True,  "open_world": True},
     "assemble_clips":    {"read": False, "destructive": False, "idempotent": False, "open_world": False},
     "import_file":       {"read": False, "destructive": False, "idempotent": False, "open_world": False},
+    "edit_clip":         {"read": False, "destructive": True,  "idempotent": False, "open_world": True},
     "elements":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "write_scene":       {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
     "quote":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
@@ -562,7 +581,7 @@ STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_c
                 "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
                 "generate_video", "apply_effect", "element_sheet", "job",
-                "cancel_job", "assemble_clips", "import_file")
+                "cancel_job", "assemble_clips", "import_file", "edit_clip")
 SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
 SURFACES = ("board", "studio")
 STUDIO_INSTRUCTIONS = (
@@ -1322,7 +1341,7 @@ def _project_refs(dsn, account_id, project_id: Optional[int] = None) -> list[dic
 # a quote's provider against the hold's): fal for images, clips and effects,
 # the still adapter for an element's sheet.
 SPEND_PROVIDERS = {"generate_image": "fal", "generate_video": "fal",
-                   "apply_effect": "fal", "element_sheet": "nano"}
+                   "apply_effect": "fal", "element_sheet": "nano", "edit_clip": "fal"}
 
 
 def _project_arg(project_id) -> Optional[int]:
@@ -1572,6 +1591,7 @@ CRAFT_STEPS = ("refine", "enhance", "still", "beats")
 CraftStep = Literal[CRAFT_STEPS]
 RenderKind = Literal["image", "video", "audio", "upload"]
 JoinTransition = Literal["cut", "crossfade"]
+EditStage = Literal["frame", "video"]
 
 
 def get_prompt_craft(step: str, prompt: str, model: str = "", tool: str = "",
@@ -2160,6 +2180,158 @@ def _uploads(cap: int, dsn, account_id, *, kinds: tuple) -> dict[str, Any]:
                 "no audio uploaded yet -- add a music file in the studio's editor (Timeline)"
                 if kinds == ("audio",) else
                 "nothing imported yet -- `import_file` brings in an image or a clip")}
+
+
+def _clip_file(row: dict, account_id) -> tuple[str, str, Optional[int]]:
+    """A clip row -> (what ffmpeg/ffprobe can open, its suffix, its size in
+    bytes when the file is on this disk)."""
+    local = row.get("output_path") or ""
+    if local and Path(local).is_file():
+        return local, Path(local).suffix.lower(), Path(local).stat().st_size
+    url = _view(row.get("media_url"), account_id) or ""
+    return url, Path(url.split("?", 1)[0]).suffix.lower(), None
+
+
+def _approved_frame(frame: str, source: str, instruction: str, dsn, account_id) -> dict:
+    """The still stage 1 made, or ValueError. The video stage takes ONLY a
+    frame this tool edited from this clip with this instruction -- so the
+    dear half cannot be bought without the cheap half having been made to
+    look at, and a frame of another clip cannot stand in for it."""
+    from . import render_assets
+    kind, _, rest = (frame or "").strip().partition(":")
+    if kind != "gen" or not rest.isdigit():
+        raise ValueError("stage=\"video\" needs `frame`: the gen:<id> of the edited frame "
+                         "you showed the person -- run stage=\"frame\" first")
+    row = render_assets.get(int(rest), dsn, account_id=account_id)
+    if not row or row.get("deleted_at") or row.get("media_kind") != "image":
+        raise ValueError(f"no edited frame {frame} on this account -- stage=\"frame\" makes one")
+    made = (row.get("metadata") or {}).get("edit_clip") or {}
+    if made.get("stage") != "frame":
+        raise ValueError(f"{frame} is not a frame this tool edited -- stage=\"frame\" makes "
+                         "the one to approve")
+    if made.get("source") != source:
+        raise ValueError(f"{frame} was made from {made.get('source')}, not {source} -- a "
+                         "frame only stands for its own clip")
+    if made.get("instruction") != instruction:
+        raise ValueError(f"{frame} was made with a different instruction ({made.get('instruction')!r}). "
+                         "Use that instruction exactly, or make a new frame for this one")
+    return row
+
+
+def run_edit_clip(source: str, instruction: str, stage: str = "frame", frame: str = "",
+                  model: str = "", at: float = 0.0, keep_audio: bool = True,
+                  quote_token: str = "", dsn: Optional[str] = None,
+                  account_id: Optional[int] = None, dry_run: bool = False,
+                  project_id: Optional[int] = None) -> dict[str, Any]:
+    """Edit a clip by instruction, a frame first (2026-10-10,
+    task-mcp-studio-v2 step 2c; src/clip_edit.py has the models and why).
+
+    `stage="frame"`: one frame of the clip, pulled here with ffmpeg and
+    edited as a still (clip_edit.FRAME_EFFECT) -- quote 1. Its quote lists
+    what the video stage would cost on every model for THIS clip, so the
+    whole price is known before the first credit. `stage="video"`: the
+    whole clip on one model -- quote 2 -- and only with the gen:<id> of a
+    frame stage 1 made from this clip with this instruction
+    (`_approved_frame`). Both go through `approval_gate`; every check runs
+    before either quote."""
+    from . import clip_edit, effects, fal
+    stage = (stage or "frame").strip().lower()
+    if stage not in clip_edit.STAGES:
+        raise ValueError(f"stage must be one of {list(clip_edit.STAGES)}, got {stage!r}")
+    source = (source or "").strip()
+    instruction = clip_edit.normal(instruction)
+    row = _clip_row(source, dsn, account_id)
+    target, suffix, size = _clip_file(row, account_id)
+    filed = _filed_under(project_id, dsn, account_id)
+
+    if stage == "frame":
+        probe = effects.probe_video(target)
+        try:
+            at = float(at or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"`at` is a number of seconds into the clip, got {at!r}") from None
+        if not 0 <= at < probe["seconds"]:
+            raise ValueError(f"`at` must be inside the clip (0 to {probe['seconds']:g}s), "
+                             f"got {at:g}")
+        usd = clip_edit.frame_usd()
+        still = effects.spec(clip_edit.FRAME_EFFECT)
+        from . import ledger
+        then = [{**o, **({"credits": ledger.charge_credits(o["usd"])} if "usd" in o else {})}
+                for o in clip_edit.options_for(probe, suffix=suffix, size_bytes=size)]
+        quote = {"stage": "frame", "source": source, "instruction": instruction, "at": at,
+                 "frame_model": still["label"], "usd": usd, "source_clip": probe,
+                 "then": then, **filed}
+        stop, approved, price = approval_gate(
+            usd, quote_token, tool="edit_clip", what="Editing one frame of this clip",
+            args={"stage": "frame", "source": source, "instruction": instruction, "at": at,
+                  "project_id": _project_arg(project_id)},
+            account_id=account_id, dsn=dsn)
+        quote.update(price)
+        if stop is not None:
+            return {**stop, "quote": quote}
+        if dry_run:
+            return {"ok": True, "dry_run": True, "quote": quote, "approved": approved}
+        import tempfile
+        try:
+            with tempfile.TemporaryDirectory(prefix="zpf-frame-") as tmp:
+                shot = clip_edit.extract_frame(target, at, Path(tmp) / "frame.jpg")
+                frame_url = fal.as_image_url(shot.read_bytes(), account_id=account_id)
+        except ValueError as e:
+            return {"ok": False, "error": str(e), "quote": quote}
+        if not frame_url:
+            return {"ok": False, "quote": quote,
+                    "error": "the frame could not be made fetchable for the renderer "
+                             "(the studio's bucket is not configured)"}
+        res = effects.run(
+            clip_edit.FRAME_EFFECT, [frame_url], clip_edit.frame_prompt(instruction),
+            effects.check_options(clip_edit.FRAME_EFFECT, {}), usd=usd, sources=[source],
+            account_id=account_id, db_path=dsn, source="mcp", project_id=project_id,
+            quote=approved,
+            extra={"edit_clip": {"stage": "frame", "source": source,
+                                 "instruction": instruction, "at": at}})
+        if res.get("ok") and res.get("asset_id"):
+            made = f"gen:{res['asset_id']}"
+            res = {**res, "frame": made,
+                   "next": (f"Show the person this edited frame ({made}). If they approve it, "
+                            f"call edit_clip again with stage=\"video\", frame=\"{made}\" and "
+                            "the same source and instruction; that call quotes the whole clip.")}
+        return {**res, "quote": quote}
+
+    model = (model or "").strip() or clip_edit.DEFAULT_MODEL
+    m = clip_edit.spec(model)
+    _approved_frame(frame, source, instruction, dsn, account_id)
+    frame = frame.strip()
+    urls, probe = _video_sources([source], dsn, account_id)
+    clip_edit.check_clip(model, probe, suffix=suffix, size_bytes=size)
+    frame_url = None
+    if m["frame"]:
+        (frame_url,) = resolve_references([frame], limit=1, who=m["label"], dsn=dsn,
+                                          account_id=account_id)
+    usd = clip_edit.video_usd(model, probe)
+    quote = {"stage": "video", "source": source, "instruction": instruction, "frame": frame,
+             "model": model, "label": m["label"], "frame_steers": bool(m["frame"]),
+             **({"keep_audio": bool(keep_audio)} if m["audio"] else {}),
+             "usd": usd, "source_clip": probe, **filed}
+    stop, approved, price = approval_gate(
+        usd, quote_token, tool="edit_clip", what=f"Editing this clip on {m['label']}",
+        args={"stage": "video", "source": source, "instruction": instruction, "frame": frame,
+              "model": model, "keep_audio": bool(keep_audio) if m["audio"] else None,
+              "project_id": _project_arg(project_id)},
+        account_id=account_id, dsn=dsn)
+    quote.update(price)
+    if stop is not None:
+        return {**stop, "quote": quote}
+    if dry_run:
+        return {"ok": True, "dry_run": True, "quote": quote, "approved": approved}
+    res = effects.run(
+        f"edit-{model}", urls, instruction, {}, usd=usd, sources=[source, frame], probe=probe,
+        account_id=account_id, db_path=dsn, source="mcp", project_id=project_id,
+        quote=approved, row={"label": m["label"], "output": "video"},
+        endpoint_body=clip_edit.video_body(model, urls[0], instruction, frame_url=frame_url,
+                                           keep_audio=keep_audio),
+        extra={"edit_clip": {"stage": "video", "source": source, "frame": frame,
+                             "instruction": instruction, "model": model}})
+    return {**res, "quote": quote}
 
 
 def list_renders(kind: Optional[str] = None, limit: int = 20, dsn: Optional[str] = None,
@@ -3365,6 +3537,16 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
         def element_sheet(kind: ElementKind, name: str, quote_token: str = "") -> dict:
             return _quoted(run_element_sheet, f"sheet {name}", kind=kind, name=name,
                            quote_token=quote_token)
+
+        @_reg("edit_clip")
+        def edit_clip(source: str, instruction: str, stage: EditStage = "frame",
+                      frame: str = "", model: str = "", at: float = 0.0,
+                      keep_audio: bool = True, quote_token: str = "",
+                      project_id: Optional[int] = None) -> dict:
+            return _quoted(run_edit_clip, f"edit {stage} {source}", source=source,
+                           instruction=instruction, stage=stage, frame=frame, model=model,
+                           at=at, keep_audio=keep_audio, quote_token=quote_token,
+                           project_id=project_id)
 
         # Joining clips spends nothing, so there is no quote; it is checked
         # here, in the request (a refusal is a caller error, not a failed
