@@ -25,19 +25,31 @@ going any further; the desktop app will show you nothing useful.
 
 ## 3. Register it with Claude Desktop
 
-Claude Desktop → Settings → Developer → Edit Config. That opens
+The blocks live in `ops/claude-desktop-mcp.json`: `zeropage` (the studio:
+images, video, effects, projects) and `zeropage-board` (the pre-production
+board, plus the same studio tools). They go into `mcpServers` in
 `~/Library/Application Support/Claude/claude_desktop_config.json`.
 
-Paste the two blocks from `ops/claude-desktop-mcp.json` into
-`mcpServers`: `zeropage` (the studio: images, video, effects, projects) and
-`zeropage-board` (the pre-production board, plus the same studio tools).
-If the file already has other servers, add them alongside rather than
-replacing the object. Leave out `zeropage-board` if you only want the
-studio.
+**The edit only sticks while the app is quit.** Claude Desktop reads
+`mcpServers` when it starts and rewrites that file from memory while it
+runs, so a block written under a running app is gone the next time the app
+saves (seen twice on 2026-10-10: once after seven seconds, once after under
+three minutes). So, from the repo folder, in Terminal — not in the app's
+own terminal, which quits with it:
 
-Quit Claude Desktop **completely** (⌘Q — closing the window is not
-enough) and reopen it. Both servers' tools appear under the connector
-icon.
+```bash
+open -a Terminal ops/register-claude-desktop.command
+```
+
+It waits for you to quit Claude Desktop **completely** (⌘Q — closing the
+window is not enough, and it ends every running session), writes a backup
+of the config, adds the `zeropage` block, leaves every other key alone and
+opens Claude again. The studio's tools appear under the connector icon.
+For `zeropage-board` as well, run it in Terminal yourself with the flag
+(`open` passes none): `ops/register-claude-desktop.command --board`.
+
+By hand it is the same order: quit first, then paste the block(s) into
+`mcpServers` beside any servers already there, then reopen.
 
 ### If a server shows "Server disconnected" right after a start
 
