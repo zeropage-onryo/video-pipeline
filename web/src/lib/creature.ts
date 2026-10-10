@@ -100,3 +100,17 @@ export function saveDockHeight(h: number): void {
     /* forgets */
   }
 }
+
+/* The Create page (2026-10-10, Mike: "the creature small in the corner of the
+   create page as well"). The Guide talks in the composer's own box there, so
+   the creature keeps the person company at its small size -- whatever size it
+   rests at on the other pages, and without its thoughts. Only how it is DRAWN
+   on that page: the stored park is left alone, so leaving Create brings back
+   the size the person chose. */
+export function isCreatePage(pathname: string): boolean {
+  return pathname.replace(/\/$/, "") === "/studio";
+}
+
+export function restingPark(park: Park, pathname: string): Park {
+  return isCreatePage(pathname) ? { ...park, small: true } : park;
+}

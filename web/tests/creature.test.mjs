@@ -37,3 +37,14 @@ test('the dock is never shorter than its minimum nor taller than most of the win
   assert.equal(clampDock(NaN, 900), DOCK.start);
   assert.equal(clampDock(400, 300), DOCK.min); // a tiny window still gets the minimum
 });
+
+test('on the Create page the creature rests small, and the stored park is untouched', async () => {
+  const { restingPark, isCreatePage } = await import('../src/lib/creature.ts');
+  const full = { side: 'right', y: 24, small: false };
+  assert.deepEqual(restingPark(full, '/studio'), { side: 'right', y: 24, small: true });
+  assert.deepEqual(restingPark(full, '/studio/'), { side: 'right', y: 24, small: true });
+  assert.equal(full.small, false);
+  for (const p of ['/studio/queue', '/studio/projects/4', '/studio/assets', '/'])
+    assert.equal(restingPark(full, p), full, p);
+  assert.equal(isCreatePage('/studio/elements'), false);
+});

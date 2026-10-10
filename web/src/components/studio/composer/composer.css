@@ -98,6 +98,15 @@
     bottom: auto;
   }
 }
+/* The assistant rests small in a bottom corner on this page (2026-10-10,
+   assistant-pill.tsx): on a narrower desktop the docked box would slide its
+   send button under it, so the column keeps 76px clear on each side -- the
+   80px creature plus its 28px edge, on whichever side it is parked. */
+@media (min-width: 721px) {
+  .zps:has(.zpa[data-create][data-mode="small"]) .zc.zc-active .stack {
+    max-width: min(880px, calc(100% - 152px));
+  }
+}
 .zc .zc-field {
   position: relative;
 }
