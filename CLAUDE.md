@@ -1431,7 +1431,7 @@ is yours, in Resolve, by hand.
   `prompts/element_sheet_character.txt` is now the prompt that drew
   `web/public/models/nano-banana-image-generator/sheet.jpg` on Higgsfield, word for word:
   five panels -- full-body front, three-quarter, side profile, back, head-and-shoulders
-  close-up -- light grey, no labels, no text; its one slot is `{outfit}` ("wearing <notes>",
+  close-up -- no labels, no text -- except the background, which is pure WHITE (2026-10-10, Mike's call; the landing image is light grey); its one slot is `{outfit}` ("wearing <notes>",
   else the photo's own clothes). **And the composer's brain draws it** (`make_element_sheet`,
   `guide_tools.SHEET_TOOL`, a third make tool, composer only -- the pill's `makes` leaves it
   out): "make an element sheet of me" with photos attached ends the turn on a step card
