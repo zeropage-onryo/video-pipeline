@@ -222,12 +222,13 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     # the system instruction and the response schema on.
     config = (brain["config"].model_copy(deep=True) if brain["config"] is not None
               else types.GenerateContentConfig())
-    from . import assistant_brain, skills
+    from . import assistant_brain, make_plan, skills
 
     picked = skills.clean_name(skill)
+    offered = {t.get("name") for t in tools or []}
     config.system_instruction = instructions(
         brand, with_tools=bool(tools), assistant=assistant, maker=bool(output),
-        with_skills=any(t.get("name") == skills.TOOL for t in tools or []))
+        with_skills=skills.TOOL in offered, with_plan=make_plan.TOOL in offered)
     contents = _contents(conversation, grounding, image_refs,
                          notes=(assistant_brain.link_note(links),
                                 OUTPUT_NOTES.get(output or "", ""),
@@ -292,7 +293,7 @@ MAX_TOOL_CALLS = 6
 
 def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
                         account_id=None, on_retry=None, feed=None):
-    from . import guide_tools
+    from . import guide_tools, make_plan
 
     # Gemini refuses a JSON response schema alongside function
     # declarations, so the answer is asked for as JSON in the
@@ -321,7 +322,13 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
             name, args = fc.name, dict(fc.args or {})
             if guide_tools.is_write(name):
                 # The turn ends on the FIRST write: the card is the answer.
-                proposal = {"tool": name, "args": guide_tools.check_args(name, args),
+                clean = guide_tools.check_args(name, args)
+                if name == guide_tools.PLAN_TOOL:
+                    # a plan of one step is that step's own tool
+                    single = make_plan.collapse(clean)
+                    if single:
+                        name, clean = single
+                proposal = {"tool": name, "args": clean,
                             "label": guide_tools.WRITE_LABELS.get(name, name)}
                 break
             if len(runs) >= MAX_TOOL_CALLS:
@@ -355,6 +362,9 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
         prompt = str(proposal["args"].get("prompt") or "").strip()
         if guide_tools.is_make(proposal["tool"]) and prompt:
             message = prompt if len(prompt) <= 1200 else prompt[:1200].rsplit(" ", 1)[0] + "…"
+        if proposal["tool"] == guide_tools.PLAN_TOOL:
+            # the plan's card lists the steps; this is the line above it
+            message = proposal["args"]["summary"]
         if proposal["tool"] == guide_tools.SHEET_TOOL:
             # the step card's own words: who is saved, and what is drawn
             who = proposal["args"].get("name") or "this character"
@@ -475,13 +485,16 @@ def _parse_reply(text: str):
 
 
 def instructions(brand, with_tools: bool = False, assistant=None, maker: bool = False,
-                 with_skills: bool = False):
+                 with_skills: bool = False, with_plan: bool = False):
     root = Path(__file__).resolve().parent.parent
     text = (root / "prompts/creative_guide.txt").read_text()
     if with_tools:
         text += "\n\n" + (root / "prompts/creative_guide_tools.txt").read_text()
     if maker:
         text += "\n\n" + (root / "prompts/creative_guide_make.txt").read_text()
+    if with_plan:
+        # only where make_plan is offered (the composer; src/make_plan.py)
+        text += "\n\n" + (root / "prompts/creative_guide_plan.txt").read_text()
     if with_skills:
         # the shelf's index, only where load_skill is offered (src/skills.py)
         from . import skills

@@ -80,6 +80,7 @@ import {
   announceBalanceChange,
   announceQueueChange,
   cancelJob,
+  drawKeyframes,
   getAssets,
   getCapabilities,
   getConceptDetail,
@@ -134,6 +135,7 @@ import {
   saveGenerateMode,
   type GenerateMode,
   isMake,
+  isPlanTool,
   loadImageModel,
   loadOutput,
   matchCommands,
@@ -143,9 +145,33 @@ import {
   saveImageModel,
   saveOutput,
   type Made,
+  type MadeStatus,
   type Output,
   type SlashCommand,
 } from "@/lib/composer";
+import {
+  approveAll,
+  approveStep,
+  blockedBy,
+  editStep,
+  finished,
+  needsApproval,
+  nextStep,
+  patchStep,
+  picturesFor,
+  planOf,
+  reconcile,
+  restoreStep,
+  sceneOf,
+  skipStep,
+  stepAt,
+  stepText,
+  type Plan,
+  type PlanStep,
+  type Prices,
+} from "@/lib/make-plan";
+import { failLine, madeStatus } from "@/lib/made-state";
+import type { PlanHandlers } from "@/components/studio/make-plan-card";
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
 import { creditsText } from "@/lib/render-choice";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
@@ -162,6 +188,8 @@ type Option = { id: string; label: string; note?: string };
    2026-09-15). Blank until one exists; the Assets wall's generated
    stills never appear here. */
 type Filter = "all" | ElementKind;
+/** What came of one make: its record's id, how it ended, and what it left. */
+type MadeOut = { madeId: string; status: MadeStatus; conceptId?: number | null; image?: string | null; detail: string };
 
 const FILTERS: [Filter, string][] = [
   ["all", "All elements"],
@@ -350,6 +378,13 @@ function Composer() {
   // this page has a poll running for, so a resume never doubles one up
   const running = useRef<{ madeId: string; jobId?: number; stopped: boolean } | null>(null);
   const polling = useRef(new Set<string>());
+  // PLANS (lib/make-plan.ts). A plan's loop awaits its steps one after
+  // another, and the person may skip or edit a later step meanwhile -- so
+  // the plan as it stands NOW is held here, and mirrored onto its turn.
+  const plans = useRef(new Map<string, Plan>());
+  const planLoops = useRef(new Set<string>());
+  const planLive = useRef(new Map<string, number>());
+  const threadRef = useRef<Turn[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const stackRef = useRef<HTMLDivElement>(null);
@@ -568,7 +603,7 @@ function Composer() {
      IMAGE send, the title and timed shots for a VIDEO one. Shared by a send
      made here and a send picked up again after a reload. */
   const finish = useCallback(
-    async (madeId: string, output: Output, job: Job) => {
+    async (madeId: string, output: Output, job: Job, inPlan = false): Promise<MadeOut> => {
       polling.current.delete(madeId);
       setLive((l) => {
         const n = { ...l };
@@ -579,9 +614,10 @@ function Composer() {
       // balance pill just moves (2026-09-28)
       announceBalanceChange();
       if (job.status !== "done") {
-        patchMade(madeId, { status: "failed", detail: job.error || "That run did not finish." });
-        toast(job.error || "That run did not finish.", "err");
-        return;
+        const why = job.error || "That run did not finish.";
+        patchMade(madeId, { status: "failed", detail: why });
+        toast(why, "err");
+        return { madeId, status: "failed", detail: why };
       }
       // a composer send returns the concept it wrote (an id, never a cut uuid)
       const conceptId = typeof job.ref_id === "number" ? job.ref_id : null;
@@ -589,32 +625,44 @@ function Composer() {
       if (output === "image") {
         const shots = detail?.shots ?? [];
         const image = detail?.reference_image || shots[shots.length - 1]?.reference_image || null;
+        if (!image) {
+          // the job "finished" because the row it rides on was saved; the
+          // still is what was asked for, and it is not there (2026-10-10)
+          const why = failLine(job.detail);
+          patchMade(madeId, { status: "failed", conceptId, image: null, detail: why });
+          toast(why, "err");
+          return { madeId, status: "failed", conceptId, image: null, detail: why };
+        }
         patchMade(madeId, { status: "done", conceptId, image, detail: job.detail || "" });
-        if (!image) toast(job.detail || "Saved, but no image came back.", "err");
-      } else {
-        const timeline = detail?.timeline ?? detail?.shots?.[0]?.timeline ?? null;
-        patchMade(madeId, {
-          status: "done",
-          conceptId,
-          detail: job.detail || "on the board",
-          title: detail?.title,
-          parts: timeline?.parts ?? [],
-          seconds: timeline?.seconds ?? detail?.duration ?? null,
-        });
-        // the conversation did its job: the scene is on the board with its
-        // prompt and references, so the Guide talk, the brief and the box
-        // go away (2026-10-02, Mike's call). The send's own turn stays --
-        // it IS the "scene written" card here, with the timed shots under it.
-        finishProject({ conceptId, detail: job.detail || "on the board" });
-        // a scene filed under a project is picked in its workspace; one made
-        // outside any project has no board, only the tiles' Send to Queue
-        toast(
-          detail?.project_id
-            ? "Scene written · it is in the project, ready to pick"
-            : "Scene written · Send to Queue when you want it rendered",
-        );
-        announceQueueChange();
+        return { madeId, status: "done", conceptId, image, detail: job.detail || "" };
       }
+      const timeline = detail?.timeline ?? detail?.shots?.[0]?.timeline ?? null;
+      const said = job.detail || "on the board";
+      patchMade(madeId, {
+        status: "done",
+        conceptId,
+        detail: said,
+        title: detail?.title,
+        parts: timeline?.parts ?? [],
+        seconds: timeline?.seconds ?? detail?.duration ?? null,
+      });
+      announceQueueChange();
+      // a plan's scene is one step of several: the conversation, the box and
+      // its references stay until the plan is through (runPlan clears them)
+      if (inPlan) return { madeId, status: "done", conceptId, detail: said };
+      // the conversation did its job: the scene is on the board with its
+      // prompt and references, so the Guide talk, the brief and the box
+      // go away (2026-10-02, Mike's call). The send's own turn stays --
+      // it IS the "scene written" card here, with the timed shots under it.
+      finishProject({ conceptId, detail: said });
+      // a scene filed under a project is picked in its workspace; one made
+      // outside any project has no board, only the tiles' Send to Queue
+      toast(
+        detail?.project_id
+          ? "Scene written · it is in the project, ready to pick"
+          : "Scene written · Send to Queue when you want it rendered",
+      );
+      return { madeId, status: "done", conceptId, detail: said };
     },
     [patchMade, toast, finishProject],
   );
@@ -636,8 +684,8 @@ function Composer() {
       const id = m.id;
       const out = m.output;
       pollJob(m.jobId, (j) => tick(id, j), () => false)
-        .then((job) => {
-          if (job) return finish(id, out, job);
+        .then(async (job) => {
+          if (job) await finish(id, out, job);
         })
         .catch(() => {
           polling.current.delete(id);
@@ -671,6 +719,8 @@ function Composer() {
       setFilledBy(null);
       setPreset(null);
       setSkill(null);
+      plans.current.clear();
+      planLive.current.clear();
       setTimeout(() => textarea.current?.focus(), 50);
     };
     window.addEventListener(NEW_SESSION_EVENT, on);
@@ -693,13 +743,16 @@ function Composer() {
       // `at`: the Approve card's own turn, which the still fills in place
       | { role: "assistant"; message: string; reply: GuideReply; at?: Turn },
     on: { aspect?: string; seconds?: number } = {},
-  ) {
+    // a plan's step (lib/make-plan.ts): the pictures it is held to, and the
+    // box, the brief and the conversation are left as they are
+    step: { plan?: boolean; refs?: string[] } = {},
+  ): Promise<MadeOut> {
     const madeId = newMadeId();
     const isImage = out === "image";
     const useAspect = on.aspect && IMAGE_ASPECTS.some((a) => a.id === on.aspect) ? on.aspect : aspect;
     const useSeconds = on.seconds && lengths ? Math.max(lengths.min, Math.min(lengths.max, on.seconds)) : seconds;
     const frame = isImage ? useAspect : ratios.find((r) => r.id === ratio)?.label;
-    const refThumbs = [...uploads.map((u) => u.url), ...picked].filter(drawable);
+    const refThumbs = [...uploads.map((u) => u.url), ...picked, ...(step.refs ?? [])].filter(drawable);
     const made: Made = {
       id: madeId,
       output: out,
@@ -734,7 +787,7 @@ function Composer() {
     // the box and the brief are spent: what they held is in the prompt now.
     // Not on an Approve: the send that asked was earlier, and the box may
     // hold what the person is typing next.
-    if (!approved) setDraft({ idea: "", brief: "" });
+    if (!approved && !step.plan) setDraft({ idea: "", brief: "" });
 
     const form = new FormData();
     if (brand) form.append("brand", brand);
@@ -757,14 +810,15 @@ function Composer() {
       if (project) form.append("project_id", String(project.id));
     }
     appendReferences(form);
+    (step.refs ?? []).forEach((u) => form.append("asset_photos", u));
 
     const started = isImage ? await runImage(form) : await runScenes(form);
     me.jobId = started.job_id;
     patchMade(madeId, { jobId: started.job_id });
     const job = await pollJob(started.job_id, (j) => tick(madeId, j), () => me.stopped);
-    if (!job) return; // stopped: stop() already drew it
+    if (!job) return { madeId, status: "stopped", detail: "" }; // stopped: stop() already drew it
     running.current = null;
-    await finish(madeId, out, job);
+    return finish(madeId, out, job, !!step.plan);
   }
 
   /* The conversation the brain answers: every turn that went through,
@@ -774,11 +828,13 @@ function Composer() {
   const conversationOf = (turns: Turn[]) =>
     turns
       .filter((m) => !m.failed)
-      .map(({ role, content, made }) => ({
+      .map(({ role, content, made, plan }) => ({
         role,
         content: made
-          ? `${content}\n[made ${made.output} from the prompt: "${made.prompt ?? content}" — ${made.status}]`
-          : content,
+          ? `${content}\n[made ${made.output} from the prompt: "${made.prompt ?? content}" — ${madeStatus(made)}]`
+          : plan
+            ? `${content}\n[plan: ${plan.steps.map((s) => `${s.n} ${s.do} — ${s.status}`).join("; ")}]`
+            : content,
       }));
 
   /* A still's step: the brain's answer turn carries the make_image
@@ -787,7 +843,9 @@ function Composer() {
      still failed or was stopped can be approved again. */
   async function runStill(t: Turn) {
     const proposal = t.reply?.proposal;
-    const again = t.made?.status === "failed" || t.made?.status === "stopped";
+    // a still that "finished" with nothing drawn can be approved again too
+    const was = t.made ? madeStatus(t.made) : undefined;
+    const again = was === "failed" || was === "stopped";
     if (!t.reply || !proposal || MAKE_TOOLS[proposal.tool] !== "image" || (t.made && !again)) return;
     const args = proposal.args as { prompt?: unknown; aspect?: unknown };
     const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : t.content;
@@ -815,14 +873,14 @@ function Composer() {
      under the same name. A sheet that failed can be approved again (the
      character is saved again under the same name; the photos are
      content-addressed, so the folder does not double). */
-  async function runSheet(t: Turn) {
+  async function runSheet(t: Turn): Promise<MadeOut | null> {
     const proposal = t.reply?.proposal;
     const again = t.made?.status === "failed" || t.made?.status === "stopped";
-    if (!proposal || proposal.tool !== SHEET_TOOL || (t.made && !again)) return;
+    if (!proposal || proposal.tool !== SHEET_TOOL || (t.made && !again)) return null;
     const photos = [...uploads.map((u) => u.url), ...picked];
     if (!photos.length) {
       toast("Attach photos of the person first -- the sheet is drawn from them", "err");
-      return;
+      return null;
     }
     const args = proposal.args as { name?: unknown; notes?: unknown };
     const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "Character";
@@ -854,9 +912,12 @@ function Composer() {
       if (job.status !== "done" || !job.output) throw new Error(job.error || "The sheet was not drawn.");
       patchMade(id, { status: "done", image: job.output, detail: job.detail || `${name} · sheet drawn` });
       toast(`${name} saved to Elements with the sheet`);
+      return { madeId: id, status: "done", image: job.output, detail: `${name} saved to Elements with the sheet` };
     } catch (e) {
-      patchMade(id, { status: "failed", detail: e instanceof Error ? e.message : "The sheet was not drawn." });
-      toast(e instanceof Error ? e.message : "The sheet was not drawn.", "err");
+      const why = e instanceof Error ? e.message : "The sheet was not drawn.";
+      patchMade(id, { status: "failed", detail: why });
+      toast(why, "err");
+      return { madeId: id, status: "failed", detail: why };
     }
   }
   async function approveSheet(i: number) {
@@ -879,6 +940,264 @@ function Composer() {
     if (!m) return "";
     return `${m.label} · ${balance?.exempt ? "not charged" : `${m.credits.toLocaleString()} credits`}`;
   };
+
+  /* ── A PLAN (lib/make-plan.ts; docs/tasks/task-studio-agent.md item 2) ──
+     Several makes in a row, proposed by the brain as one answer and run
+     here in order through the doors each step always had: `make` for a
+     still and a scene, `runSheet`, the keep, the keyframes approve, the
+     pick. A step's result is its own turn under the plan's card. */
+  useEffect(() => {
+    threadRef.current = thread;
+  }, [thread]);
+  const getPlan = (id: string): Plan | null =>
+    plans.current.get(id) ?? threadRef.current.find((t) => t.plan?.id === id)?.plan ?? null;
+  const applyPlan = (id: string, fn: (p: Plan) => Plan): Plan | null => {
+    const cur = getPlan(id);
+    if (!cur) return null;
+    const next = fn(cur);
+    plans.current.set(id, next);
+    setThread((ts) => ts.map((t) => (t.plan?.id === id ? { ...t, plan: next } : t)));
+    return next;
+  };
+
+  // what a paid step costs on this account, for the card's totals
+  const planPrices = useMemo<Prices>(
+    () => ({
+      image: balance?.exempt
+        ? 0
+        : ((imageModels.find((m) => m.id === imageModel) ?? imageModels[0])?.credits ?? null),
+      sheet: balance?.exempt ? 0 : (balance?.prices?.still ?? null),
+    }),
+    [balance, imageModels, imageModel],
+  );
+  const planPriceLine = (st: PlanStep) => {
+    if (st.do === "image") return stillLine();
+    if (st.do === "sheet") return sheetLine;
+    if (typeof st.credits !== "number") return "Priced once the scene is written";
+    const n = st.stills ?? 0;
+    return `${n} still${n === 1 ? "" : "s"} · ${creditsText(st.credits, !!balance?.exempt)}`;
+  };
+
+  /* After a reload, or when a step's own card ran it again: each step
+     follows the turn its result was drawn into. */
+  useEffect(() => {
+    if (!ready) return;
+    const mades: Record<string, { status: string; image?: string | null; conceptId?: number | null }> = {};
+    for (const t of thread) {
+      if (t.made) mades[t.made.id] = { status: madeStatus(t.made), image: t.made.image, conceptId: t.made.conceptId };
+    }
+    for (const t of thread) {
+      if (!t.plan) continue;
+      const cur = plans.current.get(t.plan.id) ?? t.plan;
+      const live = planLive.current.get(cur.id);
+      const next = reconcile(cur, mades, live ? [live] : []);
+      if (next !== cur) {
+        plans.current.set(cur.id, next);
+        setThread((ts) => ts.map((x) => (x.plan?.id === cur.id ? { ...x, plan: next } : x)));
+      }
+    }
+  }, [ready, thread, setThread]);
+
+  const outOf = (out: MadeOut | null, what: "image" | "scene"): Partial<PlanStep> => {
+    if (!out) return { status: "failed", note: "it did not start" };
+    // stopped by the person: the step waits, it did not fail
+    if (out.status === "stopped") return { status: "pending", madeId: out.madeId, note: "stopped" };
+    const made = what === "scene" ? !!out.conceptId : !!out.image;
+    return out.status === "done" && made
+      ? { status: "done", madeId: out.madeId, image: out.image ?? null, conceptId: out.conceptId ?? null, note: undefined }
+      : { status: "failed", madeId: out.madeId, note: out.detail || "it did not finish" };
+  };
+
+  /* A scene's keyframes are priced once the scene exists: the step reads
+     its quote here, and is done already when every shot has its frame. */
+  async function priceKeyframes(plan: Plan, st: PlanStep): Promise<Partial<PlanStep>> {
+    const scene = sceneOf(plan, st);
+    if (!scene?.conceptId) return { status: "failed", note: "there is no scene to draw them for" };
+    try {
+      const quote = (await getConceptDetail(scene.conceptId)).keyframes;
+      if (!quote || !quote.stills) {
+        return { status: "done", credits: 0, stills: 0, note: "every shot already has its first frame" };
+      }
+      // the real price even on an account that is not charged: the card
+      // says "30 credits · not charged", as the Queue does
+      return { credits: quote.credits, stills: quote.stills };
+    } catch (e) {
+      return { status: "failed", note: e instanceof Error ? e.message : "the price could not be read" };
+    }
+  }
+
+  async function runPlanStep(planId: string, st: PlanStep): Promise<Partial<PlanStep>> {
+    const plan = getPlan(planId);
+    if (!plan) return { status: "failed", note: "the plan is gone" };
+    try {
+      if (st.do === "image") {
+        const prompt = typeof st.args.prompt === "string" ? st.args.prompt : "";
+        const aspect = typeof st.args.aspect === "string" ? st.args.aspect : undefined;
+        const reply: GuideReply = {
+          message: prompt,
+          proposal: { tool: "make_image", args: { prompt, ...(aspect ? { aspect } : {}) }, label: "Generate this image" },
+        };
+        // a step run again is drawn into the turn it failed in, not a new one
+        const prior = st.madeId ? threadRef.current.find((t) => t.made?.id === st.madeId) : undefined;
+        const out = await make(
+          prompt,
+          "image",
+          { role: "assistant", message: prompt, reply, ...(prior ? { at: prior } : {}) },
+          { aspect },
+          { plan: true, refs: picturesFor(plan, st) },
+        );
+        return outOf(out, "image");
+      }
+      if (st.do === "scene") {
+        const prompt = typeof st.args.prompt === "string" ? st.args.prompt : "";
+        const line = st.why || "Writing the scene";
+        const reply: GuideReply = { message: line, proposal: { tool: "make_video", args: st.args, label: "Write this scene" } };
+        const out = await make(
+          prompt,
+          "video",
+          { role: "assistant", message: line, reply },
+          { seconds: typeof st.args.seconds === "number" ? st.args.seconds : undefined },
+          { plan: true, refs: picturesFor(plan, st) },
+        );
+        return outOf(out, "scene");
+      }
+      if (st.do === "sheet") {
+        const line = stepText(plan, st);
+        const turn: Turn = {
+          role: "assistant",
+          content: line,
+          reply: {
+            message: line,
+            proposal: { tool: SHEET_TOOL, args: st.args, label: "Save as a character and draw the reference sheet" },
+          },
+        };
+        setThread((all) => [...all, turn]);
+        const out = await runSheet(turn);
+        if (!out) return { status: "failed", note: "attach photos of the person first: the sheet is drawn from them" };
+        return out.status === "done"
+          ? { status: "done", madeId: out.madeId, image: out.image ?? null, note: out.detail }
+          : { status: "failed", madeId: out.madeId, note: out.detail };
+      }
+      if (st.do === "keep") {
+        const ids = Array.isArray(st.args.candidate_ids) ? st.args.candidate_ids.filter((x): x is string => typeof x === "string") : [];
+        const res = await keepReferences(ids);
+        const urls = res.result.kept.map((k) => k.url);
+        if (urls.length) setPicked((was) => [...new Set([...was, ...urls])]);
+        const refused = res.result.refused.length;
+        return urls.length
+          ? { status: "done", note: `${urls.length} added to the box${refused ? ` · ${refused} could not be kept` : ""}` }
+          : { status: "failed", note: "none of those frames could be kept" };
+      }
+      const scene = sceneOf(plan, st);
+      if (!scene?.conceptId) return { status: "failed", note: "there is no scene for it" };
+      if (st.do === "keyframes") {
+        const started = await drawKeyframes(scene.conceptId);
+        if (started.job_id) {
+          const job = await waitForJob(started.job_id, () => {});
+          if (job.status !== "done") throw new Error(job.error || "The keyframes were not drawn.");
+        }
+        announceBalanceChange();
+        // the scene's tiles show the frames now
+        const detail = await getConceptDetail(scene.conceptId).catch(() => null);
+        const parts = detail?.timeline?.parts ?? detail?.shots?.[0]?.timeline?.parts;
+        if (scene.madeId && parts) patchMade(scene.madeId, { parts });
+        const n = started.keyframes?.stills ?? st.stills ?? 0;
+        return { status: "done", note: `${n} first frame${n === 1 ? "" : "s"} drawn` };
+      }
+      await pickConcept(scene.conceptId, true);
+      announceQueueChange();
+      return { status: "done", note: "in the Queue: approving there renders it" };
+    } catch (e) {
+      // a make that threw before its job started still has its record
+      failRun(e);
+      return { status: "failed", note: e instanceof Error ? e.message : "it did not finish" };
+    }
+  }
+
+  /* Run a plan from its first unfinished step. Free steps run on; a step
+     that costs credits stops for its Approve (with Ask first on, unless it
+     was approved ahead); the first failure stops the plan where it is. */
+  async function runPlan(id: string, how: { approve?: number; all?: boolean } = {}) {
+    if (planLoops.current.has(id)) return;
+    planLoops.current.add(id);
+    setBusy(true);
+    try {
+      applyPlan(id, (p) => {
+        let next: Plan = { ...p, started: true, stopped: false };
+        if (how.all) next = approveAll(next, planPrices);
+        if (how.approve) next = approveStep(next, how.approve);
+        return next;
+      });
+      for (;;) {
+        const plan = getPlan(id);
+        if (!plan || plan.stopped) break;
+        let st = nextStep(plan);
+        if (!st) break;
+        const n = st.n;
+        const blocked = blockedBy(plan, st);
+        if (blocked) {
+          applyPlan(id, (p) => patchStep(p, n, { status: "skipped", note: blocked }));
+          continue;
+        }
+        if (st.do === "keyframes" && typeof st.credits !== "number") {
+          const priced = await priceKeyframes(plan, st);
+          applyPlan(id, (p) => patchStep(p, n, priced));
+          if (priced.status === "done") continue;
+          if (priced.status === "failed") break;
+          st = { ...st, ...priced };
+        }
+        const now = getPlan(id);
+        if (!now || now.stopped) break;
+        if (needsApproval(now, st, generate)) {
+          applyPlan(id, (p) => patchStep(p, n, { status: "waiting", note: undefined }));
+          break;
+        }
+        planLive.current.set(id, n);
+        applyPlan(id, (p) => patchStep(p, n, { status: "running", note: undefined }));
+        const out = await runPlanStep(id, st);
+        planLive.current.delete(id);
+        applyPlan(id, (p) => patchStep(p, n, out));
+        if (out.status !== "done") break;
+      }
+      const end = getPlan(id);
+      const wrote = end?.steps.find((x) => x.do === "scene" && x.status === "done" && x.conceptId);
+      if (end && finished(end) && wrote && !end.closed) {
+        // the plan is through and a scene is written: the talk, the brief
+        // and the box go away as they do after any scene; the plan and what
+        // it made stay (assistant-thread finishProject). Once only: a step
+        // edited and run again later must not empty the box a second time.
+        applyPlan(id, (p) => ({ ...p, closed: true }));
+        finishProject({ conceptId: wrote.conceptId ?? null, detail: "plan finished" });
+      }
+    } finally {
+      planLive.current.delete(id);
+      planLoops.current.delete(id);
+      setBusy(false);
+    }
+  }
+  function stopPlan(id: string) {
+    applyPlan(id, (p) => ({ ...p, stopped: true }));
+    stop(); // ends the wait on a make that is running; its hold is released
+  }
+  const planHandlers = (id: string): PlanHandlers => ({
+    busy,
+    mode: generate,
+    prices: planPrices,
+    exempt: !!balance?.exempt,
+    priceLine: planPriceLine,
+    onStart: (all) => void runPlan(id, { all }),
+    onApprove: (n) => void runPlan(id, { approve: n }),
+    onEdit: (n, prompt) => void applyPlan(id, (p) => editStep(p, n, { prompt })),
+    onSkip: (n) => {
+      const was = getPlan(id);
+      const waiting = stepAt(was ?? { id, summary: "", steps: [], approved: [] }, n)?.status === "waiting";
+      applyPlan(id, (p) => skipStep(p, n));
+      // skipping the step the plan was waiting on lets it carry on
+      if (waiting) void runPlan(id);
+    },
+    onRestore: (n) => void applyPlan(id, (p) => restoreStep(p, n)),
+    onStop: () => stopPlan(id),
+  });
 
   /* Make from the brief: the person's own click on the card the brain
      wrote, so it rides on their turn. */
@@ -974,6 +1293,19 @@ function Composer() {
           const step: Turn = { role: "assistant", content: reply.message, reply, looked };
           setThread((all) => [...all, step]);
           if (generate === "auto") await runSheet(step);
+        } else if (proposal && isPlanTool(proposal.tool)) {
+          // A PLAN (lib/make-plan.ts): several makes in a row, as a
+          // checklist. With Ask first on it waits for Start; with it off it
+          // runs, as a single make would.
+          const plan = planOf(proposal.args, newMadeId());
+          if (!plan) {
+            // not a plan a card can draw: its line stands as words
+            setThread((all) => [...all, { role: "assistant", content: reply.message, looked }]);
+          } else {
+            plans.current.set(plan.id, plan);
+            setThread((all) => [...all, { role: "assistant", content: reply.message, reply, looked, plan }]);
+            if (generate === "auto") await runPlan(plan.id);
+          }
         } else if (proposal && isMake(proposal.tool)) {
           // THE BRAIN MADE: its line is the turn, the tiles go under it.
           // The tool says which output -- the switch follows it, so a
@@ -1322,6 +1654,7 @@ function Composer() {
                 stillLine,
                 onApproveSheet: (i) => void approveSheet(i),
                 sheetLine,
+                plan: planHandlers,
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
               }}

@@ -13,6 +13,7 @@
      FILLS the box; Create stays the person's click. */
 import { apiFetch } from "@/lib/api";
 import { GUARDED_HEADERS, type GuideReply } from "@/lib/studio-api";
+import type { Plan } from "@/lib/make-plan";
 import type { Made } from "@/lib/composer";
 import { decodeMascot, encodeMascot, nameOf } from "@/lib/mascot";
 
@@ -167,6 +168,9 @@ export type Turn = {
   looked?: string[];
   /** the composer: the skill this message was sent with, by title */
   skill?: string;
+  /** the composer: a plan the brain proposed -- its steps and where each
+   *  one stands (lib/make-plan.ts). Each step's result is its own turn. */
+  plan?: Plan;
   /** the composer: the proposal's confirm card has been decided */
   decided?: "done" | "skipped";
   /** the composer (2026-10-02): this user turn was a SEND, and what it made

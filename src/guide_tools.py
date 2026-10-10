@@ -41,7 +41,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from . import mcp_server
+from . import make_plan, mcp_server
 from .research_agent import _result_text, _sync
 
 # The four the handoff named, plus `images_for` -- `reference` takes a
@@ -249,6 +249,15 @@ PROJECT_SPECS = (
     },
 )
 
+# A PLAN (2026-10-10, src/make_plan.py): several of the makes above, in
+# order, as ONE proposal. A make in every sense that matters here -- the
+# turn ends on the call, `run` and /creative-guide/act refuse it, and the
+# studio runs its steps through the doors each step always had -- but it is
+# its own tool, published only to the composer (a maker turn handed EVERY
+# make): the pill draws a still and nothing else.
+PLAN_TOOL = make_plan.TOOL
+WRITE_LABELS[PLAN_TOOL] = make_plan.LABEL
+
 MAX_TOOL_CALLS = 6      # read calls per turn; a Guide answer, not a crawl
 
 _URL = re.compile(r"(?i)\b(?:https?|ftp)://|\bwww\.|\.(?:jpe?g|png|webp|gif)(?:\?|$)")
@@ -265,7 +274,7 @@ HIDDEN_WITH_LOCAL = frozenset({"images_for"})
 
 def is_write(name: str) -> bool:
     return (name in WRITE_TOOLS or name in LOCAL_WRITE or name in MAKE_TOOLS
-            or name in PROJECT_TOOLS)
+            or name in PROJECT_TOOLS or name == PLAN_TOOL)
 
 
 def is_local(name: str) -> bool:
@@ -280,8 +289,8 @@ def is_project(name: str) -> bool:
 
 def is_make(name: str) -> bool:
     """A make tool: proposed by the model, run by the STUDIO (the
-    composer's own send), never by this module."""
-    return name in MAKE_TOOLS
+    composer's own send), never by this module. A plan is several of them."""
+    return name in MAKE_TOOLS or name == PLAN_TOOL
 
 
 def step_note(name: str, args: Optional[dict] = None) -> str:
@@ -317,8 +326,12 @@ def check_args(name: str, args: dict) -> dict:
     named `*_url`: a model told "no URLs" puts one in `title` next.
     """
     if (name not in TOOLS and name not in LOCAL_TOOLS and name not in MAKE_TOOLS
-            and name not in PROJECT_TOOLS):
+            and name not in PROJECT_TOOLS and name != PLAN_TOOL):
         raise Refused(f"`{name}` is not reachable from the Guide")
+    if name == PLAN_TOOL:
+        # every step goes back through this function under its own tool's
+        # name, so the URL rule and each tool's bounds hold inside a plan
+        return make_plan.check(args)
     args = dict(args or {})
     for key, value in args.items():
         values = value if isinstance(value, list) else [value]
@@ -501,7 +514,8 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
     make_image / make_video -- proposals the studio runs, see MAKE_TOOLS.
 
     `makes` narrows the make tools a maker turn is handed (the assistant
-    pill gets ("make_image",) -- 2026-10-08); None is every one.
+    pill gets ("make_image",) -- 2026-10-08); None is every one, and with
+    them make_plan (src/make_plan.py).
 
     `on_step(done, of, detail)` hears a local tool's progress
     (find_references' hunt), for the job the turn runs in.
@@ -538,6 +552,10 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
     if maker:
         tool_specs = tool_specs + [dict(s) for s in MAKE_SPECS
                                    if makes is None or s["name"] in makes]
+        if makes is None:
+            # the composer, which is handed every make, may also be handed
+            # several of them in a row
+            tool_specs = tool_specs + [dict(make_plan.SPEC)]
 
     attachments: dict = {}
 
