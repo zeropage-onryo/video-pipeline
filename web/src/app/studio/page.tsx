@@ -83,6 +83,7 @@ import {
   drawKeyframes,
   getAssets,
   getEffects,
+  getRender,
   getCapabilities,
   getConceptDetail,
   createAsset,
@@ -175,7 +176,8 @@ import {
   type Prices,
 } from "@/lib/make-plan";
 import { failLine, madeStatus } from "@/lib/made-state";
-import { begin, candidates, requestOf, type Effect, type EffectState } from "@/lib/effects";
+import { begin, candidateOf, candidates, requestOf, type Candidate, type Effect, type EffectState } from "@/lib/effects";
+import { assetId, sendCost, type ContinueAction } from "@/lib/continue";
 import { EffectGallery } from "@/components/studio/effect-gallery";
 import type { PlanHandlers } from "@/components/studio/make-plan-card";
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
@@ -379,6 +381,12 @@ function Composer() {
   // the effects table (GET /api/effects), and whether its gallery is open
   const [fx, setFx] = useState<EffectsCatalogue | null>(null);
   const [fxOpen, setFxOpen] = useState(false);
+  // an action taken on ONE result ("Animate" under a still, the Library's
+  // Effects button): the gallery, and the card a pick makes, are bound to it
+  const [fxOn, setFxOn] = useState<Candidate[] | null>(null);
+  const [fxTab, setFxTab] = useState<string | undefined>(undefined);
+  // "Make element" under a still: the add-element form, the still attached
+  const [elementFrom, setElementFrom] = useState<Made | null>(null);
   const [slashAt, setSlashAt] = useState(0);
   // progress per running send, by made id -- page state, never saved: a
   // save per tick would be a PUT a second
@@ -481,6 +489,30 @@ function Composer() {
       }, 50);
     }
   }, [ready, sparkParam, attachId, attachPhotos, setIdea, setPicked]);
+
+  // The Library's "Effects" lands here as ?on=gen:<id>: the gallery opens on
+  // that render, which is how a clip the conversation never held (a Queue
+  // render) gets finished. Applied once the gallery's table has loaded,
+  // then taken off the address so a reload does not open it again.
+  const onParam = params.get("on");
+  const appliedOn = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ready || !fx || !onParam || onParam === appliedOn.current) return;
+    appliedOn.current = onParam;
+    const id = assetId(onParam);
+    const rest = new URLSearchParams(params.toString());
+    rest.delete("on");
+    router.replace(`/studio${rest.size ? `?${rest}` : ""}`, { scroll: false });
+    if (id === null) return;
+    getRender(id)
+      .then((r) => {
+        const clip = r.kind === "video";
+        setFxOn([{ ref: r.ref, kind: clip ? "clip" : "image", thumb: (clip ? r.thumb : r.url) ?? undefined, from: "the render from your Library" }]);
+        setFxTab(clip ? "finish" : "image_edit");
+        setFxOpen(true);
+      })
+      .catch(() => toast("That render is not on your Library wall", "err"));
+  }, [ready, fx, onParam, params, router, toast]);
 
   // The assistant pill writes into this box through a window event (it
   // floats over every page). A fill asked for from another page waited in
@@ -897,9 +929,16 @@ function Composer() {
     if (!t.reply || !proposal || MAKE_TOOLS[proposal.tool] !== "image" || (t.made && !again)) return;
     const args = proposal.args as { prompt?: unknown; aspect?: unknown };
     const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : t.content;
-    await make(prompt, "image", { role: "assistant", message: t.content, reply: t.reply, at: t }, {
-      aspect: typeof args.aspect === "string" ? args.aspect : undefined,
-    });
+    // a Variation is held to the pictures its first draw was held to; one
+    // the box still holds is not sent twice
+    const boxed = [...uploads.map((u) => u.url), ...picked];
+    await make(
+      prompt,
+      "image",
+      { role: "assistant", message: t.content, reply: t.reply, at: t },
+      { aspect: typeof args.aspect === "string" ? args.aspect : undefined },
+      { refs: (t.held ?? []).filter((u) => !boxed.includes(u)) },
+    );
   }
   async function approveStill(i: number) {
     const t = thread[i];
@@ -1262,9 +1301,21 @@ function Composer() {
   );
   // a pick from the gallery: a card in the thread, and nothing has run
   function startEffect(item: Effect) {
-    const state = begin(item, fxCandidates, newMadeId());
+    const state = begin(item, fxCandidates, newMadeId(), { on: fxOn });
     setThread((all) => [...all, { role: "assistant", content: item.label, effect: state }]);
+    closeEffects();
+  }
+  /* The gallery, opened plainly (`/effects`) or ON one result: then it
+     lists what that result can take, and a pick is bound to it. */
+  function openEffects(on?: Candidate[] | null, tab?: string) {
+    setFxOn(on?.length ? on : null);
+    setFxTab(tab);
+    setFxOpen(true);
+  }
+  function closeEffects() {
     setFxOpen(false);
+    setFxOn(null);
+    setFxTab(undefined);
   }
   const changeEffect = (next: EffectState) =>
     setThread((all) => all.map((t) => (t.effect?.id === next.id && !isRunning(t) ? { ...t, effect: next } : t)));
@@ -1487,7 +1538,7 @@ function Composer() {
       if (lastImage?.made) animate(lastImage.made);
       return;
     } else if (c.id === "effects") {
-      setFxOpen(true);
+      openEffects();
       return;
     } else if (c.id === "ref") {
       fileInput.current?.click();
@@ -1519,6 +1570,45 @@ function Composer() {
     setOutput("video");
     textarea.current?.focus();
     toast("Image attached · describe how the shot moves");
+  }
+  /* A Variation: the same prompt, frame and references, drawn again. It is
+     a still's step like any other -- a card with its price that waits for
+     Approve (or draws at once with Auto on), on the model the picker shows. */
+  function variation(m: Made) {
+    const prompt = (m.prompt ?? "").trim();
+    if (!prompt || busy) return;
+    const shape = IMAGE_ASPECTS.some((a) => a.id === m.frame) ? m.frame : undefined;
+    const reply: GuideReply = {
+      message: prompt,
+      proposal: { tool: "make_image", args: { prompt, ...(shape ? { aspect: shape } : {}) }, label: "Generate this image" },
+    };
+    const step: Turn = { role: "assistant", content: prompt, reply, held: m.refs };
+    setThread((all) => [...all, step]);
+    if (generate !== "auto") return;
+    setBusy(true);
+    runStill(step)
+      .catch(failRun)
+      .finally(() => setBusy(false));
+  }
+  /* A "continue" action under a result (lib/continue.ts). The ones that
+     are links -- Download, the Library, the editor, the canvas -- are
+     drawn as links and never come here. */
+  function continueOn(t: Turn, a: ContinueAction) {
+    const m = t.made;
+    if (!m) return;
+    const self = candidateOf({ image: m.clip ? null : m.image, clip: m.clip, asset: m.asset }, m.clip ? "this clip" : "this still");
+    if (a.kind === "effect") {
+      const item = fx?.items.find((e) => e.id === a.effect);
+      if (!item || !self) return;
+      const state = begin(item, fxCandidates, newMadeId(), { on: [self] });
+      setThread((all) => [...all, { role: "assistant", content: item.label, effect: state }]);
+    } else if (a.kind === "gallery") openEffects(self ? [self] : null, a.tab);
+    else if (a.kind === "variation") variation(m);
+    else if (a.kind === "shot") animate(m);
+    else if (a.kind === "reference") attachResult(m);
+    else if (a.kind === "element") setElementFrom(m);
+    else if (a.kind === "queue") void sendMadeToQueue(m);
+    else if (a.kind === "reuse") reuse(t);
   }
   /* "Reuse prompt" fills the box; it never spends on its own */
   function reuse(t: Turn) {
@@ -1699,6 +1789,15 @@ function Composer() {
   const empty = !thread.length;
   const liveRun = running.current && busy;
   const sendLabel = "Send";
+  // what THIS send can spend without another click (lib/continue.ts):
+  // nothing, unless a still is drawn on the send
+  const cost = sendCost({
+    guide: guideReady,
+    output,
+    generate,
+    stillCredits: (imageModels.find((m) => m.id === imageModel) ?? imageModels[0])?.credits ?? null,
+    exempt: !!balance?.exempt,
+  });
   const placeholder = guideReady
     ? output === "image"
       ? empty
@@ -1770,9 +1869,8 @@ function Composer() {
               handlers={{
                 busy,
                 modelLabel,
-                onAnimate: animate,
-                onUseAsRef: attachResult,
-                onReuse: reuse,
+                onContinue: continueOn,
+                continueHas: { effects: fx?.items.map((e) => e.id) ?? [], ready: !!fx?.ready },
                 onSelect: select,
                 onChip: (c) => {
                   setIdea(c);
@@ -1916,14 +2014,16 @@ function Composer() {
               <AnimatePresence>
                 {fxOpen && fx ? (
                   <EffectGallery
-                    key="effects"
+                    key={`effects:${fxTab ?? ""}:${fxOn?.[0]?.ref ?? ""}`}
                     effects={fx.items}
                     categories={fx.categories}
                     ready={fx.ready}
                     exempt={fx.exempt}
-                    candidates={fxCandidates}
+                    candidates={fxOn ?? fxCandidates}
+                    on={fxOn?.[0]?.from}
+                    tab={fxTab}
                     onPick={startEffect}
-                    onClose={() => setFxOpen(false)}
+                    onClose={closeEffects}
                   />
                 ) : null}
                 {slashItems ? (
@@ -2123,18 +2223,25 @@ function Composer() {
                   <span className="zc-live" aria-hidden /> Thinking…
                 </span>
               ) : (
+                <>
+                  {cost.credits !== null ? (
+                    <span className="zc-cost" title={cost.line}>
+                      {cost.credits.toLocaleString()} credits
+                    </span>
+                  ) : null}
                 <motion.button
                   type="button"
                   className={`zc-send${filledBy && idea.trim() ? " zpa-ring" : ""}`}
                   disabled={!canSend}
-                  aria-label={sendLabel}
-                  title={`${sendLabel} (Enter)`}
+                  aria-label={`${sendLabel}. ${cost.line}`}
+                  title={`${sendLabel} (Enter) · ${cost.line}`}
                   whileHover={canSend && !still ? { scale: 1.06 } : undefined}
                   whileTap={canSend && !still ? { scale: 0.94 } : undefined}
                   onClick={() => void send()}
                 >
                   <ArrowUp strokeWidth={2.2} />
                 </motion.button>
+                </>
               )}
             </div>
           </motion.div>
@@ -2284,6 +2391,21 @@ function Composer() {
         />
       ) : null}
 
+      {elementFrom?.image ? (
+        <AddElement
+          title="Make element"
+          initialPhotoUrls={[elementFrom.image]}
+          initialNotes={elementFrom.prompt ?? ""}
+          onClose={() => setElementFrom(null)}
+          onSaved={(name, photos, note, sheetJob) => {
+            setElementFrom(null);
+            toast(
+              `${name} saved as an element · ${photos} photo${photos === 1 ? "" : "s"}${sheetJob ? " · drawing its sheet" : ""}${note ? ` · ${note}` : ""}`,
+            );
+            void loadAssets();
+          }}
+        />
+      ) : null}
       {adding ? (
         <AddElement
           title="New element"

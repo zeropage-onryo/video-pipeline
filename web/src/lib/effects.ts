@@ -79,6 +79,16 @@ export function candidates(attached: string[], results: ResultLike[]): Candidate
   return out;
 }
 
+/** ONE result as a source, for an action taken on that result itself
+    ("Edit" under a still): named by its render id when it has one. null
+    when it cannot be a source -- a clip with no id, a result with nothing
+    drawn. */
+export function candidateOf(r: ResultLike, from: string): Candidate | null {
+  if (r.clip) return r.asset ? { ref: r.asset, kind: "clip", from } : null;
+  if (r.image) return { ref: r.asset || r.image, kind: "image", thumb: r.image, from };
+  return null;
+}
+
 const wants = (e: Pick<Effect, "takes">) => (e.takes === "video" ? "clip" : "image");
 
 /** The sources an effect is bound to: everything attached that fits, up to
@@ -199,15 +209,22 @@ export function begin(
   effect: Effect,
   all: Candidate[],
   id: string,
-  given: { options?: Record<string, unknown> | null; prompt?: string | null } = {},
+  given: {
+    options?: Record<string, unknown> | null;
+    prompt?: string | null;
+    /** the result the action was taken on: it is the source, whatever
+     *  else is attached or newer. Ignored when it does not fit. */
+    on?: Candidate[] | null;
+  } = {},
 ): EffectState {
+  const fits = (given.on ?? []).filter((c) => c.kind === wants(effect)).slice(0, effect.sources.max);
   return {
     id,
     effect: effect.id,
     label: effect.label,
     takes: effect.takes,
     output: effect.output,
-    sources: sourcesFor(effect, all),
+    sources: fits.length >= effect.sources.min ? fits : sourcesFor(effect, all),
     options: settle(effect, given.options),
     prompt: effect.prompt === "none" ? "" : (given.prompt ?? "").trim(),
   };

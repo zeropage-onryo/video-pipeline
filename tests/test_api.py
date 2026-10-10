@@ -1116,7 +1116,8 @@ def test_create_character_survives_a_failed_vision_call(
                       files=[("photos", ("a.png", TINY_PNG, "image/png"))])
     body = res.json()
     assert body["ok"] is True and body["described"] is False
-    assert "vision unavailable" in body["note"]
+    # the page is told in plain words; the model's own error stays in the log
+    assert body["note"] == api_mod.NOT_DESCRIBED and "vision unavailable" not in body["note"]
     assert (tmp_path / "characters" / "mike" / "a.png").exists()
     assert entities.list_characters(dsn=tmp_db, account_id=None)[0]["name"] == "Mike"
     assert rag_recorder                       # still shelved, just thinner
@@ -1331,7 +1332,8 @@ def test_create_location_without_a_key_keeps_the_photos(tmp_db, tmp_path,
                       files=[("photos", ("a.png", TINY_PNG, "image/png"))])
     body = res.json()
     assert body["ok"] and body["described"] is False
-    assert "GEMINI_API_KEY" in body["note"]
+    # a customer is never told the name of an environment variable
+    assert body["note"] == api_mod.NOT_DESCRIBED and "GEMINI" not in body["note"]
     assert (tmp_path / "locations" / "garage" / "a.png").exists()
 
 

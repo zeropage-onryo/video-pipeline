@@ -2440,9 +2440,51 @@ is yours, in Resolve, by hand.
   A failed effect says `failures.plain(err, "The effect")` and the card offers Approve again;
   an effect turn has no "Reuse prompt" / "Try again", its card is the retry. Effects are
   Ask-first ALWAYS: the Auto pill does not cover them, since the card is where the choices
-  are made. Not built: effects as plan steps, effects in the dock, a preview per template, and picking a
-  clip the conversation does not hold (a Queue render is on the Assets wall, and the composer
-  has no way to name it yet).
+  are made. Not built: effects as plan steps, effects in the dock, a preview per template. (A clip the
+  conversation does not hold -- a Queue render -- reaches an effect from the Library since
+  item 4, below.)
+- **EVERY RESULT SAYS WHAT IT CAN BE CARRIED ON TO (2026-10-10, item 4 of
+  `docs/tasks/task-studio-agent.md`; Runway's result actions, Higgsfield's asset actions).** A
+  still or a clip in the thread ended in whatever buttons had been built so far.
+  `web/src/lib/continue.ts` (pure, node-tested) is now the one list, per kind of result:
+  `continueActions(result, {effects, ready})` and `split()` into the row and a **More** menu
+  (an overflow of one stays in the row). A still: Edit image · Variation · Animate · Turn into
+  a shot, and under More: Remove background, Camera move, Use as reference, Make element,
+  Download, See it in the Library, Open the canvas, Reuse prompt. A clip: Upscale · Add sound
+  · Reframe, and under More: Remove background, Open in the editor, Download, the Library. A
+  written scene keeps its three (Send to Queue, Open the canvas, Reuse prompt). **Nothing in
+  the row spends**: an effect opens item 3's priced card, a Variation is a still's step card,
+  and those cards' Approve is the click. An effect is offered only when the server's table
+  holds it and can run it. "Edit image", never "Edit": the rail's Edit is the timeline editor.
+  **An action is bound to THE result it sits under** (`effects.candidateOf`, `begin(..., {on})`):
+  the card says "On this still", though a newer one exists or something is attached; "Animate"
+  opens the gallery ON that still (`EffectGallery`'s `on` / `tab`). **A Variation** is the same
+  prompt, frame and references drawn again (`Turn.held` carries the first draw's references;
+  `runStill` sends them with what the box holds), on the model the picker shows NOW -- the card
+  names it and its price. **Make element** is the Library's move, here: the add-element form
+  with the still attached by URL. **Download is a real save** (`GET
+  /api/assets/generated/{id}/download`): a browser ignores `download` on a link to another
+  origin and the bucket is one, so the route answers 302 to a five-minute presigned URL that
+  asks the bucket for `Content-Disposition: attachment` (`storage.download_url_for_key`) --
+  bytes go bucket -> browser, never through Fly or the proxy -- and a machine with no bucket
+  serves its own copy, only ever a file under `data/renders`. The Library's detail rail uses
+  it too (its button had a download icon and opened the file). **The Library reaches effects**
+  (closing item 3's limit): its rail has **Effects**, which lands on `/studio?on=gen:<id>`; the
+  composer looks the render up (`GET /api/assets/generated/{id}`: kind, tile, `ref`), opens the
+  gallery on it -- "Finish a clip" for a clip -- and takes `on` off the address. That is how a
+  clip the conversation never held (a Queue render) is upscaled or given sound. Both new GETs
+  are registered BEFORE `/assets/{category}/{item_id}`, which would otherwise read "generated"
+  as a category. **The send button says what a send can spend** (`continue.sendCost`): a send
+  is free -- the brain talks, and a make waits on its card -- except a still with Auto on (or
+  with no brain), and only then a chip beside the button reads "10 credits" for the picked
+  model; the button's title says which case it is, always. **`_photo_bytes` reads a render
+  still on this machine's disk** (`/renders/...`, through `imagery.render_bytes`, which opens
+  nothing outside `data/renders`): on a box with no bucket a still could not be a reference,
+  an effect's source or an element's photo. Also on the way: an element whose photos could not
+  be described answered the page with the model's raw error (and, with no key, the name of an
+  environment variable); both element routes say `api.NOT_DESCRIBED` and log the rest. Not
+  built: actions on a scene beyond its three (its keyframes are the Queue's priced button and a
+  plan's step), image upscale (the table has none), a Variation count above one.
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

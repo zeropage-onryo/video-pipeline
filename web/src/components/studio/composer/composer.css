@@ -850,6 +850,64 @@
   color: var(--zc-ink-2);
 }
 
+/* a result's More menu (ContinueRow): the option menus' panel with an icon
+   beside each line; a link in it reads as its buttons do. On a phone it is
+   anchored to the ROW, so it never leaves the screen where the row has
+   wrapped. */
+@media (max-width: 640px) {
+  .zc .zc-actions {
+    position: relative;
+  }
+  .zc .zc-actions .pillwrap {
+    position: static;
+  }
+  .zc .pillmenu.zc-more {
+    left: 0;
+    max-width: calc(100vw - 32px);
+  }
+}
+.zc .pillmenu.zc-more button,
+.zc .pillmenu.zc-more a {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--body);
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.zc .pillmenu.zc-more button:hover,
+.zc .pillmenu.zc-more a:hover {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+}
+.zc .pillmenu.zc-more button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zc .pillmenu.zc-more svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--zc-ink-2);
+}
+
+/* what this send can spend, beside the send button (lib/continue.ts) */
+.zc .zc-cost {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--zc-ink-3);
+  white-space: nowrap;
+}
+
 /* the project chip above the box */
 .zc .zc-project {
   display: flex;

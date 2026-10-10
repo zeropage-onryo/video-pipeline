@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   candidates, sourcesFor, unavailable, defaults, settle, optionLabel, valueLabel, missing, takesLine,
-  fromPrice, requestOf, begin,
+  fromPrice, requestOf, begin, candidateOf,
 } from '../src/lib/effects.ts';
 
 const KLING = {
@@ -105,3 +105,23 @@ test('names and values read as words, and a price is credits or says why it is n
   assert.equal(fromPrice(KLING, true), '68 credits · not charged');
   assert.equal(fromPrice(SOUND, false), "Priced by the clip's length");
 });
+
+test('an action taken on one result is bound to THAT result, not to the newest', () => {
+  const all = candidates(['/refs/attached.jpg'], [
+    { image: '/renders/old.png', asset: 'gen:1' },
+    { image: '/renders/new.png', asset: 'gen:2' },
+  ]);
+  // "Edit" under the older still: it is the source, though one is attached and one is newer
+  const on = [candidateOf({ image: '/renders/old.png', asset: 'gen:1' }, 'this still')];
+  const state = begin(EDIT, all, 'e1', { on });
+  assert.deepEqual(state.sources.map((x) => x.ref), ['gen:1']);
+  assert.equal(state.sources[0].from, 'this still');
+  // a result that does not fit the effect is not forced onto it
+  const clip = [candidateOf({ clip: '/renders/c.mp4', asset: 'gen:9' }, 'this clip')];
+  assert.deepEqual(begin(EDIT, all, 'e2', { on: clip }).sources.map((x) => x.ref), ['/refs/attached.jpg']);
+  // a still with no render id is named as the box holds it; a clip with none is no source
+  assert.equal(candidateOf({ image: '/refs/x.jpg' }, 'this still').ref, '/refs/x.jpg');
+  assert.equal(candidateOf({ clip: '/renders/c.mp4' }, 'this clip'), null);
+  assert.equal(candidateOf({}, 'this still'), null);
+});
+

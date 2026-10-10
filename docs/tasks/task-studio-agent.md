@@ -44,7 +44,7 @@ then **"go"** on the batch below.
 | 1. Skills | built 2026-10-10 | see "As built" below |
 | 2. Plan with step cards | built 2026-10-10 | see "As built" below |
 | 3. Effects in chat | built 2026-10-10 | see "As built" below |
-| 4. "Continue" actions on results | not started | depends on 3 for upscale and edit |
+| 4. "Continue" actions on results | built 2026-10-10 | see "As built" below |
 | 5. Draft, then finish | not started | fal's draft price has to be checked first |
 
 ## The batch
@@ -222,3 +222,55 @@ Known limits:
   ("Add sound (MMAudio)").
 - Lip sync, relight and frame interpolation by RIFE / FILM are still out of the table, for the
   reason `src/effects.py` gives: a price or an input could not be verified.
+
+## Item 4 -- "Continue" actions on every result: as built (2026-10-10)
+
+`web/src/lib/continue.ts`, `ContinueRow` in `web/src/components/studio/composer/turns.tsx`,
+`continueOn` / `variation` in `web/src/app/studio/page.tsx`, two routes in `app/api.py`
+(`GET /api/assets/generated/{id}` and `.../download`), `storage.download_url_for_key`; the
+`CLAUDE.md` entry "EVERY RESULT SAYS WHAT IT CAN BE CARRIED ON TO" is the description of record.
+
+- **One row under every finished result, and a More menu.** A still: Edit image, Variation,
+  Animate, Turn into a shot; under More: Remove background, Camera move, Use as reference,
+  Make element, Download, See it in the Library, Open the canvas, Reuse prompt. A clip:
+  Upscale, Add sound, Reframe; under More: Remove background, Open in the editor, Download,
+  the Library. A written scene keeps the three it had.
+- **Nothing in the row spends.** An effect opens item 3's priced card; a Variation is a still's
+  step card. Their Approve is the click.
+- **The action is on that result.** "Edit image" under an older still edits that still, not
+  the newest one.
+- **Variation** draws the same prompt, shape and references again, on the model the picker
+  shows now.
+- **Download saves the file.** The old button opened it in a tab.
+- **The Library can send a render to effects.** Its Effects button opens the composer's
+  gallery on that render. This closes item 3's limit: a clip rendered from the Queue can now
+  be upscaled, reframed or given sound.
+- **The send button says what a send can spend:** nothing, except a still with Auto on, and
+  then the credits are beside the button.
+- Fixed on the way: a still that only exists on this machine's disk could not be a reference
+  or an element's photo; a failed photo description put the model's raw error on the page.
+
+Checked: `tests/test_continue_actions.py`, updated cases in `tests/test_api.py` and
+`tests/test_effects_studio.py`, `web/tests/continue.test.mjs` and a new case in
+`effects.test.mjs`; then in a browser against the real routes with the provider and model
+stubbed in the server process: the row and menu on a still and on a clip, Edit image bound to
+its still, a Variation approved and drawn, Animate opening the gallery on the still, Make
+element saving from a still, the download answering as an attachment through the proxy, the
+Library's Effects round trip ending in a finished clip, the price beside send with Auto on,
+and 375px. **No real model or provider call was made.** Download's signed link was checked against the
+real bucket from this machine (a 16-byte read: the bucket answered 206 with
+`Content-Disposition: attachment`); the route end to end on the live site, through the proxy,
+is the remaining check.
+
+The look: built from the action buttons and the option menus the composer already has; shown
+to Mike at this stop.
+
+Known limits:
+- A scene has no new actions. Its keyframes are the Queue's priced button and a plan's step.
+- No image upscale: the effects table has none (its upscale is for clips).
+- A Variation is one more take, not four, and uses the model picked now rather than the one
+  that drew the first.
+- Results on the dock and in a project's workspace do not have the row; it is the composer's.
+- "Price on the send button" is only ever a still's price. A scene is free to write, and a
+  clip is bought in the Queue.
+

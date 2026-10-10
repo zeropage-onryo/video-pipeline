@@ -18,8 +18,27 @@
    then the same card as the step's record, the still drawn below it. */
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Clapperboard, Film, ImagePlus, ListVideo, Play, RotateCcw } from "lucide-react";
-import { sceneHref } from "@/lib/studio-api";
+import {
+  Clapperboard,
+  Download,
+  Ellipsis,
+  Film,
+  ImagePlus,
+  Images,
+  ListVideo,
+  Play,
+  RotateCcw,
+  Scissors,
+  Shuffle,
+  Sparkles,
+  UserRound,
+  Wand2,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { renderDownloadHref, sceneHref } from "@/lib/studio-api";
+import { assetId, continueActions, split, type ContinueAction, type ContinueKind } from "@/lib/continue";
+import { OpenInEditor } from "@/components/cut/open-in-editor";
 import { cssAspect, isMake, isSheetTool, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { lookedLine } from "@/lib/skills";
@@ -39,9 +58,12 @@ type Handlers = {
   busy: boolean;
   /** an /image-models id -> its label, for the meta line */
   modelLabel: (id?: string) => string | undefined;
-  onAnimate: (m: Made) => void;
-  onUseAsRef: (m: Made) => void;
-  onReuse: (t: Turn) => void;
+  /** a "continue" action under a result (lib/continue.ts): the ones that
+   *  act here. Links -- Download, the Library, the editor, the canvas --
+   *  are drawn as links and never call this. */
+  onContinue: (t: Turn, a: ContinueAction) => void;
+  /** which effects the server's table holds, and whether it can run them */
+  continueHas: { effects: string[]; ready: boolean };
   onSelect: (madeId: string, n: number) => void;
   onChip: (text: string) => void;
   onDecide: (i: number, yes: boolean) => void;
@@ -98,6 +120,138 @@ function RunningTile({ m, live }: { m: Made; live?: Live }) {
         </div>
         <span className="zc-label">{m.output === "image" ? "Image 01" : "Writing…"}</span>
       </div>
+    </div>
+  );
+}
+
+const ICON: Record<ContinueKind, LucideIcon> = {
+  effect: Wand2,
+  gallery: Sparkles,
+  variation: Shuffle,
+  shot: Film,
+  reference: ImagePlus,
+  element: UserRound,
+  download: Download,
+  library: Images,
+  editor: Scissors,
+  canvas: Clapperboard,
+  queue: ListVideo,
+  reuse: RotateCcw,
+};
+/* a send that did not finish puts its prompt back in the box */
+const RETRY: ContinueAction = { id: "reuse", kind: "reuse", label: "Try again", title: "", primary: true };
+
+/* What a finished result can be carried on to (lib/continue.ts): the few
+   next moves in the row, the rest under More. Nothing in it spends: an
+   effect or a variation opens a card with its price, and that card's
+   Approve is the click. */
+function ContinueRow({ m, turn, h, director }: { m: Made; turn: Turn; h: Handlers; director: string | null }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", off);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", off);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  const render = assetId(m.asset);
+  const { row, more } = split(
+    continueActions(
+      {
+        output: m.output,
+        image: m.image,
+        clip: m.clip,
+        asset: m.asset,
+        conceptId: m.conceptId,
+        effect: m.effect,
+        prompt: m.prompt ?? turn.content,
+      },
+      h.continueHas,
+    ),
+  );
+  if (!row.length && !more.length) return null;
+
+  const draw = (a: ContinueAction, inMenu: boolean) => {
+    const Icon = ICON[a.kind];
+    const cls = inMenu ? undefined : "zc-act";
+    const role = inMenu ? "menuitem" : undefined;
+    const inner = (
+      <>
+        <Icon strokeWidth={1.6} /> {a.label}
+      </>
+    );
+    const done = () => setOpen(false);
+    if (a.kind === "download" && render !== null) {
+      return (
+        <a key={a.id} className={cls} role={role} href={renderDownloadHref(render)} title={a.title} onClick={done}>
+          {inner}
+        </a>
+      );
+    }
+    if (a.kind === "library" && render !== null) {
+      return (
+        <Link key={a.id} className={cls} role={role} href={`/studio/assets?open=${render}`} title={a.title}>
+          {inner}
+        </Link>
+      );
+    }
+    if (a.kind === "canvas") {
+      return director ? (
+        <Link key={a.id} className={cls} role={role} href={director} title={a.title}>
+          {inner}
+        </Link>
+      ) : null;
+    }
+    if (a.kind === "editor") {
+      return m.asset ? (
+        <OpenInEditor key={a.id} handles={[m.asset]} className={cls} title={a.title}>
+          {inner}
+        </OpenInEditor>
+      ) : null;
+    }
+    return (
+      <button
+        key={a.id}
+        type="button"
+        className={cls}
+        role={role}
+        disabled={h.busy}
+        title={a.title}
+        onClick={() => {
+          done();
+          h.onContinue(turn, a);
+        }}
+      >
+        {inner}
+      </button>
+    );
+  };
+
+  return (
+    <div className="zc-actions">
+      {row.map((a) => draw(a, false))}
+      {more.length ? (
+        <span className="pillwrap" ref={box}>
+          <button type="button" className="zc-act" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+            <Ellipsis strokeWidth={1.6} /> More
+          </button>
+          {open ? (
+            <span className="pillmenu zc-more" role="menu">
+              {more.map((a) => draw(a, true))}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -201,42 +355,10 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
       <Meta m={m} live={live} h={h} />
       {body}
       {state === "done" ? (
-        <div className="zc-actions">
-          {m.output === "image" && m.image ? (
-            <>
-              <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onAnimate(m)}>
-                <Film strokeWidth={1.6} /> Animate into a shot
-              </button>
-              <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onUseAsRef(m)}>
-                <ImagePlus strokeWidth={1.6} /> Use as reference
-              </button>
-            </>
-          ) : null}
-          {m.output === "video" && m.conceptId ? (
-            <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onPick(m)}>
-              <ListVideo strokeWidth={1.6} /> Send to Queue
-            </button>
-          ) : null}
-          {director ? (
-            <Link href={director} className="zc-act">
-              <Clapperboard strokeWidth={1.6} /> Open the canvas
-            </Link>
-          ) : null}
-          {m.asset && /^gen:\d+$/.test(m.asset) ? (
-            <Link href={`/studio/assets?open=${m.asset.slice(4)}`} className="zc-act">
-              <ListVideo strokeWidth={1.6} /> See it in the Library
-            </Link>
-          ) : null}
-          {/* an effect has no prompt of the box's to reuse: its card holds its choices */}
-          {turn.effect ? null : (
-            <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
-              <RotateCcw strokeWidth={1.6} /> Reuse prompt
-            </button>
-          )}
-        </div>
+        <ContinueRow m={m} turn={turn} h={h} director={director} />
       ) : (state === "failed" || state === "stopped") && !turn.effect ? (
         <div className="zc-actions">
-          <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
+          <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onContinue(turn, RETRY)}>
             <RotateCcw strokeWidth={1.6} /> Try again
           </button>
         </div>
