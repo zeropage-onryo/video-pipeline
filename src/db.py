@@ -360,6 +360,9 @@ OWNED_TABLES = (
     # who connected Claude to their studio (2026-10-08, src/mcp_connections.py):
     # one person's connection to one account, and when it was last used
     "mcp_connections",
+    # which studio quotes the MCP has spent (2026-10-08,
+    # src/quote_redemptions.py): one account's approved spend, single use
+    "quote_redemptions",
 )
 
 # The tables that are global BY DECISION, each with the reason. This is

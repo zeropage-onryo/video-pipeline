@@ -42,6 +42,9 @@ What this module deliberately does NOT do:
   refused by the render loop's skip-parts-with-clips rule, not by quote
   bookkeeping. Every field of Quote is an int, a str or a tuple of them,
   so nothing in the signed body is a float that round-trips badly.
+  (The STUDIO token -- sign_studio, a render no shot carries -- does
+  carry a nonce, because it has no such rule; its single use is recorded
+  in src/quote_redemptions.py, still not here.)
 
 MARKUP IS 2.4 SINCE 2026-09-18 (Mike's call, the spec's number): a credit
 is one cent of CHARGE, a render costs its provider estimate times 2.4,
@@ -616,7 +619,8 @@ def verify(token: str, *, account_id: Optional[int], shot: dict, shot_id: int,
         raise _refuse("expired", "this price is over an hour old -- re-quote")
     if body.get("acct") != account_id:
         raise _refuse("wrong_account", "this quote was not issued to this account")
-    if body.get("shot") != int(shot_id) or body.get("part") != part:
+    if "k" in body or body.get("shot") != int(shot_id) or body.get("part") != part:
+        # "k" marks a studio token (below): same secret, never a shot's price
         raise _refuse("wrong_render", "this quote is for a different render")
     if body.get("chash") != content_hash(shot, part):
         raise _refuse("stale_content", "the scene changed since this price -- re-quote")
@@ -636,6 +640,130 @@ def configured() -> bool:
     """Whether quotes can be signed here at all -- the capability a card
     reads to know if a token will ride with its price."""
     return bool((os.environ.get(SIGNING_ENV) or "").strip())
+
+
+# --------------------------------------------------------------------------
+# the studio's signed quote -- a render no shot carries (2026-10-08)
+# --------------------------------------------------------------------------
+# The MCP studio surface renders images, clips, effects and element sheets
+# that belong to no concept, so the shot token above has nothing to bind
+# to. This is its sibling: the same secret, the same TTL, the same refusal
+# codes, and a body that binds the TOOL and a hash of its exact normalized
+# arguments (model, frame, length, prompt, reference ids, effect + options,
+# element, project) -- change any of them after the yes and the token is
+# `stale_content`. "k": "studio" keeps the two kinds apart: verify() above
+# refuses a studio token as `wrong_render`, and verify_studio() a shot's.
+#
+# It carries a NONCE (`jti`), which the shot token deliberately does not:
+# re-approving a shot is made harmless by the render loop's skip-parts-
+# with-clips rule, and a free-standing render has no such rule -- the same
+# yes would buy a second image. Single use is recorded by the caller in
+# src/quote_redemptions.py; this module still writes nothing.
+
+STUDIO_KIND = "studio"
+
+
+@dataclass(frozen=True)
+class StudioQuote:
+    """A verified studio price. Duck-types as a Quote where src/charge.py
+    reads one (`account_id`, `provider`, `credits`), so the hold is the
+    number the person was shown."""
+    pricing_version: str
+    account_id: Optional[int]
+    tool: str
+    provider: str
+    args_hash: str
+    provider_usd_micros: int
+    credits: int
+    token_id: str
+    issued_at: int
+    expires_at: int
+
+
+def args_hash(tool: str, args: dict) -> str:
+    """What a studio price is ABOUT: the tool and its normalized arguments,
+    as canonical JSON, hashed. The caller normalizes (defaults resolved,
+    whitespace collapsed, ids deduplicated) so that two calls meaning the
+    same render hash the same."""
+    return hashlib.sha256(_canonical({"tool": tool, "args": args})).hexdigest()
+
+
+def studio_quote(*, account_id: Optional[int], tool: str, provider: str, args: dict,
+                 usd, now: Optional[int] = None, ttl: int = QUOTE_TTL) -> StudioQuote:
+    """Price one studio render: the provider's USD -> credits through the
+    one conversion every hold uses, bound to the tool and its arguments,
+    with a fresh token id."""
+    import secrets
+    micros = usd_micros(usd)
+    iat = int(now if now is not None else time.time())
+    return StudioQuote(pricing_version=PRICING_VERSION, account_id=account_id, tool=tool,
+                       provider=provider, args_hash=args_hash(tool, args),
+                       provider_usd_micros=micros, credits=credits_for(micros),
+                       token_id=secrets.token_urlsafe(12), issued_at=iat,
+                       expires_at=iat + int(ttl))
+
+
+def sign_studio(q: StudioQuote) -> str:
+    """The token for one studio quote. Raises SigningUnconfigured."""
+    secret = _secret()
+    body = {"v": TOKEN_VERSION, "k": STUDIO_KIND, "pv": q.pricing_version,
+            "acct": q.account_id, "tool": q.tool, "prov": q.provider,
+            "ahash": q.args_hash, "usd_micros": q.provider_usd_micros,
+            "credits": q.credits, "jti": q.token_id,
+            "iat": q.issued_at, "exp": q.expires_at}
+    payload = _canonical(body)
+    mac = hmac.new(secret, payload, hashlib.sha256).digest()
+    return f"{TOKEN_PREFIX}.{_b64(payload)}.{_b64(mac)}"
+
+
+def verify_studio(token: str, *, account_id: Optional[int], tool: str, args: dict,
+                  now: Optional[int] = None) -> StudioQuote:
+    """The StudioQuote a token stands for, or QuoteRefused -- verify()'s
+    order and codes: bad_signature, retired_pricing, expired,
+    wrong_account, wrong_render (a shot's token, or another tool's), and
+    stale_content (any argument changed since the price). Single use is
+    NOT checked here (src/quote_redemptions.py). Raises
+    SigningUnconfigured when there is no secret to check against."""
+    secret = _secret()
+    parts = (token or "").strip().split(".")
+    bad = "this quote isn't valid -- get a fresh price"
+    if len(parts) != 3 or parts[0] != TOKEN_PREFIX:
+        raise _refuse("bad_signature", bad)
+    try:
+        payload, mac = _unb64(parts[1]), _unb64(parts[2])
+    except (ValueError, TypeError):
+        raise _refuse("bad_signature", bad) from None
+    if not hmac.compare_digest(mac, hmac.new(secret, payload, hashlib.sha256).digest()):
+        raise _refuse("bad_signature", bad)
+    try:
+        body = json.loads(payload)
+    except ValueError:
+        raise _refuse("bad_signature", bad) from None
+    if not isinstance(body, dict) or body.get("v") != TOKEN_VERSION \
+            or _canonical(body) != payload:
+        raise _refuse("bad_signature", bad)
+    if body.get("pv") not in SUPPORTED_PRICING_VERSIONS:
+        raise _refuse("retired_pricing", "prices changed -- re-quote")
+    moment = int(now if now is not None else time.time())
+    if not isinstance(body.get("exp"), int) or body["exp"] < moment:
+        raise _refuse("expired", "this price is over an hour old -- re-quote")
+    if body.get("acct") != account_id:
+        raise _refuse("wrong_account", "this quote was not issued to this account")
+    if body.get("k") != STUDIO_KIND or body.get("tool") != tool:
+        raise _refuse("wrong_render", "this quote is for a different render")
+    if body.get("ahash") != args_hash(tool, args):
+        raise _refuse("stale_content",
+                      "the request changed since this price (a model, a length, a "
+                      "frame, the prompt, a reference or an option) -- re-quote")
+    try:
+        return StudioQuote(pricing_version=body["pv"], account_id=body["acct"],
+                           tool=str(body["tool"]), provider=str(body["prov"]),
+                           args_hash=str(body["ahash"]),
+                           provider_usd_micros=int(body["usd_micros"]),
+                           credits=int(body["credits"]), token_id=str(body["jti"]),
+                           issued_at=int(body["iat"]), expires_at=int(body["exp"]))
+    except (KeyError, TypeError, ValueError):
+        raise _refuse("bad_signature", bad) from None
 
 
 # --------------------------------------------------------------------------
@@ -707,7 +835,8 @@ __all__ = ["PRICING_VERSION", "CREDIT_CENTS", "MARKUP", "CREDIT_FLOOR",
            "usd_micros", "credits_for", "content_hash",
            "windows_to_render", "estimate", "estimate_scene", "billable", "quote", "display",
            "SUPPORTED_PRICING_VERSIONS", "SIGNING_ENV", "SIGNING_COMMAND", "QUOTE_TTL",
-           "SigningUnconfigured", "QuoteRefused", "sign", "verify", "configured"]
+           "SigningUnconfigured", "QuoteRefused", "sign", "verify", "configured",
+           "StudioQuote", "args_hash", "studio_quote", "sign_studio", "verify_studio"]
 
 
 # --------------------------------------------------------------------------

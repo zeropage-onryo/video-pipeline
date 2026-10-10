@@ -355,6 +355,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
                          literal: bool = False,
                          bank: bool = True,
                          source: str = "workflow",
+                         quote=None,
 ) -> dict:
     """
     Never raises: {"ok", "media_url", "generation_id", "path", "error"}.
@@ -371,6 +372,8 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
     markup), held before the model call, settled on the generations row,
     released when no image came back. The operator's exempt accounts and
     the unowned nightly pool take no hold, exactly as for a clip.
+    `quote` (2026-10-08) is a verified pricing.StudioQuote when the MCP
+    approved this still: the hold is its credits, as signed.
     The Workflows canvas's Nano Banana node: prompt in, an image under
     /renders/nano/ out (uploaded to R2 when configured). reference_image
     may be raw bytes (a picked asset photo or an upstream render) --
@@ -412,7 +415,7 @@ def generate_from_prompt(prompt: str, *, reference_image=None, db_path=None,
         from . import pricing
         charge = charging.Charge(
             account_id, provider="nano", ref=charging.attempt_ref(out_path),
-            estimate_usd=pricing.still_usd(model), dsn=db_path)
+            estimate_usd=pricing.still_usd(model), dsn=db_path, quote=quote)
         try:
             charge.take()     # an empty balance refuses HERE: no model call
         except ledger.InsufficientCredit as e:

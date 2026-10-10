@@ -57,10 +57,15 @@ it is already in `.env`; `ZEROPAGE_MCP=1` turns the mount on.
 
 Since 2026-10-07 the server Claude Desktop launches is the **studio
 surface**: images, video and effects made with Claude, and nothing on the
-pre-production board. Every image, clip and effect is two calls -- the
-first returns a quote and spends nothing; only after you say yes does
-Claude call again with `approve_usd` set to that price, and a higher
-price is refused.
+pre-production board. Every image, clip, effect and element sheet is two
+calls -- the first returns a quote in credits (with your balance before
+and after) and spends nothing; only after you say yes does Claude call
+again with that quote's `quote_token`. The token is signed for exactly
+that request and works once: a changed model, length, prompt or option is
+refused, and a repeated call returns the first job instead of charging
+again. Approving needs `QUOTE_SIGNING_SECRET` set in `.env` (generate one
+with the command in `src/pricing.py`'s `SIGNING_COMMAND`); without it the
+quotes still answer and nothing can be approved.
 
 | tool | what it does |
 |---|---|

@@ -1048,7 +1048,7 @@ def test_the_studio_instructions_carry_no_operator_vocabulary():
     text = mcp_server.STUDIO_INSTRUCTIONS.lower()
     for word in mcp_server.INTERNAL_WORDS:
         assert word.lower() not in text, word
-    assert "approve_usd" in text
+    assert "quote_token" in text and "approve_usd" not in text
 
 
 # ---------- references by id ----------
@@ -1111,6 +1111,31 @@ def test_an_unfetchable_reference_is_refused(monkeypatch):
         mcp_server.resolve_references(["gen:5"], limit=4, who="X")
 
 
+# ---------- the approval: credits, a signed token, once (2026-10-08) ----------
+
+@pytest.fixture
+def signed(monkeypatch):
+    """Quotes sign only where a test says so (conftest strips the secret)."""
+    monkeypatch.setenv("QUOTE_SIGNING_SECRET", "test-quote-secret")
+
+
+def _wallet(monkeypatch, balance=1000, exempt=False):
+    """An account's balance and exemption without a database: the two reads
+    the gate makes."""
+    from src import ledger
+    monkeypatch.setattr(ledger, "credit_exempt", lambda a, dsn=None: exempt)
+    monkeypatch.setattr(mcp_server, "_balance",
+                        lambda a, dsn: balance if a is not None else None)
+
+
+def _approved(fn, **kwargs):
+    """A person's yes, as the two calls it takes: the quote, then the SAME
+    call with its token."""
+    q = fn(**kwargs)
+    assert q["needs_approval"] is True and q["quote"]["quote_token"], q
+    return q, fn(**kwargs, quote_token=q["quote"]["quote_token"])
+
+
 # ---------- images ----------
 
 def _stub_still(monkeypatch):
@@ -1134,35 +1159,46 @@ def test_image_models_projects_the_catalogue():
     assert limits["flux-pro1.1"] == 0 and limits["gpt-image-2"] == 16
 
 
-def test_an_image_is_quoted_before_anything_is_spent(monkeypatch):
-    from src import fal
+def test_an_image_is_quoted_before_anything_is_spent(monkeypatch, signed):
+    from src import fal, ledger
     calls = _stub_still(monkeypatch)
-    out = mcp_server.run_image("a can", model="seedream4.5")
-    assert out["needs_approval"] is True and out["ok"] is False
-    assert out["quote"]["usd"] == fal.image_usd("seedream4.5")
-    assert f"approve_usd={out['quote']['usd']}" in out["note"]
-    with pytest.raises(ValueError, match="above the"):
-        mcp_server.run_image("a can", model="nano-banana-pro", approve_usd=0.08)
+    _wallet(monkeypatch, balance=500)
+    out = mcp_server.run_image("a can", model="seedream4.5", account_id=7)
+    assert out["needs_approval"] is True and out["ok"] is False and out["can_approve"]
+    usd = fal.image_usd("seedream4.5")
+    q = out["quote"]
+    assert q["usd"] == usd and q["credits"] == ledger.charge_credits(usd)
+    assert q["charged"] is True and q["balance"] == 500
+    assert q["balance_after"] == 500 - q["credits"]
+    assert q["quote_token"].startswith("zpfq.") and q["expires_at"]
+    assert f"costs {q['credits']} credits" in out["note"] and "quote_token" in out["note"]
+    with pytest.raises(ValueError, match="stale_content"):     # said yes to another model
+        mcp_server.run_image("a can", model="nano-banana-pro", account_id=7,
+                             quote_token=q["quote_token"])
     assert calls == []
 
 
-def test_an_approved_image_renders_the_chosen_model(monkeypatch):
+def test_an_approved_image_renders_the_chosen_model(monkeypatch, signed):
     calls = _stub_still(monkeypatch)
-    out = mcp_server.run_image("  a  can ", model="ideogram4.5", aspect="4:5", account_id=7,
-                               approve_usd=0.06)
+    _wallet(monkeypatch)
+    q, out = _approved(mcp_server.run_image, prompt="  a  can ", model="ideogram4.5",
+                       aspect="4:5", account_id=7)
     (c,) = calls
     assert c["prompt"] == "a can" and c["model"] == "ideogram4.5" and c["aspect"] == "4:5"
     assert c["approved"] is True and c["account_id"] == 7
     assert c["source"] == "mcp" and c["bank"] is True and c["reference_urls"] is None
+    # the hold is the number the person said yes to, handed down signed
+    assert c["quote"].credits == q["quote"]["credits"] and c["quote"].provider == "fal"
+    assert c["quote"].account_id == 7 and c["quote"].tool == "generate_image"
     assert out["ok"] and out["quote"]["usd"] == 0.06 and out["asset_id"] == 3
 
 
-def test_image_references_are_passed_and_priced(monkeypatch):
+def test_image_references_are_passed_and_priced(monkeypatch, signed):
     from src import fal
     _stub_sources(monkeypatch)
     calls = _stub_still(monkeypatch)
-    out = mcp_server.run_image("a can", model="flux2-pro", references=["sam/s1.jpg"],
-                               approve_usd=1)
+    _, out = _approved(mcp_server.run_image, prompt="a can", model="flux2-pro",
+                       references=["sam/s1.jpg"])
     assert calls[0]["reference_urls"] == ["https://r2/s1.jpg"]
     assert out["quote"]["usd"] == fal.image_usd("flux2-pro", references=1) \
         > fal.image_usd("flux2-pro")
@@ -1175,10 +1211,10 @@ def test_image_references_are_passed_and_priced(monkeypatch):
     {"prompt": "a can", "model": "midjourney"},
     {"prompt": "a can", "model": "flux2-pro", "aspect": "7:3"},
 ])
-def test_run_image_refuses_instead_of_clamping(kwargs, monkeypatch):
+def test_run_image_refuses_instead_of_clamping(kwargs, monkeypatch, signed):
     calls = _stub_still(monkeypatch)
     with pytest.raises(ValueError):
-        mcp_server.run_image(**kwargs, approve_usd=99)
+        mcp_server.run_image(**kwargs, quote_token="zpfq.a.b")
     assert calls == []
 
 
@@ -1202,26 +1238,31 @@ def test_video_models_projects_the_queues_menu():
     assert [m["id"] for m in out["models"]] == [m["id"] for m in providers.models_for("fal")]
 
 
-def test_a_clip_is_quoted_and_a_changed_length_is_caught(monkeypatch):
+def test_a_clip_is_quoted_and_a_changed_length_is_caught(monkeypatch, signed):
     calls = _stub_render(monkeypatch)
-    out = mcp_server.run_video("a can on a table", model="ltx2.3", seconds=6)
+    out = mcp_server.run_video("a can", model="ltx2.3", seconds=6)
     assert out["needs_approval"] is True and out["quote"]["model"] == "ltx2.3"
-    short = out["quote"]["usd"]
-    assert short > 0 and f"approve_usd={short}" in out["note"]
-    with pytest.raises(ValueError, match="above the"):     # approved 6s, asked for 10s
-        mcp_server.run_video("a can", model="ltx2.3", seconds=10, approve_usd=short)
+    assert out["quote"]["usd"] > 0 and out["quote"]["credits"] > 0
+    with pytest.raises(ValueError, match="stale_content"):     # said yes to 6s, asked for 10s
+        mcp_server.run_video("a can", model="ltx2.3", seconds=10,
+                             quote_token=out["quote"]["quote_token"])
+    with pytest.raises(ValueError, match="stale_content"):     # ...or reworded the prompt
+        mcp_server.run_video("a can on a table", model="ltx2.3", seconds=6,
+                             quote_token=out["quote"]["quote_token"])
     assert calls == []
 
 
-def test_an_approved_price_renders_the_chosen_model_and_length(monkeypatch):
+def test_an_approved_price_renders_the_chosen_model_and_length(monkeypatch, signed):
     calls = _stub_render(monkeypatch)
-    quote = mcp_server.run_video("a can", model="ltx2.3", seconds=6)["quote"]
+    _wallet(monkeypatch)
     monkeypatch.setattr(mcp_server, "resolve_references",
                         lambda refs, **kw: ["https://x/still.png"] if refs else [])
-    out = mcp_server.run_video("a  can ", model="ltx2.3", seconds=6, reference="gen:12",
-                               approve_usd=quote["usd"], account_id=7)
+    q, out = _approved(mcp_server.run_video, prompt="a  can ", model="ltx2.3", seconds=6,
+                       reference="gen:12", account_id=7)
+    quote = q["quote"]
     assert out["ok"] and out["quote"]["from_image"] is True
     (c,) = calls
+    assert c["quote"].credits == quote["credits"] and c["quote"].tool == "generate_video"
     assert c["model"] == "ltx2.3" and c["duration"] == 6 and c["prompt"] == "a can"
     assert c["resolution"] == quote["frame"] and c["reference_image"] == "https://x/still.png"
     assert c["approved"] is True and c["account_id"] == 7 and c["source"] == "mcp"
@@ -1235,11 +1276,11 @@ def test_an_approved_price_renders_the_chosen_model_and_length(monkeypatch):
     {"prompt": "a can", "model": "ltx2.3", "frame": "144p"},
     {"prompt": "a can", "reference": "https://x/a.png"},
 ])
-def test_video_refuses_instead_of_clamping(kwargs, monkeypatch):
+def test_video_refuses_instead_of_clamping(kwargs, monkeypatch, signed):
     _stub_sources(monkeypatch)
     calls = _stub_render(monkeypatch)
     with pytest.raises(ValueError):
-        mcp_server.run_video(**kwargs, approve_usd=99)
+        mcp_server.run_video(**kwargs, quote_token="zpfq.a.b")
     assert calls == []
 
 
@@ -1248,18 +1289,22 @@ def test_a_signed_in_caller_is_sent_to_the_queue(monkeypatch):
     token = mcp_server.CALLER_ACCOUNT.set(5)
     try:
         with pytest.raises(mcp_server.Refused, match="Queue"):
-            mcp_server.run_video("a can", model="ltx2.3", seconds=6, approve_usd=99)
+            mcp_server.run_video("a can", model="ltx2.3", seconds=6, quote_token="t")
     finally:
         mcp_server.CALLER_ACCOUNT.reset(token)
     assert calls == []
 
 
-def test_the_tool_quotes_inline_and_runs_an_approval_as_a_job(tmp_db, monkeypatch):
-    """No approve_usd: the quote, no job. A bad approval: refused in the
-    request, before a job exists. A good one: a job id."""
+def test_the_tool_quotes_inline_and_runs_an_approval_as_a_job(tmp_db, monkeypatch, signed):
+    """No quote_token: the quote, no job. A bad token: refused in the
+    request, before a job exists. The quote's own token: a job id -- and
+    the same token again is the same job, never a second one."""
     import asyncio
 
     from mcp.server.mcpserver.exceptions import ToolError
+
+    from src import quote_redemptions
+    quote_redemptions.init(tmp_db)
     _stub_render(monkeypatch)
     started = []
 
@@ -1272,12 +1317,20 @@ def test_the_tool_quotes_inline_and_runs_an_approval_as_a_job(tmp_db, monkeypatc
     args = {"prompt": "a can", "model": "ltx2.3", "seconds": 6}
     quote = _result(asyncio.run(server.call_tool("generate_video", args)))
     assert quote["needs_approval"] is True and started == []
-    with pytest.raises(ToolError, match="above the"):
-        asyncio.run(server.call_tool("generate_video", {**args, "approve_usd": 0.01}))
+    token = quote["quote"]["quote_token"]
+    with pytest.raises(ToolError, match="bad_signature"):
+        asyncio.run(server.call_tool("generate_video", {**args, "quote_token": token[:-4]}))
+    with pytest.raises(ToolError, match="stale_content"):
+        asyncio.run(server.call_tool("generate_video",
+                                     {**args, "seconds": 10, "quote_token": token}))
     assert started == []
     out = _result(asyncio.run(server.call_tool(
-        "generate_video", {**args, "approve_usd": quote["quote"]["usd"]})))
+        "generate_video", {**args, "quote_token": token})))
     assert out["job_id"] == 41 and started == ["video ltx2.3"]
+    again = _result(asyncio.run(server.call_tool(
+        "generate_video", {**args, "quote_token": token})))
+    assert again["job_id"] == 41 and again["already_used"] is True
+    assert started == ["video ltx2.3"]                 # one yes, one job
 
 
 # ---------- effects ----------
@@ -1308,7 +1361,7 @@ def test_effects_lists_the_catalogue_and_samples_long_enums():
         mcp_server.list_effects(effect="explode-everything")
 
 
-def test_an_effect_is_quoted_then_run_at_the_approved_price(monkeypatch):
+def test_an_effect_is_quoted_then_run_at_the_approved_price(monkeypatch, signed):
     from src import effects
     calls = _stub_effect(monkeypatch)
     monkeypatch.setattr(mcp_server, "resolve_references",
@@ -1319,10 +1372,13 @@ def test_an_effect_is_quoted_then_run_at_the_approved_price(monkeypatch):
     assert q["needs_approval"] and calls == []
     assert q["quote"]["usd"] == round(0.056 * 10, 4)
     assert q["quote"]["options"] == {"effect_scene": "bullet_time_360", "duration": "10"}
-    with pytest.raises(ValueError, match="above the"):
-        mcp_server.run_effect(**args, approve_usd=0.5)
-    out = mcp_server.run_effect(**args, approve_usd=q["quote"]["usd"])
+    with pytest.raises(ValueError, match="stale_content"):      # a different option
+        mcp_server.run_effect(**{**args, "options": {"effect_scene": "bullet_time_360",
+                                                     "duration": "5"}},
+                              quote_token=q["quote"]["quote_token"])
+    out = mcp_server.run_effect(**args, quote_token=q["quote"]["quote_token"])
     assert out["ok"] and calls[0]["usd"] == q["quote"]["usd"]
+    assert calls[0]["quote"].credits == q["quote"]["credits"]
     assert calls[0]["urls"] == ["https://r2/gen:4.jpg"] and calls[0]["source"] == "mcp"
     endpoint, body = effects.build_body("kling-effect", ["u"], "", calls[0]["opts"])
     assert endpoint.endswith("/effects") and body["input_image_urls"] == ["u"]
@@ -1348,11 +1404,11 @@ def test_an_effect_is_quoted_then_run_at_the_approved_price(monkeypatch):
     ({"effect": "upscale", "sources": ["gen:1"], "options": {"upscale_factor": 1}},
      "without target_fps"),
 ])
-def test_effect_refusals_happen_before_any_spend(monkeypatch, kwargs, match):
+def test_effect_refusals_happen_before_any_spend(monkeypatch, kwargs, match, signed):
     calls = _stub_effect(monkeypatch)
     monkeypatch.setattr(mcp_server, "resolve_references", lambda refs, **kw: list(refs))
     with pytest.raises(ValueError, match=match):
-        mcp_server.run_effect(**kwargs, approve_usd=100)
+        mcp_server.run_effect(**kwargs, quote_token="zpfq.a.b")
     assert calls == []
 
 
@@ -1584,23 +1640,24 @@ def test_a_projects_references_can_be_used_again(monkeypatch):
         mcp_server.resolve_references(["https://r2/never-used.jpg"], limit=4, who="X")
 
 
-def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypatch):
+def test_renders_and_effects_are_filed_under_the_project_named(tmp_db, monkeypatch, signed):
     path = _project_db(tmp_db, monkeypatch)
     project = mcp_server.make_project("Ad", dsn=path)
     pid = project["id"]
     stills, clips, fx = _stub_still(monkeypatch), _stub_render(monkeypatch), _stub_effect(monkeypatch)
-    quote = mcp_server.run_image("a can", model="seedream4.5", project_id=pid, dsn=path)
+    quote, _ = _approved(mcp_server.run_image, prompt="a can", model="seedream4.5",
+                         project_id=pid, dsn=path)
     assert quote["quote"]["project"] == {"id": pid, "title": "Ad"}
-    mcp_server.run_image("a can", model="seedream4.5", project_id=pid, approve_usd=0.04, dsn=path)
     assert stills[0]["project_id"] == pid
-    price = mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
-                                 dsn=path)["quote"]["usd"]
-    mcp_server.run_video("a can", model="ltx2.3", seconds=6, project_id=pid,
-                         approve_usd=price, dsn=path)
+    with pytest.raises(ValueError, match="stale_content"):     # the yes was for that project
+        mcp_server.run_image("a can", model="seedream4.5", dsn=path,
+                             quote_token=quote["quote"]["quote_token"])
+    _approved(mcp_server.run_video, prompt="a can", model="ltx2.3", seconds=6,
+              project_id=pid, dsn=path)
     assert clips[0]["project_id"] == pid
     monkeypatch.setattr(mcp_server, "resolve_references", lambda refs, **kw: list(refs))
-    mcp_server.run_effect("remove-background", sources=["gen:1"], project_id=pid,
-                          approve_usd=1, dsn=path)
+    _approved(mcp_server.run_effect, effect="remove-background", sources=["gen:1"],
+              project_id=pid, dsn=path)
     assert fx[0]["project_id"] == pid
     with pytest.raises(ValueError, match="no project 999999"):
         mcp_server.run_image("a can", model="seedream4.5", project_id=999999, dsn=path)
@@ -1743,22 +1800,29 @@ def _sheet_world(monkeypatch, tmp_path, photos=("IMG_1.jpg",), has_key=True):
     return drawn, mirrored
 
 
-def test_a_sheet_is_quoted_before_anything_is_drawn(monkeypatch, tmp_path):
+def test_a_sheet_is_quoted_before_anything_is_drawn(monkeypatch, tmp_path, signed):
+    from src import ledger
     drawn, _ = _sheet_world(monkeypatch, tmp_path)
+    _wallet(monkeypatch)
     q = mcp_server.run_element_sheet("character", "maya", account_id=1)
     assert q["needs_approval"] and q["ok"] is False and drawn == []
     assert q["quote"]["usd"] == 0.134 and q["quote"]["replaces_sheet"] is False
+    assert q["quote"]["credits"] == ledger.charge_credits(0.134) == 33
     assert q["quote"]["element"] == {"kind": "character", "name": "Maya"}
-    assert "approve_usd=0.134" in q["note"]
-    with pytest.raises(ValueError, match="above the"):
-        mcp_server.run_element_sheet("character", "Maya", approve_usd=0.1, account_id=1)
+    with pytest.raises(ValueError, match="wrong_render"):       # not a token for this tool
+        mcp_server.run_image("a can", model="seedream4.5", account_id=1,
+                             quote_token=q["quote"]["quote_token"])
     assert drawn == []
 
 
-def test_an_approved_sheet_is_drawn_from_the_real_photos_and_saved(monkeypatch, tmp_path):
+def test_an_approved_sheet_is_drawn_from_the_real_photos_and_saved(monkeypatch, tmp_path, signed):
     drawn, mirrored = _sheet_world(monkeypatch, tmp_path, photos=("IMG_1.jpg", "sheet.jpg"))
-    out = mcp_server.run_element_sheet("character", "Maya", approve_usd=0.134, account_id=1)
+    _wallet(monkeypatch)
+    q, out = _approved(mcp_server.run_element_sheet, kind="character", name="Maya",
+                       account_id=1)
     assert out["ok"] is True and out["quote"]["replaces_sheet"] is True
+    # the still adapter holds it, at the signed price
+    assert drawn[0]["quote"].provider == "nano" and drawn[0]["quote"].credits == 33
     assert [f.name for f in drawn[0]["files"]] == ["IMG_1.jpg"]    # never grounds on the old sheet
     assert drawn[0]["out_dir"] == tmp_path / "characters" / "maya"
     assert drawn[0]["notes"] == "curly hair, mustard sweater"
@@ -1774,7 +1838,7 @@ def test_an_approved_sheet_is_drawn_from_the_real_photos_and_saved(monkeypatch, 
 def test_sheet_refusals_happen_before_any_spend(monkeypatch, tmp_path, kind, name, match):
     drawn, _ = _sheet_world(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match=match):
-        mcp_server.run_element_sheet(kind, name, approve_usd=1, account_id=1)
+        mcp_server.run_element_sheet(kind, name, quote_token="zpfq.a.b", account_id=1)
     assert drawn == []
 
 
@@ -1785,12 +1849,14 @@ def test_no_image_key_is_a_refusal_not_a_retry(monkeypatch, tmp_path):
     assert drawn == []
 
 
-def test_a_failed_draw_comes_back_as_ok_false(monkeypatch, tmp_path):
+def test_a_failed_draw_comes_back_as_ok_false(monkeypatch, tmp_path, signed):
     from src import element_sheet
     _sheet_world(monkeypatch, tmp_path)
+    _wallet(monkeypatch)
     monkeypatch.setattr(element_sheet, "draw", lambda *a, **k: {
         "ok": False, "path": None, "generation_id": None, "error": "the sheet did not render"})
-    out = mcp_server.run_element_sheet("character", "Maya", approve_usd=1, account_id=1)
+    _, out = _approved(mcp_server.run_element_sheet, kind="character", name="Maya",
+                       account_id=1)
     assert out["ok"] is False and "did not render" in out["error"]
 
 

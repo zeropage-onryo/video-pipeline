@@ -99,12 +99,13 @@ def price_usd() -> float:
 
 def draw(kind: str, name: str, photos: list, out_dir: Path, *,
          detail: str = "", notes: str = "",
-         account_id: Optional[int] = None, db_path=None) -> dict:
+         account_id: Optional[int] = None, db_path=None, quote=None) -> dict:
     """Draw the sheet from the element's real photos into out_dir.
 
     Never raises: {"ok", "path", "generation_id", "error"}. `photos` are
     the uploads on disk (the sheet itself is skipped if it is among
-    them, so redrawing never grounds on the last drawing).
+    them, so redrawing never grounds on the last drawing). `quote` is the
+    verified pricing.StudioQuote the MCP approved, held as signed.
     """
     from . import nano_banana
     try:
@@ -124,7 +125,7 @@ def draw(kind: str, name: str, photos: list, out_dir: Path, *,
             reference_image=refs, aspect_ratio=SHEET_ASPECT,
             image_size=nano_banana.IMAGE_SIZE or "2K",
             account_id=account_id, db_path=db_path,
-            literal=True, bank=False, source="element_sheet")
+            literal=True, bank=False, source="element_sheet", quote=quote)
         if not result.get("ok"):
             return {"ok": False, "path": None, "generation_id": None,
                     "error": result.get("error") or "the sheet did not render"}
