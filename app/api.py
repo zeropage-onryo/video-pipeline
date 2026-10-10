@@ -4729,6 +4729,198 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
 # so teach-to-RAG, generation history, and the scene board all keep
 # working unmodified.
 
+# --- effects (2026-10-10; docs/tasks/task-studio-agent.md item 3) -------------
+# The effects table (src/effects.py) was reachable only from the Claude
+# Desktop connector. These three routes are the studio's own door onto it:
+# the gallery, the price, and the run. The same checks the connector runs
+# (effects.spec / check_options / check_prompt / check_sources / quote_usd)
+# and the same runner (effects.run: cap, credit hold, generations row,
+# settle, the Assets wall) -- only the gate differs. The connector takes a
+# signed token because an agent speaks for the person; here the person's
+# own click on the card is the approval, as it is for a composer still, and
+# `expect_credits` holds the route to the price that card showed.
+
+# What the gallery says under each effect, in a customer's words: no vendor
+# page, no dollars (the table's own `note` and `pricing` are the operator's).
+EFFECT_BLURBS = {
+    "nano-banana-edit": "Change an image by describing the change. Keeps faces and identity.",
+    "flux-kontext-pro": "Precise local edits: swap an object, change text, restyle one area.",
+    "seedream-edit": "Combine up to four images into one, or restyle one.",
+    "remove-background": "Cut the subject out on a transparent background.",
+    "kling-effect": "One-click animated templates on a still: 98 looks, 5 or 10 seconds.",
+    "pixverse-effect": "One-click animated templates on a still: 154 looks, 5 seconds.",
+    "camera-move": "A named camera move on a still: push in, orbit, crane, and more.",
+    "upscale": "Sharpen a clip to twice its size, or smooth its motion to 24, 30 or 60 fps.",
+    "add-sound": "Sound effects and ambience made to fit a clip's picture.",
+    "reframe": "The same clip in a new shape: the frame is extended, not cropped.",
+    "reframe-hq": "A new shape for a clip, at higher quality and a higher price.",
+    "remove-video-background": "Cut a clip's subject out on a transparent background.",
+    "remove-video-background-pro": "Remove or replace a clip's background, sound kept.",
+}
+EFFECT_CATEGORY_LABELS = {"image_edit": "Edit an image", "video_effect": "Animate a still",
+                          "camera": "Camera moves", "finish": "Finish a clip"}
+EFFECT_SOURCES_MAX = 4
+
+
+class EffectBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    effect: str
+    # what it acts on: gen:<id> for a render on the Assets wall (the only
+    # way a CLIP is named), or a reference exactly as the composer holds it
+    sources: list[str] = []
+    prompt: str = ""
+    options: dict = {}
+    # /effects/run only: the credits the card showed the person
+    expect_credits: Optional[int] = None
+
+
+def _effect_view(name: str) -> dict:
+    """One effect for the gallery: what it takes and makes, its options
+    with every legal value, and what it costs in CREDITS at its defaults --
+    None when the price depends on the clip it is given."""
+    from src import effects, ledger
+    row = effects.catalogue(effect=name)[0]
+    spec = effects.spec(name)
+    credits = None
+    if not spec.get("probe"):
+        chosen = {k: (o.get("default") if o.get("default") is not None else list(o["values"])[0])
+                  for k, o in spec["options"].items() if o.get("required") or o.get("default") is not None}
+        try:
+            credits = ledger.charge_credits(
+                effects.quote_usd(name, effects.check_options(name, chosen)))
+        except ValueError:
+            credits = None
+    return {"id": name, "label": row["label"], "category": row["category"],
+            "blurb": EFFECT_BLURBS.get(name, row["label"]),
+            "takes": row["takes"], "output": row["output"],
+            "sources": row["sources"], "prompt": row["prompt"],
+            "options": {k: {"values": v["values"], "default": v["default"],
+                            "required": v["required"]} for k, v in row["options"].items()},
+            "credits": credits}
+
+
+@router.get("/effects")
+def effects_list(account_id: int = Depends(auth.current_account_id)):
+    """The effects gallery: a PROJECTION of src/effects.py, never a second
+    table. Browsing it runs nothing and costs nothing."""
+    from src import effects, fal, ledger
+    return {"items": [_effect_view(name) for name in effects.EFFECT_NAMES],
+            "categories": [{"id": c, "label": EFFECT_CATEGORY_LABELS.get(c, c)}
+                           for c in effects.CATEGORIES],
+            "ready": fal.has_key(account_id),
+            "exempt": ledger.credit_exempt(account_id)}
+
+
+def _effect_request(account_id: int, body: EffectBody) -> dict:
+    """Everything about one effect request checked and PRICED, nothing
+    spent and nothing uploaded. Raises ValueError with what is wrong."""
+    from src import effects, ledger, mcp_server
+    name = (body.effect or "").strip()
+    row = effects.spec(name)
+    opts = effects.check_options(name, body.options)
+    prompt = effects.check_prompt(name, body.prompt)
+    named = list(dict.fromkeys(str(r).strip() for r in body.sources if str(r).strip()))
+    if len(named) > EFFECT_SOURCES_MAX:
+        raise ValueError(f"at most {EFFECT_SOURCES_MAX} sources")
+    effects.check_sources(name, len(named), opts)
+    probe = None
+    if row["takes"] == "video":
+        # a clip is named by id, and priced off its measured length and size
+        clip = mcp_server._clip_row(named[0], None, account_id)
+        local = clip.get("output_path") or ""
+        probe = effects.probe_video(local if local and Path(local).is_file() else clip["media_url"])
+    usd = effects.quote_usd(name, opts, probe)
+    return {"effect": name, "row": row, "options": opts, "prompt": prompt, "sources": named,
+            "probe": probe, "usd": usd, "credits": ledger.charge_credits(usd),
+            "charged": not ledger.credit_exempt(account_id)}
+
+
+def _effect_urls(req: dict, account_id: int) -> list[str]:
+    """The request's sources as URLs the effects service can FETCH. Done at
+    run time only: an image the composer holds has to be uploaded first.
+    Raises ValueError when a source cannot be read or made fetchable -- an
+    effect must not be paid for against a picture it never saw."""
+    from src import fal, mcp_server
+    row = req["row"]
+    if row["takes"] == "video":
+        urls, _ = mcp_server._video_sources(req["sources"], None, account_id)
+        return urls
+    urls = []
+    for ref in req["sources"]:
+        kind, _, rest = ref.partition(":")
+        if kind in ("gen", "asset") and rest.isdigit():
+            urls += mcp_server.resolve_references([ref], limit=1, who=row["label"],
+                                                  account_id=account_id)
+            continue
+        # a reference as the composer holds it: the same reader, and the
+        # same wall, as a still's own references (_collect_refs)
+        raw = _photo_bytes(ref.split("?")[0])
+        jpeg = _to_jpeg(raw) if raw else None
+        url = fal.as_image_url(jpeg, account_id=account_id) if jpeg else None
+        if not url:
+            raise ValueError("one of the images could not be read or made fetchable")
+        urls.append(url)
+    return urls
+
+
+@router.post("/effects/quote")
+def effects_quote(body: EffectBody, account_id: int = Depends(auth.current_account_id)):
+    """What this effect, with these options, on these sources, costs --
+    in credits. Spends nothing; the card calls it as its options change."""
+    try:
+        req = _effect_request(account_id, body)
+    except ValueError as e:
+        return _error(400, "bad_effect", str(e))
+    return {"effect": req["effect"], "label": req["row"]["label"], "output": req["row"]["output"],
+            "options": req["options"], "credits": req["credits"], "charged": req["charged"],
+            **({"clip": {k: req["probe"][k] for k in ("seconds", "width", "height")}}
+               if req["probe"] else {})}
+
+
+@router.post("/effects/run")
+def effects_run(body: EffectBody, account_id: int = Depends(auth.current_account_id)):
+    """Run one effect, as a job. The person's click on the priced card is
+    the approval, and `expect_credits` is the price that card showed: a
+    request whose price is no longer that one is refused (409), never run
+    at another number. The hold, the cap, the generations row and the
+    Assets wall are effects.run's, exactly as for the connector."""
+    from src import effects, failures, fal
+    try:
+        req = _effect_request(account_id, body)
+    except ValueError as e:
+        return _error(400, "bad_effect", str(e))
+    if body.expect_credits is None:
+        return _error(400, "missing_price", "say what the card showed: expect_credits")
+    if body.expect_credits != req["credits"]:
+        return JSONResponse(status_code=409, content={
+            "error": {"code": "price_changed",
+                      "message": f"this costs {req['credits']} credits now"},
+            "credits": req["credits"]})
+    if not fal.has_key(account_id):
+        return _error(503, "effects_unavailable", "effects are not set up on this server")
+    row = req["row"]
+
+    def work(job):
+        jobs.progress(job, 0.1, "getting the source ready")
+        try:
+            urls = _effect_urls(req, account_id)
+        except ValueError as e:
+            raise RuntimeError(str(e)) from e
+        jobs.progress(job, 0.3, f"running {row['label']}")
+        res = effects.run(req["effect"], urls, req["prompt"], req["options"], usd=req["usd"],
+                          sources=req["sources"], probe=req["probe"],
+                          account_id=account_id, source="composer")
+        if not res.get("ok"):
+            print(f"  effect {req['effect']} was not made: {res.get('error')}", file=sys.stderr)
+            raise RuntimeError(failures.plain(res.get("error"), "The effect"))
+        return {"detail": f"{row['label']} · done", "output": res.get("media_url"),
+                "kind": row["output"],
+                "asset": f"gen:{res['asset_id']}" if res.get("asset_id") else None}
+
+    job = jobs.start("effect", f"effect · {row['label']}", work, account_id=account_id)
+    return {"job_id": job["id"], "credits": req["credits"], "charged": req["charged"]}
+
+
 def _render_failed(raw, what: str) -> str:
     """A draw that did not happen, as the job's line: the provider's own
     words go to the log (and are on the generations row), the page gets a
