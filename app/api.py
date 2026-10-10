@@ -4729,6 +4729,15 @@ async def pipeline_run(request: Request, account_id: int = Depends(auth.current_
 # so teach-to-RAG, generation history, and the scene board all keep
 # working unmodified.
 
+def _render_failed(raw, what: str) -> str:
+    """A draw that did not happen, as the job's line: the provider's own
+    words go to the log (and are on the generations row), the page gets a
+    sentence a customer can act on (src/failures.py, 2026-10-10)."""
+    from src import failures
+    print(f"  {what.lower()} was not made: {raw}", file=sys.stderr)
+    return failures.plain(raw, what)
+
+
 GENERATE_OUTPUTS = ("image", "video", "prompt")
 # The image shapes the composer may ask Nano Banana for (2026-10-02). An id
 # outside this set is ignored and the still is drawn at the module default
@@ -4951,7 +4960,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                     note += f" · {label} takes no reference images, drawn from the prompt"
                 notes.append(note)
             else:
-                notes.append(f"image render skipped: {result.get('error')}")
+                notes.append(_render_failed(result.get("error"), "The still"))
         elif output == "image":
             jobs.progress(job, 0.7, "rendering image via Nano Banana")
             result = nano_banana.generate_from_prompt(
@@ -4963,7 +4972,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                     concept_id, shot["n"], result["media_url"], account_id=account_id)
                 notes.append("image rendered → shot reference")
             else:
-                notes.append(f"image render skipped: {result.get('error')}")
+                notes.append(_render_failed(result.get("error"), "The still"))
         elif output == "video":
             if video_pick:
                 jobs.progress(job, 0.7, f"rendering via {video_pick['model']}")
@@ -4979,9 +4988,9 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                         concept_id, shot["n"], result["media_url"], account_id=account_id)
                     notes.append("clip rendered and attached")
                 else:
-                    notes.append(f"render skipped: {result.get('error')}")
+                    notes.append(_render_failed(result.get("error"), "The clip"))
             else:
-                notes.append("render skipped: FAL_KEY not set")
+                notes.append(_render_failed("FAL_KEY not set", "The clip"))
 
         detail = "prompt saved" if output == "prompt" else (notes[0] if notes else "saved")
         if warnings:

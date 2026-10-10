@@ -15,6 +15,7 @@ import { useState } from "react";
 import { Check, ImagePlus, UserRound } from "lucide-react";
 import type { Turn } from "@/lib/assistant";
 import { SHEET_TOOL, mediaSrc } from "@/lib/composer";
+import { madeStatus } from "@/lib/made-state";
 import "@/components/studio/still-step.css";
 
 export type StepState = "waiting" | "running" | "done" | "failed";
@@ -29,7 +30,8 @@ export function stepOf(t: Turn) {
   const args = (t.reply?.proposal?.args ?? {}) as { prompt?: unknown; aspect?: unknown };
   const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : t.content;
   const aspect = typeof args.aspect === "string" ? args.aspect : undefined;
-  const status = t.made?.status;
+  // a still that "finished" with nothing drawn is not done (lib/made-state.ts)
+  const status = t.made ? madeStatus(t.made) : undefined;
   const state: StepState = !t.made
     ? "waiting"
     : status === "running"

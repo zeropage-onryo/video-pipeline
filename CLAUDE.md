@@ -2347,6 +2347,52 @@ is yours, in Resolve, by hand.
   (2026-10-09); the skill decides only when, and with what name and outfit. Not built: sheet
   layouts and styles, invented characters, per-model prompt dialects, a write tool for a
   project's look.
+- **THE BRAIN PROPOSES A PLAN, AND THE STUDIO RUNS IT STEP BY STEP (2026-10-10, item 2 of
+  `docs/tasks/task-studio-agent.md`; Runway's "Ask before generating", Higgsfield's plan and
+  Approve).** A Guide turn ends on its FIRST write, so "make an ad from these photos" could only
+  ever be one make per message. `make_plan` (`src/make_plan.py`) is still ONE write that ends
+  the turn unrun -- its argument is the list: two to eight steps, each `image` / `scene` /
+  `sheet` / `keep` (the existing makes, their arguments checked by `guide_tools.check_args`
+  under each tool's own name, so the URL rule and every bound hold inside a plan) or
+  `keyframes` / `queue`, which act on a scene step earlier in the same plan. Offered only to the
+  composer (a maker turn handed every make; the dock draws a still and nothing else), with its
+  own paragraph in the instructions (`prompts/creative_guide_plan.txt`) only where it is
+  offered. A plan of one step comes back as that step's own tool (`collapse`). **Nothing on
+  the server runs a plan**: `guide_tools.run` and `/creative-guide/act` refuse it like any make.
+  The composer runs it (`web/src/lib/make-plan.ts`, pure and node-tested;
+  `components/studio/make-plan-card.tsx`; the loop is `runPlan` in `app/studio/page.tsx`)
+  through the doors each step always had -- `make` for a still and a scene, `runSheet`, the
+  keep, `POST /concepts/{id}/keyframes`, the pick -- so a plan adds no spend door and no new
+  charge, and **never renders a clip**: its last word on a scene is the Queue. The plan lives
+  on its turn (`Turn.plan`, saved with the thread); a step's RESULT is an ordinary turn under
+  the card. With Ask first on, the plan waits for Start and each step that costs credits stops
+  for its own Approve beside its price; "Approve all" covers only the steps priced on the card
+  when it was clicked -- a scene's keyframes are priced once the scene exists, so they still
+  ask. With Auto it runs through, as a single make does. A step can be edited or skipped
+  before it runs; editing one that ran sends THAT step back to pending and leaves every other
+  finished step alone; the first failure stops the plan where it is; Stop ends the wait on a
+  running make and charges nothing for it. `finishProject` (the talk is cleared once a scene is
+  written) runs when the PLAN is through, and keeps the plan's card with what it made. The
+  plan's state is held in a ref (`plans`) and mirrored onto its turn, because the loop awaits
+  steps while the person may skip or edit a later one. The file names say `make-plan` /
+  `make_plan`, never `plan`: `tests/test_plans.py` and `components/site/plan-*.tsx` are the
+  BILLING plans.
+- **A RENDER THAT DID NOT HAPPEN IS SAID IN A CUSTOMER'S WORDS, AND IS NEVER "DONE"
+  (2026-10-10, found on the live composer).** A still whose draw failed at the provider came
+  back from `/api/generate/run` as a finished job -- the scene row it rides on WAS saved -- so
+  its step card read Done · Approved over a tile holding the provider's raw text ("User is
+  locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing").
+  `src/failures.py` `plain(raw, what)` is the one place a provider's error becomes a sentence
+  for the page: four causes a person can act on differently (the studio was turned away, the
+  service is busy, the model declined the prompt, no answer) and one fallback, each ending
+  "Nothing was charged." -- a fact, since every adapter releases its hold on failure and a
+  refusal for an empty balance or a cap comes before any hold. The studio's own refusals
+  (`charge.refusal`, `generative.cap_error`) pass through as written. The raw error goes to
+  stderr and stays on the generations row. On the page, `web/src/lib/made-state.ts` reads a
+  record honestly: a still with status done and no image is `failed` (the card says Not drawn
+  and offers Approve again), for threads saved before as well, and `failLine` keeps an old
+  thread's raw text off the line. Applied to the still route only so far; keyframes, sheets
+  and Queue renders still report their adapters' own text.
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

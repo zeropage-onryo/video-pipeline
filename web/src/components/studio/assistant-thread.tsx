@@ -304,7 +304,8 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
   // and is the "scene written" card the mock composer draws. The save
   // effect writes exactly that.
   const finishProject = useCallback((written: ComposerDraft["written"]) => {
-    setTurns((ts) => ts.filter((t) => !!t.made));
+    // what was made stays, and so does the plan that made it
+    setTurns((ts) => ts.filter((t) => !!t.made || !!t.plan));
     setStage("");
     setDraftState({ ...EMPTY_DRAFT, written });
   }, []);

@@ -23,6 +23,8 @@ import { sceneHref } from "@/lib/studio-api";
 import { cssAspect, isMake, isSheetTool, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
 import { lookedLine } from "@/lib/skills";
+import { failLine, madeStatus } from "@/lib/made-state";
+import { PlanCard, type PlanHandlers } from "@/components/studio/make-plan-card";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 import { TypedText } from "@/components/studio/typed-text";
 import { SheetStep, StillStep, isSheetStep, isStillStep, lineIsPrompt } from "@/components/studio/still-step";
@@ -54,6 +56,8 @@ type Handlers = {
   onApproveSheet: (i: number) => void;
   /** under the sheet's Approve: "Nano Banana Pro · 36 credits" */
   sheetLine: string;
+  /** a plan's card (lib/make-plan.ts), by the plan's id */
+  plan: (planId: string) => PlanHandlers;
 };
 
 function Meta({ m, live, h }: { m: Made; live?: Live; h: Handlers }) {
@@ -65,8 +69,12 @@ function Meta({ m, live, h }: { m: Made; live?: Live; h: Handlers }) {
       </div>
     );
   }
-  if (m.status === "failed") return <div className="zc-meta bad">{m.detail || "That one did not finish."}</div>;
-  if (m.status === "stopped") return <div className="zc-meta">Stopped</div>;
+  // a still that "finished" with nothing drawn did not finish (lib/made-state.ts)
+  const state = madeStatus(m);
+  if (state === "failed") {
+    return <div className="zc-meta bad">{m.output === "image" ? failLine(m.detail) : m.detail || "That one did not finish."}</div>;
+  }
+  if (state === "stopped") return <div className="zc-meta">Stopped</div>;
   return <div className="zc-meta">{madeMeta(m, h.modelLabel(m.model))}</div>;
 }
 
@@ -95,26 +103,24 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
     transition: { duration: 0.28, delay: Math.min(i, 6) * 0.05, ease: [0.22, 0.61, 0.36, 1] as const },
   });
 
+  const state = madeStatus(m);
   let body: React.ReactNode = null;
-  if (m.status === "running") body = <RunningTile m={m} live={live} />;
-  else if (m.status === "done" && m.output === "image") {
+  if (state === "running") body = <RunningTile m={m} live={live} />;
+  else if (state === "done" && m.output === "image") {
     const ratio = cssAspect(m.frame) ?? "4 / 5";
     body = (
       <div className="zc-tiles one">
         <motion.div className="zc-tilewrap" {...tile(0)} style={{ maxWidth: `calc(420px * (${ratio}))` }}>
           <button type="button" className="zc-tile on" style={{ aspectRatio: ratio }} onClick={() => h.onSelect(m.id, 1)}>
-            {m.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={mediaSrc(m.image)} alt="" />
-            ) : (
-              <span className="zc-pct">Saved without an image · {m.detail}</span>
-            )}
+            {/* done means drawn: a still with no image is `failed` above */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={mediaSrc(m.image ?? "")} alt="" />
           </button>
           <span className="zc-label on">Image 01 · selected</span>
         </motion.div>
       </div>
     );
-  } else if (m.status === "done") {
+  } else if (state === "done") {
     const parts = m.parts ?? [];
     body = parts.length ? (
       <div className={`zc-tiles${parts.length >= 4 ? " four" : ""}`}>
@@ -175,7 +181,7 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
     <>
       <Meta m={m} live={live} h={h} />
       {body}
-      {m.status === "done" ? (
+      {state === "done" ? (
         <div className="zc-actions">
           {m.output === "image" && m.image ? (
             <>
@@ -201,7 +207,7 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
             <RotateCcw strokeWidth={1.6} /> Reuse prompt
           </button>
         </div>
-      ) : m.status === "failed" || m.status === "stopped" ? (
+      ) : state === "failed" || state === "stopped" ? (
         <div className="zc-actions">
           <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
             <RotateCcw strokeWidth={1.6} /> Try again
@@ -311,6 +317,7 @@ export function ComposerStream({
                     onApprove={() => handlers.onApprove(i)}
                   />
                 ) : null}
+                {t.plan ? <PlanCard plan={t.plan} h={handlers.plan(t.plan.id)} /> : null}
                 {isSheetStep(t) ? (
                   <SheetStep
                     turn={t}

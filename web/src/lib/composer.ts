@@ -35,6 +35,7 @@
    second); only the result and the status changes are saved. */
 import { API_URL } from "@/lib/api";
 import { followJob, type Job, type TimelinePart } from "@/lib/studio-api";
+import { PLAN_TOOL } from "@/lib/make-plan";
 
 export type Output = "image" | "video";
 
@@ -45,7 +46,11 @@ export type Output = "image" | "video";
    the prompt, the model and what it costs, and -- in Ask mode, below --
    an Approve it waits on. */
 export const MAKE_TOOLS: Record<string, Output> = { make_image: "image", make_video: "video" };
-export const isMake = (tool?: string | null) => !!tool && tool in MAKE_TOOLS;
+/* A plan (lib/make-plan.ts) is several makes in a row: the studio runs it,
+   never the confirm card, so every reader that asks "is this a make" says
+   yes to it too. */
+export const isPlanTool = (tool?: string | null) => tool === PLAN_TOOL;
+export const isMake = (tool?: string | null) => !!tool && (tool in MAKE_TOOLS || tool === PLAN_TOOL);
 
 /* The Guide's element sheet (src/guide_tools.SHEET_TOOL, 2026-10-09): a
    step card like a still's, but its Approve saves the person in the

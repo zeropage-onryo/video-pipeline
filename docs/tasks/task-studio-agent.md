@@ -42,7 +42,7 @@ then **"go"** on the batch below.
 | item | state | PR / notes |
 |---|---|---|
 | 1. Skills | built 2026-10-10 | see "As built" below |
-| 2. Plan with step cards | approved to start 2026-10-10 | reuses the existing step card |
+| 2. Plan with step cards | built 2026-10-10 | see "As built" below |
 | 3. Effects in chat | not started | `effects.py` is on main; the credit quote came with #200 |
 | 4. "Continue" actions on results | not started | depends on 3 for upscale and edit |
 | 5. Draft, then finish | not started | fal's draft price has to be checked first |
@@ -120,3 +120,48 @@ Deliberately left out of item 1:
 - A write tool for a project's LOOK. The mood-board skill writes the look into the brief and
   points at the LOOK box in the project's workspace.
 - The dock's conversation does not offer the `/` menu; the brain can still load a skill there.
+
+## Item 2 -- Plan with step cards: as built (2026-10-10)
+
+`src/make_plan.py`, `prompts/creative_guide_plan.txt`, `web/src/lib/make-plan.ts`,
+`web/src/components/studio/make-plan-card.tsx`, the `runPlan` block in
+`web/src/app/studio/page.tsx`; the `CLAUDE.md` entry "THE BRAIN PROPOSES A PLAN" is the
+description of record.
+
+- **One answer, several makes.** `make_plan` takes two to eight steps: a still, a scene, a
+  character sheet, keeping hunted references, a scene's keyframes, sending a scene to the
+  Queue. Several scene steps in one plan is how a multi-scene piece is written from one message.
+- **A checklist in the thread.** Each step says what it is, what it will do, why, and what it
+  costs. Start runs it; a step that costs credits stops for its own Approve beside its price;
+  "Approve all" covers the steps whose price is on the card. Keyframes are priced once their
+  scene exists, so they always ask (with Ask first on).
+- **Edit, skip, bring back.** Before a step runs, or after: editing a step that ran re-runs that
+  step only. Skipping a scene takes its keyframes and Queue steps with it.
+- **Stop and failure.** Stop ends the wait on the running make; a failed step stops the plan
+  where it is, says why in plain words, and offers Try again.
+- **Results are ordinary turns** under the card: the still's own step card and tile, the scene's
+  shot tiles with every action they always had. A still a later step is "held to" rides along
+  as a reference.
+- **It never renders a clip.** A plan's last word on a scene is the Queue.
+- **Fixed on the way** (both seen live on 2026-10-10): a still that failed at the provider no
+  longer reads Done, and the provider's raw error no longer reaches the page (`src/failures.py`,
+  `web/src/lib/made-state.ts`).
+
+Checked: `tests/test_make_plan.py`, `tests/test_failures.py`, a new case in
+`tests/test_pipeline_tabs.py`, `web/tests/make-plan.test.mjs`, `web/tests/made-state.test.mjs`;
+then in a browser against the real routes, jobs, concept rows and keyframe approve with every
+model stubbed in the server process: Ask first (Start, per-step Approve, Approve all), a draw
+that failed with the live 403 text and its Try again, Edit and Skip, a reload mid-plan, 375px,
+and Auto with Stop and Resume. **No real model call was made**: whether the live brain proposes
+plans when it should, and writes steps that stand on their own, is the first thing to watch.
+
+Known limits:
+- The loop runs in the page. A plan left mid-step is picked up on return (each step follows the
+  turn its result went into) but does not carry on by itself; the card offers Resume.
+- With Auto on, a plan spends through every step without a click, as a single make does. The
+  open decision on a per-project credit cap (above) matters more now.
+- `uses` holds a step to an earlier STILL only. A sheet step's character reaches a later scene by
+  being named in it, the way any Element does.
+- Plain failure wording is applied to the still route. Keyframes, sheets and Queue renders still
+  show their adapters' own text.
+- The dock shows a plan's summary line and nothing else; a plan is run from the composer.

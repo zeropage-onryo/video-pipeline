@@ -1,0 +1,286 @@
+/* A plan's card (make-plan-card.tsx): the step card's look (still-step.css),
+   one row per step. Prefixed pl- and unscoped like it; every colour is a
+   studio token (studio.css :root). */
+.pl {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px 14px;
+  border: 1px solid var(--edge-lo);
+  border-radius: 16px;
+  background: var(--well);
+  transition: border-color var(--t);
+}
+.pl[data-phase="idle"],
+.pl[data-phase="waiting"] {
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
+}
+.pl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bone-2);
+}
+.pl-head svg {
+  width: 14px;
+  height: 14px;
+}
+.pl-head b {
+  font-weight: 500;
+  color: var(--text);
+}
+.pl-head em {
+  margin-left: auto;
+  font-style: normal;
+  letter-spacing: 0.06em;
+}
+.pl[data-phase="waiting"] .pl-head em,
+.pl[data-phase="idle"] .pl-head em {
+  color: var(--signal-hi);
+}
+.pl[data-phase="finished"] .pl-head em {
+  color: var(--ok);
+}
+.pl-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pl-step {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--edge-lo);
+}
+.pl-n {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1px solid var(--edge-hi);
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--bone-2);
+}
+.pl-n svg {
+  width: 12px;
+  height: 12px;
+}
+.pl-step[data-status="done"] .pl-n {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.pl-step[data-status="running"] .pl-n,
+.pl-step[data-status="waiting"] .pl-n {
+  border-color: var(--signal);
+  color: var(--text);
+}
+.pl-step[data-status="running"] .pl-n {
+  animation: pl-pulse 1.4s ease-in-out infinite;
+}
+@keyframes pl-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pl-step[data-status="running"] .pl-n {
+    animation: none;
+  }
+}
+.pl-step[data-status="skipped"] .pl-body {
+  opacity: 0.5;
+}
+.pl-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pl-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.pl-title b {
+  font-weight: 600;
+}
+.pl-title i,
+.pl-title em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--bone-3);
+}
+.pl-title em {
+  margin-left: auto;
+}
+.pl-step[data-status="waiting"] .pl-title em {
+  color: var(--signal-hi);
+}
+.pl-step[data-status="done"] .pl-title em {
+  color: var(--ok);
+}
+.pl-step[data-status="failed"] .pl-title em {
+  color: var(--warn);
+}
+.pl-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--bone);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.pl-edit {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--edge-hi);
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 13.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.pl-edit:focus {
+  outline: none;
+  border-color: var(--signal);
+}
+.pl-why,
+.pl-note {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--bone-3);
+}
+.pl-note {
+  color: var(--warn);
+}
+.pl-step[data-status="done"] .pl-note,
+.pl-step[data-status="skipped"] .pl-note {
+  color: var(--bone-3);
+}
+.pl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: 30px;
+}
+.pl-price {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--bone-2);
+}
+.pl-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+/* `.pl` first: the studio's `.zps button` reset outranks a lone class */
+.pl .pl-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--bone-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.pl .pl-link:hover,
+.pl .pl-link.on {
+  color: var(--text);
+}
+.pl .pl-link:disabled {
+  color: var(--dimmer);
+  cursor: default;
+}
+.pl .pl-approve,
+.pl .pl-go {
+  height: 34px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--signal);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 13.5px;
+  font-weight: 600;
+  transition: filter var(--t);
+}
+.pl .pl-go {
+  height: 40px;
+  padding: 0 24px;
+  font-size: 14px;
+}
+.pl .pl-approve:hover,
+.pl .pl-go:hover {
+  filter: brightness(1.12);
+}
+.pl .pl-approve:disabled,
+.pl .pl-go:disabled {
+  background: var(--signal-deep);
+  opacity: 0.55;
+  cursor: default;
+  filter: none;
+}
+.pl .pl-alt {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--edge-hi);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.pl .pl-alt:hover {
+  border-color: var(--bone-3);
+}
+.pl .pl-alt:disabled {
+  color: var(--dimmer);
+  cursor: default;
+}
+.pl-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--edge-lo);
+}
+.pl-foot small {
+  flex-basis: 100%;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--bone-2);
+}
+.pl-foot button + small {
+  padding-top: 2px;
+}
