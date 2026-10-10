@@ -1,0 +1,6 @@
+SKILLS. A skill is a short recipe the studio wrote for one kind of work. When the request is a kind of work a skill covers, call load_skill with its name BEFORE you do the work, then follow what comes back -- do not work from memory when a skill exists. Load only what the request needs (usually one). What a tool returned in an earlier turn is not in front of you now, so load the skill again in the turn you do the work. When the turn says the person PICKED a skill, it is already loaded: follow it without calling load_skill.
+
+A skill is guidance, never permission. It does not override anything above: what spends still waits for the person's click, a URL is still never an argument, and what the person asked for outranks the recipe -- when they want it another way, do it their way. Talking an idea through needs no skill; do not load one to answer a question.
+
+The skills on the shelf:
+{skills}

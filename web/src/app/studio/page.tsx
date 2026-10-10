@@ -86,6 +86,7 @@ import {
   createAsset,
   getPresets,
   getProject,
+  getSkills,
   isProjectTool,
   pickConcept,
   recallActiveProject,
@@ -148,6 +149,7 @@ import {
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
 import { creditsText } from "@/lib/render-choice";
 import { SlashMenu } from "@/components/studio/composer/slash-menu";
+import { lookedOf, skillCommands, skillOfCommand, type Skill } from "@/lib/skills";
 import "@/components/studio/composer/composer.css";
 import { AssistantAvatar } from "@/components/studio/assistant-avatar";
 
@@ -337,6 +339,9 @@ function Composer() {
   };
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preset, setPreset] = useState<Preset | null>(null);
+  // the skill shelf (GET /api/skills), and the one picked for the next send
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [skill, setSkill] = useState<Skill | null>(null);
   const [slashAt, setSlashAt] = useState(0);
   // progress per running send, by made id -- page state, never saved: a
   // save per tick would be a PUT a second
@@ -361,6 +366,9 @@ function Composer() {
     getPresets()
       .then((r) => setPresets(r.items))
       .catch(() => setPresets([]));
+    getSkills()
+      .then((r) => setSkills(r.items))
+      .catch(() => setSkills([]));
     // the picker lists elements only; a render handed over from the
     // Assets wall ("Use in a shot") needs the wider scope to resolve
     getAssets(undefined, attachId?.startsWith("generated-") ? "all" : "elements")
@@ -464,10 +472,12 @@ function Composer() {
   // without it (no Gemini key) a send makes directly, the way it used to.
   const guideReady = caps.creative_guide === true;
 
-  // the slash menu: the fixed commands plus GET /api/presets as camera chips
+  // the slash menu: the fixed commands, the skill shelf (only where there
+  // is a brain to read one), and GET /api/presets as camera chips
   const commands = useMemo<SlashCommand[]>(
     () => [
       ...BASE_COMMANDS,
+      ...(guideReady ? skillCommands(skills) : []),
       ...presets.map((p) => ({
         id: `preset:${p.id}`,
         cmd: p.id.replace(/[^\w-]+/g, "-").toLowerCase(),
@@ -475,7 +485,7 @@ function Composer() {
         group: "camera" as const,
       })),
     ],
-    [presets],
+    [presets, skills, guideReady],
   );
   const hasImage = thread.some((t) => t.made?.output === "image" && t.made.status === "done" && !!t.made.image);
   const slashItems = matchCommands(idea, commands, output, hasImage);
@@ -660,6 +670,7 @@ function Composer() {
       setGuideWriting("");
       setFilledBy(null);
       setPreset(null);
+      setSkill(null);
       setTimeout(() => textarea.current?.focus(), 50);
     };
     window.addEventListener(NEW_SESSION_EVENT, on);
@@ -707,7 +718,14 @@ function Composer() {
             ...ts,
             by.role === "user"
               ? { role: "user", content: text, made }
-              : { role: "assistant", content: by.message, reply: by.reply, decided: "done", made },
+              : {
+                  role: "assistant",
+                  content: by.message,
+                  reply: by.reply,
+                  decided: "done",
+                  looked: lookedOf(by.reply.tool_runs, skills),
+                  made,
+                },
           ],
     );
     const me = { madeId, stopped: false } as { madeId: string; jobId?: number; stopped: boolean };
@@ -897,7 +915,9 @@ function Composer() {
         // from: make directly, on the person's own turn
         await make(asked || brief.trim(), output, { role: "user" });
       } else {
-        const mine: Turn = { role: "user", content: asked };
+        // the skill picked from the `/` menu rides on THIS send only
+        const using = skill;
+        const mine: Turn = { role: "user", content: asked, ...(using ? { skill: using.title } : {}) };
         const next = [...conversationOf(thread), { role: mine.role, content: mine.content }];
         asking = mine;
         setThread((all) => [...all, mine]);
@@ -910,6 +930,7 @@ function Composer() {
         form.append("idea", asked);
         // the Image | Video switch: which thing a "make it" makes
         form.append("output", output);
+        if (using) form.append("skill", using.name);
         if (project) form.append("project_id", String(project.id));
         // The Fast / Reasoning pill. Without it the Guide answered every
         // turn on the reasoning tier -- ~1.5c a message for "which
@@ -935,18 +956,22 @@ function Composer() {
         if (job.status !== "done" || !reply) throw new Error(job.error || "The guide stopped.");
         setGuideWorking(null);
         setGuideWriting("");
+        // answered: the skill was for that message. A turn that failed
+        // keeps the chip, beside the words handed back to the box.
+        if (using) setSkill((now) => (now === using ? null : now));
+        const looked = lookedOf(reply.tool_runs, skills);
         const proposal = reply.proposal;
         if (proposal && MAKE_TOOLS[proposal.tool] === "image") {
           // A STILL SPENDS: the answer is its step card -- held on Approve
           // with Ask first on, drawn at once with it off
           if (output !== "image") setOutput("image");
-          const step: Turn = { role: "assistant", content: reply.message, reply };
+          const step: Turn = { role: "assistant", content: reply.message, reply, looked };
           setThread((all) => [...all, step]);
           if (generate === "auto") await runStill(step);
         } else if (proposal && proposal.tool === SHEET_TOOL) {
           // AN ELEMENT SHEET (2026-10-09): its step card, held on Approve
           // with Ask first on, saved and drawn at once with it off
-          const step: Turn = { role: "assistant", content: reply.message, reply };
+          const step: Turn = { role: "assistant", content: reply.message, reply, looked };
           setThread((all) => [...all, step]);
           if (generate === "auto") await runSheet(step);
         } else if (proposal && isMake(proposal.tool)) {
@@ -970,7 +995,7 @@ function Composer() {
               role: "assistant",
               content: reply.message,
               reply,
-              looked: (reply.tool_runs ?? []).filter((r) => r.ok).map((r) => r.tool),
+              looked,
               chosen: keepersOf(reply.sheet),
             },
           ]);
@@ -1011,6 +1036,13 @@ function Composer() {
     } else if (c.id.startsWith("preset:")) {
       const p = presets.find((x) => `preset:${x.id}` === c.id);
       if (p) setPreset(p);
+    } else if (c.group === "skill") {
+      // a chip on the box, and the switch follows what the skill ends in
+      const picked = skillOfCommand(c.id, skills);
+      if (picked) {
+        setSkill(picked);
+        if (picked.output) setOutput(picked.output);
+      }
     }
     textarea.current?.focus();
   }
@@ -1334,8 +1366,17 @@ function Composer() {
               ) : null}
             </AnimatePresence>
 
-            {referenceCount || preset ? (
+            {referenceCount || preset || skill ? (
               <div className="zc-chips">
+                {skill ? (
+                  <span className="zc-chip preset skill" title={skill.summary}>
+                    <span className="zc-chip-kind">Skill</span>
+                    <span className="zc-chip-name">{skill.title}</span>
+                    <button type="button" aria-label={`Remove the ${skill.title} skill`} onClick={() => setSkill(null)}>
+                      <X strokeWidth={2} />
+                    </button>
+                  </span>
+                ) : null}
                 {preset ? (
                   <span className="zc-chip preset" title={preset.how}>
                     <span className="zc-chip-name">{preset.label}</span>

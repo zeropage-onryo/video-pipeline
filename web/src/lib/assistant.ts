@@ -162,8 +162,11 @@ export type Turn = {
   picked?: number;
   /** the pill: its next-move line after a local step (a keep, a pick) */
   nudge?: string;
-  /** the composer: which board tools the guide looked at before this answer */
+  /** the composer: what the guide used before this answer -- read tools by
+   *  name, a skill as "skill:<title>" (lib/skills.ts lookedOf) */
   looked?: string[];
+  /** the composer: the skill this message was sent with, by title */
+  skill?: string;
   /** the composer: the proposal's confirm card has been decided */
   decided?: "done" | "skipped";
   /** the composer (2026-10-02): this user turn was a SEND, and what it made

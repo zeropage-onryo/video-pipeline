@@ -22,6 +22,7 @@ import { Clapperboard, Film, ImagePlus, ListVideo, Play, RotateCcw } from "lucid
 import { sceneHref } from "@/lib/studio-api";
 import { cssAspect, isMake, isSheetTool, madeMeta, mediaSrc, type Made } from "@/lib/composer";
 import type { ContactSheet, Turn } from "@/lib/assistant";
+import { lookedLine } from "@/lib/skills";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 import { TypedText } from "@/components/studio/typed-text";
 import { SheetStep, StillStep, isSheetStep, isStillStep, lineIsPrompt } from "@/components/studio/still-step";
@@ -256,13 +257,14 @@ export function ComposerStream({
                       {t.made.refs.length > 4 ? <b>+{t.made.refs.length - 4}</b> : null}
                     </span>
                   ) : null}
+                  {t.skill ? <span className="zc-bubble-skill">{t.skill} skill</span> : null}
                   <p>{t.content}</p>
                   {t.failed ? <span className="zc-bubble-failed">Not sent — try again</span> : null}
                 </div>
               </div>
             ) : (
               <div className="zc-reply">
-                {t.looked?.length ? <span className="zc-looked">looked at {t.looked.join(", ")}</span> : null}
+                {lookedLine(t.looked) ? <span className="zc-looked">{lookedLine(t.looked)}</span> : null}
                 {/* a still's step card carries its prompt; the line is the same words */}
                 {lineIsPrompt(t) || isSheetStep(t) ? null : <p>{t.content}</p>}
                 {t.reply?.sheet ? (

@@ -112,13 +112,17 @@ export const mediaSrc = (u: string | null | undefined) =>
    Commands are ACTIONS on the composer, never hidden prompt text: each
    one changes a control the person can see (output, a preset chip, the
    Guide toggle, a reference). Presets come from GET /api/presets so the
-   menu cannot drift from what Enhance folds in. */
+   menu cannot drift from what Enhance folds in. Skills (2026-10-10,
+   lib/skills.ts) come from GET /api/skills the same way: a pick is a
+   chip on the box, and the recipe it names rides on that one send. */
 export type SlashCommand = {
   id: string;
   /** what is typed after the slash */
   cmd: string;
   desc: string;
-  group: "make" | "camera" | "use";
+  /** a longer line, shown on hover */
+  hint?: string;
+  group: "make" | "camera" | "use" | "skill";
   /** only offered in this output (absent = both) */
   only?: Output;
   /** only offered once there is a finished image to act on */

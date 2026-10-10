@@ -286,6 +286,16 @@ def scene_lengths(account_id: int = Depends(auth.current_account_id)):
             "min": timeline.MIN_SCENE_SECONDS, "max": timeline.MAX_SCENE_SECONDS}
 
 
+@router.get("/skills")
+def skills_list(account_id: int = Depends(auth.current_account_id)):
+    """The skill shelf for the composer's `/` menu (src/skills.py): the
+    name, the title, one line on when it is the right recipe, and which
+    output it usually ends in. A PROJECTION of prompts/skills/, like the
+    brains below -- never the recipes themselves, which only the brain reads."""
+    from src import skills
+    return {"items": skills.catalogue()}
+
+
 @router.get("/brains")
 def brains(account_id: int = Depends(auth.current_account_id)):
     """The model tiers the composer may offer, as a PROJECTION of
@@ -720,6 +730,12 @@ async def creative_guide_reply(request: Request,
     # it was.
     output = (form.get("output") or "").strip().lower()
     output = output if output in creative_guide.OUTPUT_NOTES else None
+    # A skill the person picked from the composer's `/` menu (2026-10-10,
+    # src/skills.py): its recipe rides on this turn already loaded. A name
+    # that is not on the shelf is no pick at all, never an error -- the
+    # menu is drawn off GET /api/skills, and a stale tab must still send.
+    from src import skills
+    skill = skills.clean_name(form.get("skill"))
     # The Guide talks inside the same project a Create would write into
     # (2026-09-28), so its suggestions follow that project's brief and memory.
     project = _form_project(form, account_id)
@@ -783,7 +799,7 @@ async def creative_guide_reply(request: Request,
             reply = creative_guide.respond_personal(
                 conversation, provider=provider, scope=scope, model=model,
                 brand=brand, grounding=grounding, image_refs=image_refs,
-                assistant=assistant, links=links, output=output)
+                assistant=assistant, links=links, output=output, skill=skill)
         else:
             from google import genai
             # The board's tools, in-process (src/guide_tools.py,
@@ -806,7 +822,7 @@ async def creative_guide_reply(request: Request,
                 brand=brand, grounding=grounding, image_refs=image_refs,
                 account_id=account_id, on_retry=note, tools=tools, run_tool=run_tool,
                 brain=brain, assistant=assistant, links=links, output=output,
-                project=project, on_text=on_text)
+                project=project, on_text=on_text, skill=skill)
         # `billing` says WHOSE plan paid: a personal connection spends
         # the person's own ChatGPT/Claude subscription and never touches
         # this install's Gemini credit, and /costs must not count it.
