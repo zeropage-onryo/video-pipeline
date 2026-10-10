@@ -18,6 +18,7 @@ def test_every_kind_has_a_prompt_and_it_fills():
     character = element_sheet.prompt_for("character", "Michael", "the rider", "white leathers")
     assert "three-quarter view" in character and "head-and-shoulders close-up" in character
     assert "wearing white leathers" in character and "no text" in character
+    assert "pure white studio background" in character      # Mike's call, 2026-10-10
     bare = element_sheet.prompt_for("character", "Michael")
     assert "the same clothes as in the reference photo" in bare
     assert "PLACE: GARAGE" in element_sheet.prompt_for("location", "garage")
