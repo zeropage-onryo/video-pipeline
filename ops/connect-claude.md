@@ -56,9 +56,17 @@ By hand it is the same order: quit first, then paste the block(s) into
 Claude Desktop launches each local server twice within a few seconds
 and keeps the second. Until 2026-10-10 the two copies could deadlock
 each other's table setup in Postgres and one of them died -- about half
-of all starts, and registering both entries doubled the copies. The
-server now takes a lock around that setup, so two entries are fine. A
-start that has to wait for another one takes a few seconds longer.
+of all starts. The server now takes a lock around that setup, so the
+copies take turns instead.
+
+Taking turns is slow against the live database. Measured 2026-10-10 from
+this Mac: one copy's table setup takes about 15 seconds, so the copy
+Desktop keeps answers after about 30 (it waits for the dropped copy to
+finish first). With `zeropage` alone that worked on every start tried.
+With `--board` as well there are four copies in the queue, about a
+minute in all, which has not been tried and is probably longer than
+Desktop waits -- so add `zeropage-board` only when you need the board
+tools, and if it shows "Server disconnected", that is the likely reason.
 
 If it still happens, the reason is in
 `~/Library/Logs/Claude/mcp-server-zeropage.log` (or

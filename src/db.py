@@ -844,8 +844,13 @@ def init_db(dsn: Optional[str] = None) -> None:
 # do not wait on each other.
 INIT_LOCK_KEY = 20261010
 # How long a start waits for another start's init before going ahead
-# without the lock. A normal init is a few seconds; this has to stay
-# well under the 60s a desktop client gives `initialize`.
+# without the lock. Measured 2026-10-10: the stdio server's warm init is
+# 12 connections and 168 statements -- half a second on a local Postgres,
+# about 15s against the live one from the Mac -- so 20s waits out exactly
+# ONE other start, with little to spare. It cannot simply be raised: the
+# start's own init has to fit after the wait, inside the 60s an MCP client
+# usually gives `initialize` (the SDK's default request timeout; not
+# checked against Claude Desktop itself).
 INIT_LOCK_WAIT_S = 20.0
 INIT_LOCK_POLL_S = 0.2
 # The whole init, again, when Postgres picks it as a deadlock's victim:
