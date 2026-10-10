@@ -3683,30 +3683,39 @@ def main(argv=None) -> int:
         os.environ[ENGINE_ENV] = "1"
 
     dsn = args.db or None
-    # Tables the tools read must exist before the first call: a desktop
-    # that launches this on a fresh clone would otherwise answer its
-    # first `board` with "no such table" instead of an empty board.
-    db.init_db(dsn)
-    preprod.init(dsn)
-    scout.init(dsn)
-    # ...and the ones `elements` and every reference check read (the
-    # characters / props tables) and `renders` lists. Without these a
-    # fresh database answered a photo ref with "Error executing tool"
-    # rather than "not one of your photos" (found running the studio
-    # surface over stdio, 2026-10-08).
-    from . import entities, projects, quote_redemptions, render_assets
-    entities.init(dsn)
-    render_assets.init(dsn)
-    projects.init(dsn)            # after preprod.init: it ALTERs shoot_concepts
-    quote_redemptions.init(dsn)   # an approved quote is spent once
-    # ...and what import_file and assemble_clips write (2026-10-09): the
-    # editor's uploads, cut projects and versions, and the generations log a
-    # joined clip's wall entry stands on. Found by running them over stdio
-    # against a fresh database, where both crashed on a missing table.
-    from . import generative
+    from . import entities, generative, projects, quote_redemptions, render_assets
     from .cut import store as cut_store
-    generative.init(dsn)
-    cut_store.init(dsn)
+
+    def init_tables():
+        # Tables the tools read must exist before the first call: a desktop
+        # that launches this on a fresh clone would otherwise answer its
+        # first `board` with "no such table" instead of an empty board.
+        db.init_db(dsn)
+        preprod.init(dsn)
+        scout.init(dsn)
+        # ...and the ones `elements` and every reference check read (the
+        # characters / props tables) and `renders` lists. Without these a
+        # fresh database answered a photo ref with "Error executing tool"
+        # rather than "not one of your photos" (found running the studio
+        # surface over stdio, 2026-10-08).
+        entities.init(dsn)
+        render_assets.init(dsn)
+        projects.init(dsn)            # after preprod.init: it ALTERs shoot_concepts
+        quote_redemptions.init(dsn)   # an approved quote is spent once
+        # ...and what import_file and assemble_clips write (2026-10-09): the
+        # editor's uploads, cut projects and versions, and the generations log a
+        # joined clip's wall entry stands on. Found by running them over stdio
+        # against a fresh database, where both crashed on a missing table.
+        generative.init(dsn)
+        cut_store.init(dsn)
+
+    # One start at a time (2026-10-10). Claude Desktop launches this
+    # process twice within seconds on every start and drops the first, and
+    # two of these inits side by side deadlock in Postgres -- eleven
+    # starts died that way, "Server disconnected", before anyone read the
+    # desktop's log. db.run_init serializes them and runs the block again
+    # if it is still picked as a deadlock's victim.
+    db.run_init(init_tables, dsn)
 
     # The job registry, injected here for the same reason app/mcp_mount.py
     # injects it: a graph run takes minutes, and a tool call that blocks
