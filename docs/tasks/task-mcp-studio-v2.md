@@ -28,8 +28,8 @@ spend is quoted first and runs only after his yes in chat.
 | 6. cancel a job | built 2026-10-09, PR #201 (stacked on #200) | see "As built" under step 6 |
 | 7. structured results | built 2026-10-09, PR #202 (stacked on #201) | see "As built" under step 7 |
 | 2a. join clips | built 2026-10-09, PR #204 (stacked on #202) | see "As built" under step 2a |
-| 3 + 4. viewer + upload | `import_file` built 2026-10-09, branch `claude/task-mcp-studio-v2-import` (stacked on #204); MCP Apps NOT built -- gate not passed, see below | see "Verification" and "As built" under step 3 + 4 |
-| 2b. finish a clip | not started | |
+| 3 + 4. viewer + upload | `import_file` built 2026-10-09, PR #205 (stacked on #204); MCP Apps NOT built -- gate not passed, see below | see "Verification" and "As built" under step 3 + 4 |
+| 2b. finish a clip | built 2026-10-10, branch `claude/task-mcp-studio-v2-finish` (stacked on #205) | see "As built" under step 2b |
 | 2c. edit by instruction | not started | |
 
 ## 1. Approve in studio credits, with a signed single-use quote
@@ -302,6 +302,47 @@ any of an error payload, a 404/410/499, or a finished job with no output as "can
 - Add re-frame to a new aspect ratio (video outpaint) and video background removal **only** for fal
   endpoints with a published fixed price. Verify each against its OpenAPI schema and model page;
   date the row (`checked`) like the existing rows. Compute-second-billed endpoints stay out.
+
+**Verified 2026-10-10** -- each endpoint's OpenAPI schema
+(`fal.ai/api/openapi/queue/openapi.json?endpoint_id=<id>`) and the `endpointBilling` record its
+model page embeds (`billing_unit` + `price`), which is more exact than the page's prose:
+
+| endpoint | billing | in? |
+|---|---|---|
+| `fal-ai/luma-dream-machine/ray-2-flash/reframe` | seconds, $0.06 | yes: `reframe` |
+| `fal-ai/luma-dream-machine/ray-2/reframe` | seconds, $0.20 | yes: `reframe-hq` |
+| `veed/video-background-removal` | 30 frames, $0.015 (page: $0.0225 with Refine Foreground Edges ON, $0.015 OFF) | yes: `remove-video-background` |
+| `bria/video/background-removal` | seconds, $0.14; "size less than 4000x4000 and duration less than 30s" | yes: `remove-video-background-pro` |
+| `fal-ai/birefnet/v2/video` | **compute seconds**, $0 | no -- the task's rule |
+| `fal-ai/ben/v2/video` | megapixels, $0.001 | no -- nothing says how a video's megapixels are counted, so a quote would be a guess |
+| `fal-ai/wan-vace-14b/outpainting` | seconds, $0.08 (page: per OUTPUT second, $0.04/0.06/0.08 at 480/580/720p, at 16fps) | no -- needs a forced resolution and frame count to price, re-generates the clip at 16fps capped at 241 frames, and expands by ratio/direction rather than to a target shape. Add it if a true outpaint is wanted |
+
+**As built (2026-10-10).** Four rows in `src/effects.py`, category `finish`, each with its own
+`checked` (`row.get("checked", CHECKED)` in the catalogue):
+- `reframe` / `reframe-hq`: `video_url` + required `aspect_ratio` (1:1, 16:9, 9:16, 4:3, 3:4,
+  21:9, 9:21); the prompt is optional and says what belongs in the new area; priced
+  `seconds x rate` off the measured clip. Held to 10.5s (`REFRAME_MAX_SECONDS`): fal's page
+  states NO length limit, Luma's own reframe guide caps it at 10s, so a longer clip is refused
+  before the quote rather than paid for and cut short (the half second is for a "10s" render
+  that measures 10.04). The schema's crop coordinates and first-frame image are not offered.
+- `remove-video-background` (VEED): `output_codec` fixed to `vp9` (one transparent .webm; the
+  h264 mode returns two files), options `subject_is_person` and `refine_foreground_edges`;
+  priced per STARTED 30 frames of the clip at its own frame rate (30 when ffprobe cannot read
+  one), $0.0225 or $0.015 by the refine option.
+- `remove-video-background-pro` (Bria): `background_color` (Transparent or ten flat colours,
+  default Transparent) and `output_container_and_codec` (webm_vp9 default, mp4_h264,
+  mov_proresks of its nine); `preserve_audio` fixed true; Transparent + mp4_h264 is refused by
+  the row's `check` (H.264 has no alpha); under 30s; `seconds x $0.14`.
+- Also fixed: `effects.run` published every video result as `video/mp4`; it is now the file's
+  own container (`VIDEO_MIMES`), or a .webm / ProRes .mov would not play.
+- Verified: tests/test_effects.py (the four rows' dates, endpoints, required/legal options, the
+  transparency refusal, the length limits, prices incl. VEED's frame rounding, wire bodies, and
+  a list-shaped VEED answer / a .mov published as what it is) and one MCP-level test (a reframe
+  quoted in credits off the measured clip, a changed shape after the yes refused, a 14s clip
+  refused). Over the real stdio server: the menu lists the four with prices and 2026-10-10, and
+  the missing shape and the transparent-mp4 request are refused with the reason. **No live fal
+  call was made** -- the first real reframe and background removal are worth watching, like
+  every other row here.
 
 ## 2c. Edit a clip by instruction — research first
 

@@ -69,6 +69,16 @@ def test_the_enums_are_the_schemas_not_a_summary():
     ("upscale", {"upscale_factor": 1, "target_fps": 60},
      {"seconds": 5, "height": 720, "fps": 24}, 0.1),
     ("add-sound", {}, {"seconds": 4.2, "height": 720, "fps": 24}, 0.005),
+    # step 2b (2026-10-10): per second of the clip, and VEED's per started 30 frames
+    ("reframe", {"aspect_ratio": "16:9"}, {"seconds": 8.0, "height": 1280, "fps": 24}, 0.48),
+    ("reframe-hq", {"aspect_ratio": "9:16"}, {"seconds": 5.0, "height": 720, "fps": 24}, 1.0),
+    ("remove-video-background-pro", {}, {"seconds": 10.0, "height": 720, "fps": 24}, 1.4),
+    ("remove-video-background", {"refine_foreground_edges": True},
+     {"seconds": 10.0, "height": 720, "fps": 24}, 0.18),            # 240 frames = 8 x $0.0225
+    ("remove-video-background", {"refine_foreground_edges": False},
+     {"seconds": 10.0, "height": 720, "fps": 24}, 0.12),
+    ("remove-video-background", {}, {"seconds": 5.04, "height": 720, "fps": 30}, 0.135),  # 152 -> 6
+    ("remove-video-background", {}, {"seconds": 0.5, "height": 720, "fps": 0}, 0.0225),   # >= 1 unit
 ])
 def test_prices(effect, opts, probe, usd):
     assert effects.quote_usd(effect, opts, probe) == usd
@@ -184,3 +194,112 @@ def test_an_effect_records_the_project_it_was_filed_under(tmp_db, keys, fake_dow
     with generative.connect(tmp_db) as conn:
         params = json.loads(conn.execute("SELECT params_json FROM generations").fetchone()[0])
     assert params["project_id"] == 12
+
+
+# ---------- step 2b (2026-10-10): a new shape, a background removed ----------
+# docs/tasks/task-mcp-studio-v2.md. Four rows, each read off its OpenAPI
+# schema and the billing record its fal page embeds, and dated on its own.
+
+STEP_2B = ("reframe", "reframe-hq", "remove-video-background", "remove-video-background-pro")
+CLIP = {"seconds": 8.0, "width": 720, "height": 1280, "fps": 24.0}
+
+
+def test_the_new_rows_carry_their_own_check_date_and_the_old_ones_keep_theirs():
+    listed = {row["id"]: row for row in effects.catalogue()}
+    for name in STEP_2B:
+        assert listed[name]["checked"] == "2026-10-10" and listed[name]["takes"] == "video"
+        assert listed[name]["category"] == "finish" and listed[name]["pricing"]
+    assert listed["upscale"]["checked"] == effects.CHECKED == "2026-10-07"
+
+
+def test_the_endpoints_are_the_fixed_price_ones():
+    """Per second or per frames -- never per compute second. BiRefNet
+    (compute seconds), BEN (an undefined megapixel count) and Wan VACE
+    outpainting are deliberately not in the table."""
+    endpoints = {effects.EFFECTS[n]["endpoint"] for n in STEP_2B}
+    assert endpoints == {"fal-ai/luma-dream-machine/ray-2-flash/reframe",
+                         "fal-ai/luma-dream-machine/ray-2/reframe",
+                         "veed/video-background-removal", "bria/video/background-removal"}
+    every = {row["endpoint"] for row in effects.EFFECTS.values()}
+    assert not {e for e in every if "birefnet" in e or "/ben/" in e or "wan-vace" in e}
+
+
+def test_a_reframe_needs_a_target_shape_from_lumas_list():
+    with pytest.raises(ValueError, match="needs `aspect_ratio`"):
+        effects.check_options("reframe", {})
+    with pytest.raises(ValueError, match="not one of"):
+        effects.check_options("reframe-hq", {"aspect_ratio": "4:5"})
+    assert effects.check_options("reframe", {"aspect_ratio": "21:9"}) == {"aspect_ratio": "21:9"}
+    assert effects.REFRAME_ASPECTS == ("1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21")
+
+
+def test_a_clip_too_long_to_reframe_is_refused_before_it_is_priced():
+    """Luma caps a reframe at 10 seconds; a longer clip must not be paid
+    for and cut short. A "10s" render that measures 10.04 still goes."""
+    assert effects.quote_usd("reframe", {"aspect_ratio": "16:9"}, {**CLIP, "seconds": 10.04})
+    for name in ("reframe", "reframe-hq"):
+        with pytest.raises(ValueError, match="takes clips up to"):
+            effects.quote_usd(name, {"aspect_ratio": "16:9"}, {**CLIP, "seconds": 12.0})
+    with pytest.raises(ValueError, match="takes clips up to 30s"):
+        effects.quote_usd("remove-video-background-pro", {}, {**CLIP, "seconds": 31.0})
+
+
+def test_transparency_is_refused_on_a_container_that_cannot_carry_it():
+    with pytest.raises(ValueError, match="cannot carry transparency"):
+        effects.check_options("remove-video-background-pro",
+                              {"background_color": "Transparent",
+                               "output_container_and_codec": "mp4_h264"})
+    assert effects.check_options("remove-video-background-pro", {}) == {
+        "background_color": "Transparent", "output_container_and_codec": "webm_vp9"}
+    green = effects.check_options("remove-video-background-pro", {
+        "background_color": "Green", "output_container_and_codec": "mp4_h264"})
+    assert green["background_color"] == "Green"
+    with pytest.raises(ValueError, match="not one of"):
+        effects.check_options("remove-video-background-pro",
+                              {"output_container_and_codec": "gif"})
+
+
+def test_the_new_wire_shapes_follow_each_schema():
+    endpoint, body = effects.build_body("reframe", ["v"], "open sky above",
+                                        {"aspect_ratio": "16:9"}, CLIP)
+    assert endpoint.endswith("ray-2-flash/reframe")
+    assert body == {"video_url": "v", "aspect_ratio": "16:9", "prompt": "open sky above"}
+    _, body = effects.build_body("reframe-hq", ["v"], "", {"aspect_ratio": "1:1"}, CLIP)
+    assert body == {"video_url": "v", "aspect_ratio": "1:1"}          # the prompt is optional
+    _, body = effects.build_body("remove-video-background", ["v"], "",
+                                 effects.check_options("remove-video-background",
+                                                       {"subject_is_person": False}), CLIP)
+    assert body == {"video_url": "v", "output_codec": "vp9", "subject_is_person": False,
+                    "refine_foreground_edges": True}
+    _, body = effects.build_body("remove-video-background-pro", ["v"], "",
+                                 effects.check_options("remove-video-background-pro", {}), CLIP)
+    assert body == {"video_url": "v", "preserve_audio": True,
+                    "background_color": "Transparent",
+                    "output_container_and_codec": "webm_vp9"}
+    assert effects.check_prompt("reframe", "  more  sky ") == "more sky"
+    with pytest.raises(ValueError, match="takes no prompt"):
+        effects.check_prompt("remove-video-background", "make it pop")
+
+
+@pytest.mark.parametrize("result, suffix, mime", [
+    ({"video": [{"url": "https://v3.fal.media/out.webm", "content_type": "video/webm"}]},
+     ".webm", "video/webm"),                                   # VEED answers with a LIST
+    ({"video": {"url": "https://v3.fal.media/out.mov"}}, ".mov", "video/quicktime"),
+    ({"video": {"url": "https://v3.fal.media/out.mp4"}}, ".mp4", "video/mp4"),
+])
+def test_a_transparent_or_prores_result_is_published_as_what_it_is(
+        tmp_db, keys, fake_download, monkeypatch, result, suffix, mime):
+    from src import render_assets
+    published = []
+
+    def publish(path, ctype, account_id=None):
+        published.append((path.suffix, ctype))
+        return f"/renders/fal/{path.name}"
+
+    monkeypatch.setattr(render_assets, "record_best_effort", lambda **kw: {"id": 5})
+    res = effects.run("remove-video-background", ["https://r2/clip.mp4"], "",
+                      effects.check_options("remove-video-background", {}), usd=0.1575,
+                      sources=["gen:9"], probe=CLIP, db_path=tmp_db,
+                      http=FakeHttp(result=result), publish=publish)
+    assert res["ok"] is True, res["error"]
+    assert published == [(suffix, mime)] and res["media_url"].endswith(suffix)

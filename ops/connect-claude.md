@@ -70,7 +70,7 @@ quotes still answer and nothing can be approved.
 | tool | what it does |
 |---|---|
 | `image_models` / `video_models` | the models, their options and prices |
-| `effects` | image edits, Kling / PixVerse template effects, camera moves, upscale / frame rate, added sound -- options and price rules |
+| `effects` | image edits, Kling / PixVerse template effects, camera moves, and clip finishing: upscale / frame rate, added sound, re-framing a clip to a new shape (`reframe`, `reframe-hq`), removing a clip's background (`remove-video-background`, `remove-video-background-pro`) -- options and price rules |
 | `elements` | your characters, props and places, with the photo `ref`s a render can use |
 | `renders` | your recent renders as `gen:<id>` |
 | `images_for` | web reference images, as `candidate:<id>` |

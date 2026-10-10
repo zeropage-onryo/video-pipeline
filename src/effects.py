@@ -28,6 +28,24 @@ lip sync (needs an audio input this studio has no id for yet), relight
 prompt), RIFE/FILM interpolation (billed per compute second, so there is
 no price to quote -- Topaz's target_fps does the same job at a known
 rate), PixVerse at 8s (no published 8s price).
+
+ADDED 2026-10-10 (docs/tasks/task-mcp-studio-v2.md step 2b), each read off
+its OpenAPI schema and the `endpointBilling` record its model page embeds
+(the unit and the price, structured -- more exact than the prose):
+re-framing a clip to a new shape (Luma Ray 2 Reframe and its Flash
+variant, billed per second) and removing a clip's background (VEED, billed
+per 30 frames; Bria, billed per second). Each of those four rows carries
+its own `checked` date. Left OUT that day, with the reason:
+- fal-ai/birefnet/v2/video -- billed per COMPUTE second (and listed at
+  $0): there is no price to quote.
+- fal-ai/ben/v2/video -- "$0.001 per megapixel", with nothing published on
+  how a video's megapixels are counted (per frame? of the output?), so a
+  quote would be a guess.
+- fal-ai/wan-vace-14b/outpainting -- priced per OUTPUT second at a
+  resolution that must be forced ($0.04/0.06/0.08 at 480/580/720p), and it
+  re-generates the clip at 16fps capped at 241 frames (~15s) from expand-
+  by-ratio directions rather than a target shape. A real outpaint, but not
+  the "same clip, new frame" Luma's reframe is; add it if that is wanted.
 """
 from __future__ import annotations
 
@@ -352,6 +370,45 @@ def _sound_seconds(probe: dict) -> int:
     return max(1, min(30, int(-(-probe["seconds"] // 1))))
 
 
+# --- step 2b, checked 2026-10-10 ------------------------------------------
+CHECKED_2B = "2026-10-10"
+# Luma's reframe: the target shapes on the wire (both variants, one schema)
+REFRAME_ASPECTS = ("1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21")
+# fal's page states no length limit for the reframe; Luma's own guide caps a
+# reframe at 10 seconds, so a longer clip is refused HERE rather than paid for
+# and cut short. Half a second of slack: a "10s" render measures 10.04.
+REFRAME_MAX_SECONDS = 10.5
+# Bria's video background removal: the fill colours and the three containers
+# offered of its nine (alpha needs VP9 or ProRes 4444; H.264 has none)
+BRIA_BACKGROUNDS = ("Transparent", "Black", "White", "Gray", "Red", "Green", "Blue",
+                    "Yellow", "Cyan", "Magenta", "Orange")
+BRIA_CONTAINERS = ("webm_vp9", "mp4_h264", "mov_proresks")
+VEED_FRAMES_PER_UNIT = 30
+VEED_UNIT_USD = {True: 0.0225, False: 0.015}       # by refine_foreground_edges
+
+
+def _per_second(rate: float) -> Callable[[dict, dict], float]:
+    """Billed per second of the clip (fal's `seconds` unit)."""
+    return lambda opts, probe: probe["seconds"] * rate
+
+
+def _veed_usd(opts: dict, probe: dict) -> float:
+    """Per started 30 frames of the source: $0.0225 with edge refinement
+    (the default), $0.015 without (fal's page and billing record,
+    CHECKED_2B). Frames are the clip's length at its own frame rate; a
+    rate ffprobe could not read is taken as 30."""
+    frames = probe["seconds"] * float(probe.get("fps") or 30)
+    units = max(1, int(-(-frames // VEED_FRAMES_PER_UNIT)))
+    return units * VEED_UNIT_USD[bool(opts.get("refine_foreground_edges", True))]
+
+
+def _bria_combo(opts: dict) -> None:
+    if opts.get("background_color") == "Transparent" \
+            and opts.get("output_container_and_codec") == "mp4_h264":
+        raise ValueError("H.264 (mp4_h264) cannot carry transparency -- use webm_vp9 or "
+                         "mov_proresks, or pick a background colour")
+
+
 EFFECTS: dict[str, dict] = {
     # -- image edits: an image in, an image out --------------------------
     "nano-banana-edit": {
@@ -462,6 +519,67 @@ EFFECTS: dict[str, dict] = {
         "max_seconds": 30,
         "source": "https://fal.ai/models/fal-ai/mmaudio-v2",
     },
+    # -- finishing, added 2026-10-10: a new shape, a background removed ------
+    "reframe": {
+        "label": "Re-frame (Luma Ray 2 Flash)", "category": "finish",
+        "note": ("the same clip in a new shape (9:16 <-> 16:9, 1:1, 4:3...): the frame is "
+                 "extended by generation, not cropped or letterboxed; prompt optionally "
+                 "says what belongs in the new area; clips up to 10s"),
+        "endpoint": "fal-ai/luma-dream-machine/ray-2-flash/reframe", "takes": "video",
+        "field": "video_url", "as_list": False, "sources": (1, 1),
+        "prompt": "optional", "output": "video",
+        "options": {"aspect_ratio": {"values": REFRAME_ASPECTS, "required": True}},
+        "fixed": {},
+        "price": _per_second(0.06), "probe": True, "max_seconds": REFRAME_MAX_SECONDS,
+        "source": "https://fal.ai/models/fal-ai/luma-dream-machine/ray-2-flash/reframe",
+        "checked": CHECKED_2B,
+    },
+    "reframe-hq": {
+        "label": "Re-frame, higher quality (Luma Ray 2)", "category": "finish",
+        "note": ("as `reframe`, on the full Ray 2 model: slower, more faithful in the "
+                 "generated area, over three times the price; clips up to 10s"),
+        "endpoint": "fal-ai/luma-dream-machine/ray-2/reframe", "takes": "video",
+        "field": "video_url", "as_list": False, "sources": (1, 1),
+        "prompt": "optional", "output": "video",
+        "options": {"aspect_ratio": {"values": REFRAME_ASPECTS, "required": True}},
+        "fixed": {},
+        "price": _per_second(0.20), "probe": True, "max_seconds": REFRAME_MAX_SECONDS,
+        "source": "https://fal.ai/models/fal-ai/luma-dream-machine/ray-2/reframe",
+        "checked": CHECKED_2B,
+    },
+    "remove-video-background": {
+        "label": "Remove a clip's background (VEED)", "category": "finish",
+        "note": ("the subject cut out on a TRANSPARENT background, as a .webm (VP9 with "
+                 "alpha: plays in Chrome, composites in an editor that reads it); set "
+                 "subject_is_person false for a product or an object; the cheap one"),
+        "endpoint": "veed/video-background-removal", "takes": "video",
+        "field": "video_url", "as_list": False, "sources": (1, 1),
+        "prompt": "none", "output": "video",
+        "options": {"subject_is_person": {"values": (True, False), "default": True},
+                    "refine_foreground_edges": {"values": (True, False), "default": True}},
+        "fixed": {"output_codec": "vp9"},
+        "price": _veed_usd, "probe": True,
+        "source": "https://fal.ai/models/veed/video-background-removal",
+        "checked": CHECKED_2B,
+    },
+    "remove-video-background-pro": {
+        "label": "Remove or replace a clip's background (Bria)", "category": "finish",
+        "note": ("background_color Transparent, or a flat colour (Green for a key, Black, "
+                 "White...); output_container_and_codec webm_vp9, mp4_h264 (colours only) "
+                 "or mov_proresks (ProRes 4444 with alpha, for an editor like Resolve -- "
+                 "it will not play in a browser); keeps the sound; clips under 30s"),
+        "endpoint": "bria/video/background-removal", "takes": "video",
+        "field": "video_url", "as_list": False, "sources": (1, 1),
+        "prompt": "none", "output": "video",
+        "options": {"background_color": {"values": BRIA_BACKGROUNDS, "default": "Transparent"},
+                    "output_container_and_codec": {"values": BRIA_CONTAINERS,
+                                                   "default": "webm_vp9"}},
+        "fixed": {"preserve_audio": True},
+        "check": _bria_combo,
+        "price": _per_second(0.14), "probe": True, "max_seconds": 30,
+        "source": "https://fal.ai/models/bria/video/background-removal",
+        "checked": CHECKED_2B,
+    },
 }
 EFFECT_NAMES = tuple(EFFECTS)
 SAMPLE = 12       # enum values shown per option in the summary listing
@@ -502,7 +620,8 @@ def catalogue(effect: str = "", category: str = "") -> list[dict]:
             "note": row["note"], "takes": row["takes"], "output": row["output"],
             "sources": {"min": lo, "max": hi}, "prompt": row["prompt"],
             "options": {k: _option_view(v, bool(effect)) for k, v in row["options"].items()},
-            "pricing": _pricing_note(name), "checked": CHECKED, "page": row["source"],
+            "pricing": _pricing_note(name), "checked": row.get("checked", CHECKED),
+            "page": row["source"],
         })
     return rows
 
@@ -515,6 +634,11 @@ def _pricing_note(name: str) -> str:
         "upscale": ("per second of the source by output height: <=720p $0.01, "
                     "<=1080p $0.02, above $0.08; x2 above 30fps out"),
         "add-sound": "$0.001 per second of the clip",
+        "reframe": "$0.06 per second of the clip",
+        "reframe-hq": "$0.20 per second of the clip",
+        "remove-video-background": ("per started 30 frames of the clip: $0.0225 with "
+                                    "refine_foreground_edges, $0.015 without"),
+        "remove-video-background-pro": "$0.14 per second of the clip",
     }
     if name in notes:
         return notes[name]
@@ -546,6 +670,8 @@ def check_options(effect: str, options: Optional[dict]) -> dict:
         out[name] = match
     if effect == "upscale" and out.get("upscale_factor") == 1 and not out.get("target_fps"):
         raise ValueError("upscale_factor 1 changes nothing without target_fps")
+    if row.get("check"):               # a combination the wire would refuse or waste
+        row["check"](out)
     return out
 
 
@@ -636,6 +762,9 @@ def fetchable_video(media_url: str, output_path: str = "", *,
         return None
 
 
+VIDEO_MIMES = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
+
+
 def _suffix(url: str, kind: str) -> str:
     tail = url.split("?", 1)[0].rsplit("/", 1)[-1]
     ext = Path(tail).suffix.lower()
@@ -716,7 +845,9 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
         charge.settle(generation_id=generation_id)
 
         kind = row["output"]
-        ctype = ("video/mp4" if kind == "video"
+        # by the file's own container: a transparent .webm or a ProRes .mov
+        # (step 2b) published as video/mp4 would not play
+        ctype = (VIDEO_MIMES.get(out_path.suffix.lower(), "video/mp4") if kind == "video"
                  else "image/png" if out_path.suffix == ".png" else "image/jpeg")
         media_url = (publish or fal._publish)(out_path, ctype, account_id)
         asset = {"id": None}
