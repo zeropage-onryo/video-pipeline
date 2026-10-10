@@ -49,6 +49,18 @@ def test_a_recipe_names_only_real_tools_and_no_address(name):
     assert "{" not in body and "TODO" not in body
 
 
+def test_the_character_sheet_skill_describes_the_sheet_the_studio_draws():
+    """The skill tells the person what Approve will draw; the drawing is
+    element_sheet's prompt, which is Mike's to change. They must agree."""
+    from src import element_sheet
+    drawn = (element_sheet.PROMPTS_DIR / "element_sheet_character.txt").read_text().lower()
+    told = skills.get("character-sheet")["body"].lower()
+    for panel in ("full-body front", "three-quarter", "side profile", "back", "close-up"):
+        assert panel in drawn and panel in told
+    assert ("white" in drawn) == ("white" in told)
+    assert "light-grey" not in told or "light-grey" in drawn
+
+
 def test_a_name_is_cleaned_against_the_shelf():
     assert skills.clean_name(" Mood-Board ") == "mood-board"
     assert skills.clean_name("nope") == "" and skills.clean_name(None) == ""

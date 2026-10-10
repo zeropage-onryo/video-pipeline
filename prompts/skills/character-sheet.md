@@ -29,7 +29,7 @@ Ask at most two things, as choices:
 
 ## Drawing it
 
-Call make_element_sheet with the name and the notes. Never make_image for this. The studio draws one wide image, five panels in a row -- full-body front, three-quarter, side profile, back, head-and-shoulders close-up -- on a plain light-grey background, the same face, hair and clothes in every panel, no text. The call ends your turn; the person approves it beside its price.
+Call make_element_sheet with the name and the notes. Never make_image for this. The studio draws one wide image, five panels in a row -- full-body front, three-quarter, side profile, back, head-and-shoulders close-up -- on a plain white studio background, the same face, hair and clothes in every panel, no text. The call ends your turn; the person approves it beside its price.
 
 ## After it lands
 
