@@ -73,6 +73,8 @@ def _label(tool: str, model: str) -> str:
         return "Nano Banana Pro" if "pro" in model.lower() else "Nano Banana"
     if tool == "runway":
         return "Runway"
+    if tool == "cut":                  # clips joined in the studio (src/cut/join.py)
+        return "Joined clips"
     # a fal render stores the platform as its tool ("ltx", "kling") and the
     # catalog key as its model ("ltx2.3"): the wall says the model's public
     # name, the one /models and the Queue print (2026-09-28). Lazy -- pricing

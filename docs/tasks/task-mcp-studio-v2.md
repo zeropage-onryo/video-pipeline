@@ -26,8 +26,8 @@ spend is quoted first and runs only after his yes in chat.
 |---|---|---|
 | 1. credits + signed single-use quote | built 2026-10-08, PR #200 | see "As built" under step 1 |
 | 6. cancel a job | built 2026-10-09, PR #201 (stacked on #200) | see "As built" under step 6 |
-| 7. structured results | built 2026-10-09, branch `claude/task-mcp-studio-v2-structured` (stacked on #201) | see "As built" under step 7 |
-| 2a. join clips | not started | |
+| 7. structured results | built 2026-10-09, PR #202 (stacked on #201) | see "As built" under step 7 |
+| 2a. join clips | built 2026-10-09, branch `claude/task-mcp-studio-v2-join` (stacked on #202) | see "As built" under step 2a |
 | 3 + 4. viewer + upload | not started | |
 | 2b. finish a clip | not started | |
 | 2c. edit by instruction | not started | |
@@ -189,6 +189,41 @@ any of an error payload, a 404/410/499, or a finished job with no output as "can
 - Output filed on the Assets wall like any render. Rendering is local ffmpeg -> no credit cost;
   say so in the result rather than quoting zero.
 - Refuse non-video ids, deleted assets, mixed aspect ratios (or letterbox — decide and state it).
+
+**As built (2026-10-09).**
+- `assemble_clips(clips, transition="cut"|"crossfade", crossfade_s=0.5, music="", letterbox=false,
+  title="", project_id=None)` on the studio surface (and the board under the engine flag; never
+  listed). 19 studio tools now.
+- `src/cut/join.py`: `plan` makes every check before anything is written -- 2-20 clips, each a
+  `gen:<id>` video of this account's, not soft-deleted, readable, a moving picture (not a still);
+  `crossfade_s` 0.1-2s and at most half the shortest clip (a middle clip is overlapped from both
+  sides); `music` an `asset:<id>` audio upload of this account's. `join` saves the cut as v1 of
+  a scratch project (`cut:<uuid>`, so it opens in the editor), renders it, records the export
+  on the version, draws the wall poster, and files the MP4 on the Assets wall.
+- **Aspect ratio, decided: refused by default.** Clips of different shapes (to 1%, so 720x1280
+  and 1080x1920 are one) are refused with each clip's shape named. `letterbox=true` allows it:
+  the canvas is the FIRST clip's frame and the others are fitted inside with black bars (the
+  renderer's existing pad path), listed in `plan.letterboxed`. Refusing by default because
+  "join these" rarely means "put bars on half of them".
+- The cut is built by `assemble.build_doc` -- the pure builder Assemble uses (clips with their
+  own sound linked on A1, a marker per clip, a music bed on A2 trimmed to the picture and
+  ducked under the clips' sound) -- which gained `transition_frames`: a crossfade INTO every
+  later clip, added as each clip lands so the markers and the music see the shortened cut.
+  Assemble still passes 0 (a concept's windows were written as cuts). `assemble.assemble`
+  (concept-bound) is not used.
+- **No credits, said so:** no quote and no approval; the result carries `credits: 0` and a
+  note that it ran on the studio's server. The generations row behind the wall entry is logged
+  under a new free tool `cut` (`generative.CUT_TOOLS`), `cost_usd` NULL -- the manual lane's
+  spelling of free -- and the wall labels it "Joined clips".
+- Music discovery: `renders(kind="audio")` lists the editor's audio uploads as `asset:<id>`
+  (they live in `cut_media`, not on the wall). Uploading from chat is step 3+4.
+- Verified: tests/test_mcp_join.py -- every refusal; the built cut (order, linked sound,
+  crossfades on every cut, markers where clips begin, duration = sum - (n-1) x fade, music
+  trimmed and ducked); and with real ffmpeg, three clips + a music bed through the studio
+  server -> one MP4 of the right length and frame on the wall, a scratch cut with its export,
+  NOTHING in the ledger and `cost_usd` NULL; the joined clip is a `gen:<id>` the next join can
+  name. Run over the real stdio server: mixed shapes refused with both shapes named; three 2s
+  clips with 0.5s crossfades came back as one 5.0s 360x640 MP4 with sound, `gen:5` on the wall.
 
 ## 3 + 4. Inline viewer and upload from chat (MCP Apps)
 

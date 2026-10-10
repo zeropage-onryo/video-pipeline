@@ -146,7 +146,8 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # MMAudio sound) and element_sheet, each quoted first IN CREDITS and spent only
 # after a yes in chat (quote_token: signed over the exact request, used once --
 # a SIGNING SECRET is needed, QUOTE_SIGNING_SECRET, or nothing can be approved),
-# plus cancel_job (stops one; the money follows fal's own answer), and
+# plus cancel_job (stops one; the money follows fal's own answer), assemble_clips
+# (joins gen:<id> clips into one MP4 on this server, free, filed on the wall), and
 # image_models / video_models / effects / elements /
 # renders / images_for / prompt_craft, and PROJECTS (projects / project /
 # project_chat / create_project / save_chat; project_id on a render files it there).
@@ -1684,7 +1685,17 @@ is yours, in Resolve, by hand.
   Desktop does (Claude Code reportedly reads structuredContent only, claude.ai forwards both);
   a client that read only the line would lose the `quote_token`. Turn the mirror off after a
   live check. The board and listed servers are NOT wrapped and return plain dicts as before.
-  On the studio surface they
+  **`assemble_clips` (2026-10-09, step 2a)** joins 2-20 `gen:<id>` videos into ONE MP4:
+  `src/cut/join.py` plans (every refusal first: not a video of this account's, soft-deleted,
+  unreadable, two shapes unless `letterbox`, a crossfade over half the shortest clip, music
+  that is not an `asset:<id>` audio upload), builds the cut with `assemble.build_doc` (which
+  gained `transition_frames`: a crossfade INTO each later clip, added as it lands so markers
+  and the music bed see the shortened cut; Assemble itself still passes 0), saves it as v1 of
+  a SCRATCH cut project (`cut:<uuid>`, openable in the editor), renders it with
+  `render.render` and files it on the Assets wall under the new free log tool `cut`
+  (`generative.CUT_TOOLS`, `cost_usd` NULL, wall label "Joined clips"). No quote: nothing is
+  spent, and the result says so (`credits: 0`). `renders(kind="audio")` lists the editor's
+  audio uploads as the `asset:<id>` music takes. On the studio surface they
   are always on (the approval is the gate); on the board surface they sit behind the engine
   flag; the listed server never has them. References are ids, never URLs, in ONE grammar
   shared with `write_scene`: `gen:<id>` (a render; `renders` lists them), a photo `ref`

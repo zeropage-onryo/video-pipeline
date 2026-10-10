@@ -115,6 +115,37 @@ class Job(_Open):
     ref: Optional[str] = None
 
 
+class JoinPlan(_Open):
+    clips: list[str]
+    seconds: float
+    canvas: dict[str, Any] = {}
+    transition: str = "cut"
+    crossfade_s: Optional[float] = None
+    music: Optional[str] = None
+    letterboxed: list[str] = []
+    notes: list[str] = []
+    credits: int = 0
+
+
+class JoinResult(_Open):
+    """assemble_clips: `started` (a job: poll `job`; its result carries the
+    joined clip's `media_url`, `asset_id` and `ref`), or -- with no job
+    registry -- `done` / `failed` inline. Never a quote: it spends nothing."""
+    state: Literal["started", "done", "failed"]
+    plan: JoinPlan
+    ok: Optional[bool] = None
+    job_id: Optional[int] = None
+    status: Optional[str] = None
+    label: Optional[str] = None
+    media_url: Optional[str] = None
+    asset_id: Optional[int] = None
+    ref: Optional[str] = None
+    seconds: Optional[float] = None
+    cut_project: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    note: Optional[str] = None
+
+
 class CancelResult(_Open):
     job_id: int
     status: JobStatus
@@ -314,6 +345,7 @@ SHAPES: dict[str, type[BaseModel]] = {
     **{name: SpendResult for name in SPEND_TOOLS},
     "job": Job,
     "cancel_job": CancelResult,
+    "assemble_clips": JoinResult,
 }
 
 
@@ -349,6 +381,9 @@ def enrich(tool: str, payload: dict) -> dict:
         out["state"] = spend_state(out)
         if out.get("asset_id") is not None and not out.get("ref"):
             out["ref"] = f"gen:{out['asset_id']}"
+    elif tool == "assemble_clips":
+        out["state"] = ("started" if out.get("job_id") is not None
+                        else "done" if out.get("ok") else "failed")
     elif tool == "job":
         result = out.get("result")
         if isinstance(result, dict):
@@ -412,6 +447,17 @@ def _job_line(p: dict) -> str:
         f" ({p['credits']} credits)" if p.get("credits") else "") + "."
 
 
+def _join_line(p: dict) -> str:
+    plan = p.get("plan") or {}
+    n = len(plan.get("clips") or [])
+    if p["state"] == "started":
+        return (f"Joining {n} clips into one video (about {plan.get('seconds')}s) as job "
+                f"{p.get('job_id')} -- no credits are spent. Poll `job`.")
+    if p["state"] == "done":
+        return f"Joined {n} clips: {p.get('ref') or p.get('media_url')} -- no credits were spent."
+    return f"The join failed: {p.get('error') or 'no result'}. Nothing was spent."
+
+
 SUMMARIES: dict[str, Callable[[dict], str]] = {
     "projects": lambda p: _n(p.get("count", 0), "project") + ".",
     "project": lambda p: (f"Project {p.get('id')} \"{p.get('title')}\": "
@@ -439,6 +485,7 @@ SUMMARIES: dict[str, Callable[[dict], str]] = {
     **{name: _spend_line for name in SPEND_TOOLS},
     "job": _job_line,
     "cancel_job": lambda p: p.get("note") or f"Job {p.get('job_id')}: {p.get('status')}.",
+    "assemble_clips": lambda p: _join_line(p),
 }
 
 

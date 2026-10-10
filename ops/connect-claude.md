@@ -81,6 +81,7 @@ quotes still answer and nothing can be approved.
 | `save_chat` | keep this conversation with a project, so it is there when the project is reopened -- here or in the studio |
 | `generate_image` / `generate_video` / `apply_effect` | quoted, then (after your yes) run as a job; the result lands on the Assets wall, and in a project when given its `project_id` |
 | `job` | poll a running render |
+| `assemble_clips` | join 2-20 of your clips (`gen:<id>`) into one video -- hard cuts or crossfades, an optional music bed (`renders` with `kind=audio` lists your uploaded audio). Spends no credits; the result is a new clip on the Assets wall and an editable cut in the editor. Clips of different shapes are refused unless you ask for letterboxing |
 | `cancel_job` | stop a render, effect or sheet this connector started. Not yet sent, or still waiting in fal's queue: nothing charged. Already rendering: fal is asked to stop; if it finishes anyway it is kept and charged at the quoted price, otherwise nothing is charged. Finished: too late. A sheet already being drawn finishes |
 
 The board tools below are on the **board surface**: the `zeropage-board`

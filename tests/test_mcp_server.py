@@ -1479,8 +1479,8 @@ def test_renders_lists_the_wall_as_ids(monkeypatch):
     assert out["renders"][0]["media_url"].endswith("?minted")
     assert len(out["renders"][0]["prompt"]) == 160
     assert len(mcp_server.list_renders(limit=1000, account_id=1)["renders"]) == 30
-    with pytest.raises(ValueError):
-        mcp_server.list_renders(kind="audio", account_id=1)
+    with pytest.raises(ValueError):        # audio is a kind since 2026-10-09 (uploads)
+        mcp_server.list_renders(kind="gif", account_id=1)
 
 
 def _shelf(monkeypatch, refs=None, ok=True):
