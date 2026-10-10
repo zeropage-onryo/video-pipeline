@@ -13,8 +13,9 @@ have made and can open -- validated by `validate.validate`, rendered by
 bound to a concept's timed shots.
 
 WHAT IS REFUSED, before anything is written:
-- an id that is not a `gen:<id>` of this account's, a soft-deleted render,
-  an image, or a file that cannot be read;
+- an id that is not a `gen:<id>` (or, since step 3+4, an imported
+  `asset:<id>` clip) of this account's, a soft-deleted render, an image, or
+  a file that cannot be read;
 - clips of different shapes (a 9:16 beside a 16:9) -- unless `letterbox`
   says to fit them all inside the FIRST clip's frame with black bars,
   which is what the renderer does with a mismatched clip anyway. Refusing
@@ -83,9 +84,18 @@ def plan(handles: list[str], *, account_id: Optional[int], transition: str = "cu
 
     for h in dict.fromkeys(handles):
         parsed = d.parse_handle(h)
-        if parsed is None or parsed[0] != "gen":
+        if parsed is None:
             raise JoinRefused(f"{h!r}: a clip is gen:<id> -- a video on your Assets wall "
-                              "(see `renders`). URLs are never taken")
+                              "(see `renders`) -- or an asset:<id> clip you imported. "
+                              "URLs are never taken")
+        if parsed[0] == "asset":            # a clip the person imported (2026-10-09)
+            upload = store.get_media(parsed[1], account_id=account_id, dsn=dsn)
+            if not upload:
+                raise JoinRefused(f"no import {parsed[1]} on this account -- "
+                                  "`import_file` returns the id")
+            if upload.get("kind") != "video":
+                raise JoinRefused(f"{h} is {upload.get('kind')}; only clips can be joined")
+            continue
         row = render_assets.get(parsed[1], dsn, account_id=account_id)
         if not row or row.get("deleted_at"):
             raise JoinRefused(f"no render {parsed[1]} on this account -- ids come from `renders`")

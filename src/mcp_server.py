@@ -133,6 +133,7 @@ TITLES = {
     "job": "Check a background job",
     "cancel_job": "Cancel a render, effect or sheet in progress",
     "assemble_clips": "Join clips into one video (no credits)",
+    "import_file": "Import an image or clip from this computer",
     "elements": "List your elements (reference photos)",
     "write_scene": "Save a scene prompt onto an idea",
     "quote": "Price the keyframes and the clip",
@@ -170,8 +171,9 @@ _APPROVAL = (
 )
 _REFERENCE_IDS = (
     "References are ids, never URLs: `gen:<id>` (an image from `renders` or "
-    "a project), a photo `ref` exactly as `elements` or `project` lists it, "
-    "or `candidate:<id>` (an id `images_for` returned)."
+    "a project), `asset:<id>` (an image you brought in with `import_file`), a "
+    "photo `ref` exactly as `elements` or `project` lists it, or "
+    "`candidate:<id>` (an id `images_for` returned)."
 )
 _PROJECT_FILING = (
     "`project_id` (from `projects`) files the result under that project, so "
@@ -311,6 +313,17 @@ DESCRIPTIONS = {
         "`gen:<id>` on your Assets wall (usable as a source like any clip) and "
         "an editable cut in the studio's editor."
     ),
+    "import_file": (
+        "Bring an image or a clip from this computer into the studio, by its "
+        "full path (e.g. ~/Downloads/can.jpg). Only files in your Downloads or "
+        "Desktop folders, or the studio's own data folder, are read: images "
+        "(jpg, png, webp) up to 100MB and clips (mp4, mov) up to 500MB, checked "
+        "to be what they say they are. Returns an `asset:<id>`: an image is a "
+        "reference for `generate_image`, `generate_video` (a start frame) or "
+        "`apply_effect`; a clip is a source for a clip effect or a clip to "
+        "`assemble_clips`. It also appears in the studio editor's media bin. "
+        "Spends nothing."
+    ),
     "elements": (
         "Your elements: the characters, props and places whose photos you "
         "uploaded in the studio, each with its photo refs. Pass a photo's "
@@ -370,10 +383,11 @@ DESCRIPTIONS = {
     "renders": (
         "Your recent renders, newest first, each as the `gen:<id>` that names "
         "it as a reference or an effect source, with its model and the start "
-        "of its prompt. `kind` is image or video (omit for both), or audio: the "
+        "of its prompt. `kind` is image or video (omit for both); audio (the "
         "sound files you uploaded in the editor, as the `asset:<id>` that "
-        "`assemble_clips` takes as music. Returns at most `limit` rows (default "
-        "20, maximum 100). Read-only."
+        "`assemble_clips` takes as music); or upload (every file you brought in "
+        "with `import_file` or the editor, as `asset:<id>`). Returns at most "
+        "`limit` rows (default 20, maximum 100). Read-only."
     ),
     "prompt_craft": (
         "The studio's own prompt-writing guides, for you to apply: nothing is "
@@ -499,6 +513,7 @@ HINTS = {
     "job":               {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "cancel_job":        {"read": False, "destructive": False, "idempotent": True,  "open_world": True},
     "assemble_clips":    {"read": False, "destructive": False, "idempotent": False, "open_world": False},
+    "import_file":       {"read": False, "destructive": False, "idempotent": False, "open_world": False},
     "elements":          {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "write_scene":       {"read": False, "destructive": False, "idempotent": True,  "open_world": False},
     "quote":             {"read": True,  "destructive": False, "idempotent": True,  "open_world": False},
@@ -546,7 +561,7 @@ STUDIO_TOOLS = ("projects", "project", "project_chat", "create_project", "save_c
                 "elements", "images_for", "image_models", "video_models",
                 "effects", "renders", "prompt_craft", "generate_image",
                 "generate_video", "apply_effect", "element_sheet", "job",
-                "cancel_job", "assemble_clips")
+                "cancel_job", "assemble_clips", "import_file")
 SURFACE_ENV = "ZEROPAGE_MCP_SURFACE"
 SURFACES = ("board", "studio")
 STUDIO_INSTRUCTIONS = (
@@ -1197,9 +1212,9 @@ def quote_render(idea_id: int, provider: Optional[str] = None, model: Optional[s
 # behave exactly as they do from the composer and the Queue.
 
 REFERENCE_IDS = ("gen:<id> (an image on your Assets wall -- see `renders`, or the "
-                 "asset_id a render returned), a photo `ref` exactly as `elements` "
-                 "or `project` lists it, or candidate:<id> (an image `images_for` "
-                 "found)")
+                 "asset_id a render returned), asset:<id> (an image you imported -- "
+                 "`import_file`), a photo `ref` exactly as `elements` or `project` "
+                 "lists it, or candidate:<id> (an image `images_for` found)")
 
 
 def _fetchable(raw: str, account_id: Optional[int]) -> Optional[str]:
@@ -1255,6 +1270,17 @@ def resolve_references(refs, *, limit: int, who: str, dsn: Optional[str] = None,
             if row.get("media_kind") != "image":
                 raise ValueError(f"{ref} is a {row.get('media_kind')}; a reference "
                                  "must be an image")
+            raw = row["media_url"]
+        elif kind == "asset" and rest.isdigit():
+            # a file the person brought in (import_file / the editor's bin),
+            # 2026-10-09 -- this account's own, and only an image references
+            from .cut import store as cut_store
+            row = cut_store.get_media(int(rest), account_id=account_id, dsn=dsn)
+            if not row:
+                raise ValueError(f"no import {rest} on this account -- `import_file` "
+                                 "returns the id")
+            if row.get("kind") != "image":
+                raise ValueError(f"{ref} is {row.get('kind')}; a reference must be an image")
             raw = row["media_url"]
         elif kind == "candidate" and rest:
             cand = imagesearch.get(rest, dsn=dsn)
@@ -1543,7 +1569,7 @@ def _cancellable_body(fn, kwargs: dict):
 
 CRAFT_STEPS = ("refine", "enhance", "still", "beats")
 CraftStep = Literal[CRAFT_STEPS]
-RenderKind = Literal["image", "video", "audio"]
+RenderKind = Literal["image", "video", "audio", "upload"]
 JoinTransition = Literal["cut", "crossfade"]
 
 
@@ -1887,6 +1913,92 @@ def run_video(prompt: str, model: str = "", seconds: Optional[int] = None,
     return {**res, "quote": quote}
 
 
+IMPORT_DIRS_ENV = "ZEROPAGE_IMPORT_DIRS"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def import_roots() -> list[Path]:
+    """The folders `import_file` may read (2026-10-09, task-mcp-studio-v2
+    step 3+4): ZEROPAGE_IMPORT_DIRS (os.pathsep-separated) when set, else
+    ~/Downloads, ~/Desktop and this checkout's data/. Resolved, so a
+    symlinked folder is compared by where it really is."""
+    raw = (os.environ.get(IMPORT_DIRS_ENV) or "").strip()
+    named = ([d for d in raw.split(os.pathsep) if d.strip()] if raw else
+             ["~/Downloads", "~/Desktop", str(PROJECT_ROOT / "data")])
+    out = []
+    for d in named:
+        try:
+            out.append(Path(d.strip()).expanduser().resolve())
+        except (OSError, RuntimeError):
+            continue
+    return out
+
+
+def _import_types() -> dict[str, str]:
+    """Images, and mp4/mov clips -- what a reference, an effect source or a
+    join takes. Not audio, not webm: the task's list, kept narrow."""
+    from .cut import uploads
+    return {**uploads.IMAGE_TYPES, ".mp4": "video/mp4", ".mov": "video/quicktime"}
+
+
+def run_import_file(path: str, dsn: Optional[str] = None,
+                    account_id: Optional[int] = None) -> dict[str, Any]:
+    """A file on THIS machine -> an `asset:<id>` (2026-10-09, step 3+4's
+    fallback: the studio surface runs over stdio on the person's own Mac,
+    and Claude Desktop cannot hand an MCP tool a file).
+
+    Refused unless the path, with every symlink resolved, sits inside one
+    of `import_roots()` -- so `~/Downloads/../.ssh/key` and a link out of
+    Downloads both fail -- and its extension is an image or mp4/mov, its
+    size under the editor's caps and its content what the extension says
+    (src/cut/uploads.save probes it). Filed by the editor's own upload body,
+    so it is in the bin, mirrored to the bucket and owned by the account.
+    Never for a signed-in caller: a connector over the network must not
+    read the server's disk."""
+    from .cut import render, uploads
+    if CALLER_ACCOUNT.get() is not None:
+        raise Refused("import_file reads files on the computer running the studio's "
+                      "own server; it is not offered over a connector")
+    raw = (path or "").strip()
+    if not raw:
+        raise ValueError("give the file's full path, e.g. ~/Downloads/can.jpg")
+    given = Path(raw).expanduser()
+    if not given.is_absolute():
+        raise ValueError(f"{raw!r} is not a full path -- e.g. ~/Downloads/can.jpg")
+    roots = import_roots()
+    try:
+        real = given.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ValueError(f"there is no file at {raw}") from None
+    if not any(real == r or r in real.parents for r in roots):
+        raise ValueError(f"{raw} is outside the folders the studio may read: "
+                         + ", ".join(str(r) for r in roots))
+    if not real.is_file():
+        raise ValueError(f"{raw} is not a file")
+    types = _import_types()
+    if real.suffix.lower() not in types:
+        raise ValueError(f"only images ({', '.join(sorted(uploads.IMAGE_TYPES))}) and "
+                         ".mp4 / .mov clips can be imported, not {real.suffix or 'that'}")
+    size, cap = real.stat().st_size, uploads.cap_for(uploads.kind_of(real.suffix))
+    if size > cap:
+        raise ValueError(f"{real.name} is {size // uploads.MB}MB; the limit is "
+                         f"{cap // uploads.MB}MB")
+    try:
+        saved = uploads.save(real.read_bytes(), real.name, account_id=account_id,
+                             media_dir=render.CUT_DIR / "media", types=types, dsn=dsn)
+    except uploads.UploadRefused as e:
+        raise ValueError(f"{real.name}: {e}") from e
+    info, kind = saved["info"], saved["kind"]
+    use = ("a reference (generate_image, generate_video's start frame, an image effect)"
+           if kind == "image" else "a clip effect's source or a clip to assemble_clips")
+    return {"ok": True, "id": saved["handle"], "kind": kind, "filename": real.name,
+            "seconds": None if kind == "image" else info.get("seconds"),
+            "width": info.get("width"), "height": info.get("height"),
+            "size_bytes": saved["size"],
+            "note": f"Imported as {saved['handle']} -- use it as {use}. It is also in "
+                    "the editor's media bin. Nothing was spent."}
+
+
 def run_assemble_clips(clips: Optional[list] = None, transition: str = "cut",
                        crossfade_s: float = 0.5, music: str = "", letterbox: bool = False,
                        title: str = "", project_id: Optional[int] = None,
@@ -1932,22 +2044,39 @@ def list_effects(effect: str = "", category: str = "") -> dict[str, Any]:
             "effects": effects.catalogue(effect=effect, category=category)}
 
 
+def _clip_row(ref: str, dsn, account_id) -> dict:
+    """A clip source by id -> its row ({media_url, output_path}): a `gen:<id>`
+    video on the Assets wall, or an `asset:<id>` clip the person imported
+    (2026-10-09). URLs are never taken."""
+    from . import render_assets
+    from .cut import store as cut_store
+    kind, _, rest = ref.partition(":")
+    if kind == "asset" and rest.isdigit():
+        row = cut_store.get_media(int(rest), account_id=account_id, dsn=dsn)
+        if not row:
+            raise ValueError(f"no import {rest} on this account -- `import_file` returns the id")
+        if row.get("kind") != "video":
+            raise ValueError(f"{ref} is {row.get('kind')}; this takes a clip")
+        return row
+    if kind != "gen" or not rest.isdigit():
+        raise ValueError(f"{ref!r}: a clip source is gen:<asset id> -- a video on "
+                         "the Assets wall (see `renders`) -- or an asset:<id> you "
+                         "imported. URLs are never taken")
+    row = render_assets.get(int(rest), dsn, account_id=account_id)
+    if not row or row.get("deleted_at"):
+        raise ValueError(f"no render {rest} on this account -- ids come from `renders`")
+    if row.get("media_kind") != "video":
+        raise ValueError(f"{ref} is a {row.get('media_kind')}; this effect takes a clip")
+    return row
+
+
 def _video_sources(refs: list[str], dsn, account_id) -> tuple[list[str], dict]:
-    """`gen:<id>` clips on the Assets wall -> (fetchable URLs, probe of the
-    first). Video sources are this studio's own renders only: a clip has
-    no element or search id, and URLs are never taken."""
-    from . import effects, render_assets
+    """Clip sources by id (`_clip_row`) -> (fetchable URLs, probe of the
+    first). A clip has no element or search id, and URLs are never taken."""
+    from . import effects
     urls, probe = [], None
     for ref in refs:
-        kind, _, rest = ref.partition(":")
-        if kind != "gen" or not rest.isdigit():
-            raise ValueError(f"{ref!r}: a clip source is gen:<asset id> -- a video on "
-                             "the Assets wall (see `renders`). URLs are never taken")
-        row = render_assets.get(int(rest), dsn, account_id=account_id)
-        if not row or row.get("deleted_at"):
-            raise ValueError(f"no render {rest} on this account -- ids come from `renders`")
-        if row.get("media_kind") != "video":
-            raise ValueError(f"{ref} is a {row.get('media_kind')}; this effect takes a clip")
+        row = _clip_row(ref, dsn, account_id)
         local = row.get("output_path") or ""
         if probe is None:
             target = local if local and Path(local).is_file() else row["media_url"]
@@ -2005,10 +2134,11 @@ def run_effect(effect: str, sources: Optional[list] = None, prompt: str = "",
     return {**res, "quote": quote}
 
 
-def _audio_uploads(cap: int, dsn, account_id) -> dict[str, Any]:
-    """The sound files this account uploaded to the editor's bin, as the
-    `asset:<id>` assemble_clips takes as music (2026-10-09). They live in
-    cut_media, not on the Assets wall -- a music bed is not a render."""
+def _uploads(cap: int, dsn, account_id, *, kinds: tuple) -> dict[str, Any]:
+    """The files this account brought in -- `import_file` or the editor's
+    bin -- as `asset:<id>` (2026-10-09): `kinds` ("audio",) is what
+    assemble_clips takes as music. They live in cut_media, not on the Assets
+    wall -- a file somebody brought in is not a render."""
     from .cut import store
     out = []
     try:
@@ -2016,17 +2146,19 @@ def _audio_uploads(cap: int, dsn, account_id) -> dict[str, Any]:
     except Exception:
         rows = []
     for r in rows:
-        if r.get("origin") != "upload" or r.get("kind") != "audio":
+        if r.get("origin") != "upload" or r.get("kind") not in kinds:
             continue
-        out.append({"id": f"asset:{r['id']}", "kind": "audio", "model": None,
+        out.append({"id": f"asset:{r['id']}", "kind": r.get("kind"), "model": None,
                     "provider": None, "prompt": r.get("filename") or "",
                     "seconds": r.get("seconds"), "media_url": _view(r.get("media_url"), account_id),
                     "created_at": str(r.get("created_at") or "")})
         if len(out) >= cap:
             break
     return {"count": len(out), "renders": out,
-            "note": "" if out else ("no audio uploaded yet -- add a music file in the "
-                                    "studio's editor (Timeline)")}
+            "note": "" if out else (
+                "no audio uploaded yet -- add a music file in the studio's editor (Timeline)"
+                if kinds == ("audio",) else
+                "nothing imported yet -- `import_file` brings in an image or a clip")}
 
 
 def list_renders(kind: Optional[str] = None, limit: int = 20, dsn: Optional[str] = None,
@@ -2035,12 +2167,13 @@ def list_renders(kind: Optional[str] = None, limit: int = 20, dsn: Optional[str]
     the `gen:<id>` a reference or an effect source names. Read-only."""
     from . import media, render_assets
     kind = (kind or "").strip()
-    if kind and kind not in ("image", "video", "audio"):
-        raise ValueError("kind is image, video, audio or empty for images and videos")
+    if kind and kind not in ("image", "video", "audio", "upload"):
+        raise ValueError("kind is image, video, audio, upload or empty for images and videos")
     cap = max(1, min(int(limit or 20), 100))
     account_id = _account(account_id, dsn)
-    if kind == "audio":
-        return _audio_uploads(cap, dsn, account_id)
+    if kind in ("audio", "upload"):
+        return _uploads(cap, dsn, account_id,
+                        kinds=("audio",) if kind == "audio" else ("image", "video", "audio"))
     out = []
     for r in render_assets.list_all(dsn, account_id=account_id):
         if kind and r.get("media_kind") != kind:
@@ -3252,6 +3385,14 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                              "It runs on the studio's server -- no credits are spent. Poll "
                              "`job`: the result is a gen:<id> on your Assets wall.")}
 
+    # Reading this machine's disk: the STUDIO surface only, which is stdio on
+    # the person's own computer -- never the board (served over HTTP by the
+    # web app) and never the listed server.
+    if studio:
+        @_reg("import_file")
+        def import_file(path: str) -> dict:
+            return _t(run_import_file, path, dsn=dsn, account_id=_account(account_id, dsn))
+
     @_reg("write_scene")
     def write_scene_tool(idea_id: int, prompt: str, seconds: int = 10,
                          refs: Optional[list[str]] = None) -> dict:
@@ -3375,6 +3516,14 @@ def main(argv=None) -> int:
     render_assets.init(dsn)
     projects.init(dsn)            # after preprod.init: it ALTERs shoot_concepts
     quote_redemptions.init(dsn)   # an approved quote is spent once
+    # ...and what import_file and assemble_clips write (2026-10-09): the
+    # editor's uploads, cut projects and versions, and the generations log a
+    # joined clip's wall entry stands on. Found by running them over stdio
+    # against a fresh database, where both crashed on a missing table.
+    from . import generative
+    from .cut import store as cut_store
+    generative.init(dsn)
+    cut_store.init(dsn)
 
     # The job registry, injected here for the same reason app/mcp_mount.py
     # injects it: a graph run takes minutes, and a tool call that blocks

@@ -691,7 +691,12 @@ def test_every_tool_is_published_from_its_constant(tmp_db, monkeypatch):
                                      approve_render=lambda *a: {},
                                      approve_keyframes=lambda *a: {},
                                      cancel_job=lambda i, account_id=None: None)
-    tools = _published(server)
+    studio = mcp_server.build_server(dsn=tmp_db, surface="studio",
+                                     job_status=lambda i, account_id=None: None,
+                                     cancel_job=lambda i, account_id=None: None)
+    # the board carries every tool but the studio-only one (import_file reads
+    # the local disk); the studio adds it -- together, every constant
+    tools = {**_published(studio), **_published(server)}
     assert set(tools) == set(mcp_server.TITLES) == set(mcp_server.DESCRIPTIONS) \
         == set(mcp_server.HINTS)
     for name, tool in tools.items():
@@ -1003,7 +1008,8 @@ def test_the_board_surface_keeps_every_tool(tmp_db, monkeypatch):
     monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
     names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, job_status=_job_status,
                                                             cancel_job=_cancel_job))}
-    assert set(mcp_server.STUDIO_TOOLS) <= names
+    assert set(mcp_server.STUDIO_TOOLS) - {"import_file"} <= names
+    assert "import_file" not in names        # the local disk is the studio's (stdio) only
     assert (BOARD_ONLY - {"approve"}) <= names
 
 

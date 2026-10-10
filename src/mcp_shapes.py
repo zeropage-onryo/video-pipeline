@@ -146,6 +146,19 @@ class JoinResult(_Open):
     note: Optional[str] = None
 
 
+class ImportResult(_Open):
+    """import_file: the `asset:<id>` a file from this computer became."""
+    id: str                       # asset:<id>
+    kind: Literal["image", "video"]
+    filename: str
+    ok: bool = True
+    seconds: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    size_bytes: Optional[int] = None
+    note: Optional[str] = None
+
+
 class CancelResult(_Open):
     job_id: int
     status: JobStatus
@@ -346,6 +359,7 @@ SHAPES: dict[str, type[BaseModel]] = {
     "job": Job,
     "cancel_job": CancelResult,
     "assemble_clips": JoinResult,
+    "import_file": ImportResult,
 }
 
 
@@ -486,6 +500,9 @@ SUMMARIES: dict[str, Callable[[dict], str]] = {
     "job": _job_line,
     "cancel_job": lambda p: p.get("note") or f"Job {p.get('job_id')}: {p.get('status')}.",
     "assemble_clips": lambda p: _join_line(p),
+    "import_file": lambda p: (f"Imported {p.get('filename')} as {p.get('id')} ({p.get('kind')}"
+                              + (f", {p['width']}x{p['height']}" if p.get("width") else "")
+                              + (f", {p['seconds']:.1f}s" if p.get("seconds") else "") + ")."),
 }
 
 
