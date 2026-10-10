@@ -19,7 +19,6 @@ bills only successful outputs.
 """
 
 import asyncio
-import json
 import threading
 import time
 import types
@@ -411,7 +410,7 @@ def studio(pg, monkeypatch):
 
 def _call(server, tool, args):
     out = asyncio.run(server.call_tool(tool, args))
-    return json.loads(out.content[0].text)
+    return out.structured_content          # the studio answers typed (step 7)
 
 
 IMAGE = {"prompt": "a dented can on wet tile", "model": "seedream4.5"}

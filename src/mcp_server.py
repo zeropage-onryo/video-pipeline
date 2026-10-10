@@ -2781,6 +2781,37 @@ TOOLS = (
 ENGINE_TOOLS = (run_research, run_graph)
 
 
+def _structured(name: str, fn):
+    """The studio surface's registration of a tool (2026-10-09,
+    task-mcp-studio-v2 step 7): the same function, answering with a
+    CallToolResult -- a short human line as text and the payload as
+    structuredContent -- and declaring `Annotated[CallToolResult,
+    mcp_shapes.SHAPES[name]]`, from which the SDK publishes the tool's
+    outputSchema and against which it validates every answer.
+
+    A wrapper with its own `__signature__` (the arguments exactly as the
+    tool declares them, evaluated; only the return type swapped) rather
+    than a second copy of every tool, so the studio cannot drift from the
+    board's version of the same tool."""
+    import inspect
+    from typing import Annotated
+
+    from mcp.types import CallToolResult
+
+    from . import mcp_shapes
+    sig = inspect.signature(fn, eval_str=True)
+
+    def typed(**kwargs):
+        out = fn(**kwargs)
+        return mcp_shapes.result(name, out) if isinstance(out, dict) else out
+
+    typed.__name__ = typed.__qualname__ = fn.__name__
+    typed.__doc__ = fn.__doc__
+    typed.__signature__ = sig.replace(
+        return_annotation=Annotated[CallToolResult, mcp_shapes.SHAPES[name]])
+    return typed
+
+
 def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
                  start_job=None, job_status=None, account_id: Optional[int] = None,
                  engine: Optional[bool] = None, listed: bool = False,
@@ -2882,8 +2913,15 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
             return lambda fn: fn          # not offered on the listed server
         if studio and name not in STUDIO_TOOLS:
             return lambda fn: fn          # the studio surface has no board
-        return server.tool(name=name, title=TITLES[name],
-                           description=DESCRIPTIONS[name], annotations=_ann(name))
+        register = server.tool(name=name, title=TITLES[name],
+                               description=DESCRIPTIONS[name], annotations=_ann(name))
+        if not studio:
+            return register               # the board and the listed server: as always
+
+        def typed(fn):                    # the studio: typed results (step 7)
+            register(_structured(name, fn))
+            return fn
+        return typed
 
     server = MCPServer(name, instructions=STUDIO_INSTRUCTIONS if studio else INSTRUCTIONS)
 
