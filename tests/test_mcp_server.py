@@ -685,7 +685,8 @@ def test_every_tool_is_published_from_its_constant(tmp_db, monkeypatch):
     monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
     server = mcp_server.build_server(dsn=tmp_db, job_status=lambda i, account_id=None: None,
                                      approve_render=lambda *a: {},
-                                     approve_keyframes=lambda *a: {})
+                                     approve_keyframes=lambda *a: {},
+                                     cancel_job=lambda i, account_id=None: None)
     tools = _published(server)
     assert set(tools) == set(mcp_server.TITLES) == set(mcp_server.DESCRIPTIONS) \
         == set(mcp_server.HINTS)
@@ -708,7 +709,8 @@ def test_descriptions_carry_no_operator_vocabulary(tmp_db, monkeypatch):
     monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
     server = mcp_server.build_server(dsn=tmp_db, job_status=lambda i, account_id=None: None,
                                      approve_render=lambda *a: {},
-                                     approve_keyframes=lambda *a: {})
+                                     approve_keyframes=lambda *a: {},
+                                     cancel_job=lambda i, account_id=None: None)
     for name, tool in _published(server).items():
         text = f"{tool.title} {tool.description}".lower()
         for word in mcp_server.INTERNAL_WORDS:
@@ -973,9 +975,14 @@ def _job_status(i, account_id=None):
     return None
 
 
+def _cancel_job(i, account_id=None):
+    return None
+
+
 def test_the_studio_surface_has_no_board_tools(tmp_db, monkeypatch):
     monkeypatch.delenv(mcp_server.ENGINE_ENV, raising=False)
-    server = mcp_server.build_server(dsn=tmp_db, surface="studio", job_status=_job_status)
+    server = mcp_server.build_server(dsn=tmp_db, surface="studio", job_status=_job_status,
+                                     cancel_job=_cancel_job)
     names = {t.name for t in _tools(server)}
     assert names == set(mcp_server.STUDIO_TOOLS)   # the spending doors need no engine flag
     assert not names & BOARD_ONLY
@@ -990,7 +997,8 @@ def test_the_studio_surface_ignores_the_engine_flag(tmp_db, monkeypatch):
 
 def test_the_board_surface_keeps_every_tool(tmp_db, monkeypatch):
     monkeypatch.setenv(mcp_server.ENGINE_ENV, "1")
-    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, job_status=_job_status))}
+    names = {t.name for t in _tools(mcp_server.build_server(dsn=tmp_db, job_status=_job_status,
+                                                            cancel_job=_cancel_job))}
     assert set(mcp_server.STUDIO_TOOLS) <= names
     assert (BOARD_ONLY - {"approve"}) <= names
 
@@ -1308,8 +1316,9 @@ def test_the_tool_quotes_inline_and_runs_an_approval_as_a_job(tmp_db, monkeypatc
     _stub_render(monkeypatch)
     started = []
 
-    def start_job(kind, label, fn, account_id=None):
+    def start_job(kind, label, fn, cancellable=False, account_id=None):
         started.append(label)
+        assert cancellable is True          # a spend can be stopped
         return {"id": 41, "status": "running"}
 
     server = mcp_server.build_server(dsn=tmp_db, surface="studio", start_job=start_job,

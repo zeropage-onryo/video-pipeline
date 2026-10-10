@@ -24,8 +24,8 @@ spend is quoted first and runs only after his yes in chat.
 
 | step | state | PR / notes |
 |---|---|---|
-| 1. credits + signed single-use quote | built 2026-10-08, branch `claude/task-mcp-studio-v2-docs-d82294` | see "As built" under step 1 |
-| 6. cancel a job | not started | |
+| 1. credits + signed single-use quote | built 2026-10-08, PR #200 | see "As built" under step 1 |
+| 6. cancel a job | built 2026-10-09, branch `claude/task-mcp-studio-v2-cancel` (stacked on #200) | see "As built" under step 6 |
 | 7. structured results | not started | |
 | 2a. join clips | not started | |
 | 3 + 4. viewer + upload | not started | |
@@ -97,6 +97,51 @@ Today `approval_gate(usd, approve_usd)` compares dollars Claude repeats back.
 - Release the credit hold when the provider was not yet submitted; if fal already has it, try fal's
   cancel URL (the receipt in `fal_requests` has it) and release only on fal's confirmation.
   Document honestly which states can and can't be refunded.
+
+**fal's contract, read 2026-10-08** (fal.ai/docs/model-apis/model-endpoints/queue, /model-apis/
+pricing, /model-apis/request-errors): `PUT {cancel_url}` -> 202 `CANCELLATION_REQUESTED` (a job
+still IN_QUEUE "is removed immediately and is never processed"; an IN_PROGRESS one is sent a
+signal and "may still complete if the app does not handle cancellation"), 400
+`ALREADY_COMPLETED`, 404 `NOT_FOUND`. There is no CANCELLED status; a cancelled request's error
+type is `client_cancelled` (HTTP 499). fal bills "only successful outputs" and never queue time.
+Not documented anywhere: what the status endpoint answers after a cancel, so the code accepts
+any of an error payload, a 404/410/499, or a finished job with no output as "cancelled".
+
+**As built (2026-10-09).**
+- `cancel_job(job_id)` on the studio surface (and the board under the engine flag; never
+  listed). `mcp_server.cancel_studio_job` answers honestly: unknown id -> error; finished ->
+  "nothing to cancel" plus what it cost; a job this connector did not start (not cancellable) ->
+  says so; still queued -> cancelled outright, nothing held; running -> "cancel requested" with
+  the outcomes below, and `job` says how it ended (`cancelled` with the adapter's own words in
+  `detail`, or `done`).
+- The spending tools' jobs are started cancellable (`_run(..., _cancellable=True)`), and the
+  runner binds `src/cancellation.py`'s check in the worker thread, like the credit meter.
+- **Before the provider call:** `charge.Charge.submitted()` -- the last line before every
+  provider call in every adapter -- sees the cancel, releases the hold and raises `Cancelled`
+  (no provider call, no failed generations row). Refunded.
+- **While fal has it** (images, clips, effects all poll in `fal._submit_and_wait`): the cancel
+  URL from fal's own submit reply is PUT through the same `http` seam (`fal.CANCEL`), on the
+  job's own thread -- not from the `fal_requests` receipt, which only clips write. fal's answer
+  decides: 202 then an error payload / 404 / 410 / 499 / a finish with no output -> `Cancelled`,
+  hold released, and for a clip the receipt resolved and a failed attempt row written. 202
+  then an output -> kept, settled at the quoted price, filed, `cancel_too_late: true` on the
+  result. 400 -> the same (too late). 404 -> released. No answer (network, 5xx) -> nothing
+  assumed, asked again on the next poll.
+- **Cannot be refunded:** a job fal finishes before the cancel takes effect (charged, kept); a
+  job already downloading / being recorded; an element sheet already being drawn (one
+  synchronous Gemini call, nothing to signal); a job lost to a server restart (it is gone from
+  the in-memory registry -- the recovery sweep finishes a clip). The live path's existing
+  deadline rule is unchanged: a job still pending at fal's deadline is released.
+- Fixed on the way: `jobs.cancel` on a still-`queued` job set its status, but the worker then
+  overwrote it to `running` and ran the job anyway. The flag is set too now, and the worker
+  checks it before starting.
+- Verified: tests/test_mcp_cancel.py -- the pre-submit release on the real ledger; every fal
+  answer above against a scripted queue; the PUT's method and empty body through the real
+  `_request`; the registry (queued never runs, `Cancelled` -> `cancelled`, a non-cancellable
+  job never sees a cancel); the tool's replies; and the task's eval, "cancel mid-job", end to
+  end on real job threads, the real ledger and the real image door with only fal's wire stood
+  in -- refunded when fal drops it, kept and charged when fal finishes first -- plus the clip
+  door (receipt resolved, failed row, nothing left for the sweep).
 
 ## 7. Structured results
 

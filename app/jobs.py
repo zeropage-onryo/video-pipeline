@@ -138,9 +138,20 @@ def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
         # every Gemini call this job makes is metered to its account
         # (src/spend.py) -- bound here, in the worker thread, because a
         # contextvar set in the request thread never reaches it
-        from src import spend
+        from src import cancellation, spend
         spend.bind(account_id=account_id)
         _meter_credits(job["id"])
+        # ...and a cancel is asked for the same way (src/cancellation.py):
+        # the adapters ask before the provider call and while fal has it
+        cancellation.bind(lambda: cancelled(job))
+        # cancelled while still queued: it never runs (the thread can start
+        # after the cancel landed, and used to run the job regardless)
+        with _lock:
+            stopped = job["_cancel"] or job["status"] == "cancelled"
+        if stopped:
+            update(job["id"], status="cancelled", ended_at=job["ended_at"] or _now(),
+                   detail="cancelled before it started -- nothing ran")
+            return
         update(job["id"], status="running")
         try:
             result = fn(job) or {}
@@ -148,6 +159,11 @@ def start(kind: str, label: str, fn: Callable[[dict], Optional[dict]],
                    ended_at=_now(), **result)
         except JobCancelled:
             update(job["id"], status="cancelled", ended_at=_now())
+        except cancellation.Cancelled as e:
+            # a cancel that took effect inside an adapter: what it stopped
+            # and what it gave back, from the code that knows
+            update(job["id"], status="cancelled", ended_at=_now(), detail=str(e),
+                   **({"result": e.result} if e.result is not None else {}))
         except Exception as e:  # surfaced, never silent
             update(job["id"], status="failed", error=str(e), ended_at=_now())
 
@@ -199,7 +215,8 @@ def cancel(job_id: int, *, account_id: Optional[int] = None) -> Optional[dict]:
         if not owned_by(job, account_id):
             return None
         if job["status"] == "queued":
-            job.update(status="cancelled", ended_at=_now())
+            # the flag too: the worker may already be about to start it
+            job.update(status="cancelled", ended_at=_now(), _cancel=True)
         elif job["status"] == "running" and job["cancellable"]:
             job["_cancel"] = True
             job["detail"] = "cancel requested"

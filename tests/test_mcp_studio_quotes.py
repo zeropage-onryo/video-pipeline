@@ -283,7 +283,7 @@ def funded(pg, monkeypatch):
                         lambda *a, **k: {"ok": True, "chunks": 1, "error": None})
     started = []
 
-    def start_job(kind, label, fn, account_id=None):
+    def start_job(kind, label, fn, cancellable=False, account_id=None):
         started.append(label)
         result = fn({})            # inline: the job's body, in this thread
         return {"id": 40 + len(started), "status": "done", "result": result}

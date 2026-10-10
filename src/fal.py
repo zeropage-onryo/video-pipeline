@@ -88,8 +88,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import cancellation, fal_requests, generative, ledger
 from . import charge as charging
-from . import fal_requests, generative, ledger
 from .shot import Shot
 
 HOST = os.environ.get("FAL_HOST", "https://queue.fal.run").rstrip("/")
@@ -918,21 +918,34 @@ def generations_today(db_path=None, *, account_id=None, everyone: bool = False,
 # --------------------------------------------------------------------------
 # the wire
 # --------------------------------------------------------------------------
-def _request(url: str, payload: Optional[dict] = None, *,
+# The payload that means "PUT this cancel URL" (2026-10-08). A sentinel
+# rather than a new parameter, so every `http` a caller or a test injects
+# keeps its one shape -- http(url, payload=None) -- and a fake can tell a
+# cancel from a poll by `payload is CANCEL`.
+CANCEL = object()
+
+
+def _request(url: str, payload=None, *,
              account_id: Optional[int] = None) -> dict:
     """One authenticated JSON round-trip. POST when there is a payload,
-    else GET. Injected as `http` by every caller in tests, which is why
-    nothing above this line needs a key to be exercised."""
+    PUT with no body for CANCEL, else GET. Injected as `http` by every
+    caller in tests, which is why nothing above this line needs a key to
+    be exercised."""
     key = _credential(account_id)
     if key is None:
         raise RuntimeError("FAL_KEY not set (create one at fal.ai/dashboard/keys)")
-    data = json.dumps(payload).encode() if payload is not None else None
+    if payload is CANCEL:
+        data, method = b"", "PUT"
+    elif payload is not None:
+        data, method = json.dumps(payload).encode(), "POST"
+    else:
+        data, method = None, "GET"
     req = urllib.request.Request(
         url, data=data,
         headers={"Authorization": f"Key {key}",
                  "Content-Type": "application/json",
                  "Accept": "application/json"},
-        method="POST" if payload is not None else "GET",
+        method=method,
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as response:
@@ -1025,6 +1038,40 @@ def _download(url: str, out_path: Path) -> None:
             f.write(chunk)
 
 
+# fal's three answers to a cancel (docs, fal.ai/docs/model-apis/model-
+# endpoints/queue, read 2026-10-08): 202 CANCELLATION_REQUESTED (a queued job
+# is removed and never processed; a running one is sent a signal and "may
+# still complete"), 400 ALREADY_COMPLETED, 404 NOT_FOUND.
+CANCEL_REQUESTED = "CANCELLATION_REQUESTED"
+ALREADY_COMPLETED = "ALREADY_COMPLETED"
+CANCEL_NOT_FOUND = "NOT_FOUND"
+# what a cancelled job reads as afterwards, when it reads as an HTTP code
+# (fal's request errors: client_cancelled is 499) rather than a payload
+CANCELLED_CODES = {404, 410, 499}
+
+
+def _ask_cancel(http, cancel_url: str) -> Optional[str]:
+    """PUT the cancel URL; fal's answer, or None when fal gave none (the
+    network, a 5xx, a 429) -- in which case nothing is assumed and the
+    caller asks again on its next poll."""
+    try:
+        reply = http(cancel_url, CANCEL)
+    except Exception as e:
+        code = fal_requests._http_code(e)
+        if code == 400:
+            return ALREADY_COMPLETED
+        if code == 404:
+            return CANCEL_NOT_FOUND
+        return None
+    status = str((reply or {}).get("status") or "").upper() if isinstance(reply, dict) else ""
+    return status or CANCEL_REQUESTED          # a 2xx is an accepted cancel
+
+
+def _cancelled_at_fal(why: str) -> "cancellation.Cancelled":
+    return cancellation.Cancelled(
+        f"cancelled at fal ({why}) -- nothing was made, so nothing was charged")
+
+
 def _submit_and_wait(model_id: str, body: dict, *, http=None,
                      timeout_s: Optional[int] = None,
                      account_id: Optional[int] = None,
@@ -1050,6 +1097,21 @@ def _submit_and_wait(model_id: str, body: dict, *, http=None,
     and beats while this loop runs, so a worker that dies here -- a deploy
     restarting the API, as on 2026-09-26 -- leaves a job the sweep in
     src/fal_requests.py can reattach to instead of an orphaned hold.
+
+    A CANCEL (2026-10-08, src/cancellation.py) is noticed on each pass and
+    sent to fal's cancel URL once fal answers it; fal's answer decides the
+    money, never the request alone:
+
+    - CANCELLATION_REQUESTED, and the job then ends with an error payload
+      (fal's `client_cancelled`), as a 404/410/499, or with no output ->
+      `Cancelled`: the caller releases the hold. fal bills only successful
+      outputs, so nothing was made and nothing is owed.
+    - CANCELLATION_REQUESTED, and the job COMPLETES with an output anyway
+      (fal: a running job "may still complete") -> returned as normal: it
+      is settled at the quoted price and filed like any render.
+    - ALREADY_COMPLETED -> returned as normal: too late, charged, filed.
+    - NOT_FOUND -> `Cancelled`, released: fal has no such job to bill.
+    - no answer (the network) -> nothing assumed; asked again next pass.
     """
     # Read the module constant HERE rather than as a default argument: a
     # default binds at import, so TIMEOUT_SECONDS could never be changed
@@ -1073,13 +1135,27 @@ def _submit_and_wait(model_id: str, body: dict, *, http=None,
         tracker.submitted(submitted)     # before the first poll, always
 
     deadline = time.time() + timeout_s
+    cancel_url = submitted.get("cancel_url")
+    asked = None            # fal's answer to our cancel, once it gave one
     while True:
         if tracker is not None:
             tracker.beat()
-        state = http(status_url)
+        if asked is None and cancel_url and cancellation.requested():
+            asked = _ask_cancel(http, cancel_url)
+            if asked == CANCEL_NOT_FOUND:
+                raise _cancelled_at_fal("fal no longer has the job")
+        try:
+            state = http(status_url)
+        except Exception as e:
+            if asked == CANCEL_REQUESTED and \
+                    fal_requests._http_code(e) in CANCELLED_CODES:
+                raise _cancelled_at_fal("the job is gone") from e
+            raise
         status = str(state.get("status") or "").upper()
         failed = _error_in(state)
         if failed:
+            if asked == CANCEL_REQUESTED:
+                raise _cancelled_at_fal(failed)
             raise RuntimeError(f"fal job failed: {failed}")
         if status == STATUS_DONE:
             break
@@ -1090,10 +1166,19 @@ def _submit_and_wait(model_id: str, body: dict, *, http=None,
                 f"be caught by this deadline)")
         time.sleep(POLL_SECONDS)
 
-    result = http(response_url)
+    try:
+        result = http(response_url)
+    except Exception as e:
+        if asked == CANCEL_REQUESTED and fal_requests._http_code(e) in CANCELLED_CODES:
+            raise _cancelled_at_fal("the job is gone") from e
+        raise
     failed = _error_in(result)
     if failed:
+        if asked == CANCEL_REQUESTED:
+            raise _cancelled_at_fal(failed)
         raise RuntimeError(f"fal job failed: {failed}")
+    if asked == CANCEL_REQUESTED and not _output_url(result, skip):
+        raise _cancelled_at_fal("it finished with no output")
     return result, skip
 
 
