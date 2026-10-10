@@ -84,6 +84,8 @@ class SpendResult(_Open):
     ref: Optional[str] = None
     generation_id: Optional[int] = None
     sheet: Optional[str] = None
+    frame: Optional[str] = None       # edit_clip: the edited frame to approve (gen:<id>)
+    next: Optional[str] = None
     error: Optional[str] = None
     note: Optional[str] = None
 
@@ -340,7 +342,8 @@ class PromptCraft(_Open):
     tool: Optional[str] = None
 
 
-SPEND_TOOLS = ("generate_image", "generate_video", "apply_effect", "element_sheet")
+SPEND_TOOLS = ("generate_image", "generate_video", "apply_effect", "element_sheet",
+               "edit_clip")
 
 SHAPES: dict[str, type[BaseModel]] = {
     "projects": ProjectList,

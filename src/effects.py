@@ -778,16 +778,26 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
         source: str = "mcp", bank: bool = True,
         publish: Optional[Callable] = None,
         project_id: Optional[int] = None,
-        quote=None) -> dict[str, Any]:
+        quote=None, row: Optional[dict] = None,
+        endpoint_body: Optional[tuple] = None,
+        extra: Optional[dict] = None) -> dict[str, Any]:
     """Never raises: {"ok", "media_url", "generation_id", "asset_id", "path",
     "error"}. The caller has already checked everything above and had the
     price approved; `usd` is that approved price, and it is what is held --
     as `quote.credits` when the caller passes the verified
-    pricing.StudioQuote (the MCP studio surface, 2026-10-08)."""
+    pricing.StudioQuote (the MCP studio surface, 2026-10-08).
+
+    `row` + `endpoint_body` (2026-10-10, src/clip_edit.py) run an endpoint
+    that is NOT in EFFECTS through this same body -- the key, the cap, the
+    hold, the generations row, the wall -- so a second spending path does
+    not grow beside this one: `row` gives the label and the output kind,
+    `endpoint_body` the (endpoint, body) to submit, and `effect` is then
+    only the name it is logged under. `extra` is merged into the row's
+    params (and so the wall's metadata)."""
     from . import render_assets
     kwargs = {"dsn": db_path} if db_path is not None else {}
     try:
-        row = spec(effect)
+        row = row or spec(effect)
         if not fal.has_key(account_id):
             return {"ok": False, "error": "no fal key -- set FAL_KEY for the installation"}
         generative.init(**kwargs)
@@ -799,7 +809,8 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
             dsn=db_path, env_prefix="FAL", phrase="images generated")
         if refusal:
             return {"ok": False, "error": refusal}
-        endpoint, body = build_body(effect, urls, prompt, options, probe)
+        endpoint, body = endpoint_body or build_body(effect, urls, prompt, options, probe)
+        body = dict(body)
         if "prompt" in body:
             body["prompt"] = fal.safe_prompt(body["prompt"], db_path, account_id)
 
@@ -830,6 +841,7 @@ def run(effect: str, urls: list[str], prompt: str, options: dict, *,
                   "effect": effect, "options": options, "source": source,
                   "sources": list(sources or []), "key_source": fal.KEY_SOURCE,
                   **({"project_id": int(project_id)} if project_id else {}),
+                  **(extra or {}),
                   **charge.params()}
         text = prompt or f"{row['label']} {json.dumps(options, sort_keys=True)}"
         try:

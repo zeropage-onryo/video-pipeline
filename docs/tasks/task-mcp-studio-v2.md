@@ -30,7 +30,7 @@ spend is quoted first and runs only after his yes in chat.
 | 2a. join clips | built 2026-10-09, PR #204 (stacked on #202) | see "As built" under step 2a |
 | 3 + 4. viewer + upload | `import_file` built 2026-10-09, PR #205 (stacked on #204); MCP Apps NOT built -- gate not passed, see below | see "Verification" and "As built" under step 3 + 4 |
 | 2b. finish a clip | built 2026-10-10, PR #207 (stacked on #205) | see "As built" under step 2b |
-| 2c. edit by instruction | researched 2026-10-10 (findings below); building on branch `claude/task-mcp-studio-v2-edit` (stacked on #207) | see "Findings" under step 2c |
+| 2c. edit by instruction | researched and built 2026-10-10, branch `claude/task-mcp-studio-v2-edit` (stacked on #207) | see "Findings" and "As built" under step 2c |
 
 ## 1. Approve in studio credits, with a signed single-use quote
 
@@ -399,6 +399,48 @@ What the research decides:
   (2) `stage="video"` takes that still's `gen:<id>` as `frame`, and refuses any other image: it
   must be a frame this tool made from THIS clip with THIS instruction -- QUOTE 2, priced off the
   measured clip. Both quotes are the signed single-use kind (step 1).
+
+**As built (2026-10-10).**
+- `edit_clip(source, instruction, stage="frame"|"video", frame="", model="", at=0.0,
+  keep_audio=true, quote_token="", project_id=None)` -- ONE tool with a `stage` argument (21
+  studio tools; the board has it under the engine flag; never listed). `source` is a `gen:<id>`
+  clip or an imported `asset:<id>` clip.
+- `src/clip_edit.py`: the dated table (`MODELS`, `CHECKED` 2026-10-10), `check_clip` (each
+  model's published limits, refused BEFORE the quote), `video_usd` (clip seconds x rate),
+  `options_for` (every model priced or explained for this clip), `frame_prompt`, `video_body`
+  (Kling: `image_urls=[frame]` + "Match @Image1..." appended, `keep_audio`; FLUX.3: `prompt` +
+  `video_url` only) and `extract_frame` (ffmpeg). The models are NOT `effects.EFFECTS` rows --
+  there they would be one `apply_effect` call away with no frame -- so `effects.run` gained
+  `row` / `endpoint_body` / `extra`, and the video still takes that body's key check, cap, hold,
+  generations row and wall record.
+- Stage `frame`: the clip is measured, `at` must be inside it, the quote is one still edit
+  (`nano-banana-edit`, $0.039 = 10 credits) and carries `then`: each model's price in dollars
+  and credits for THIS clip, or `cannot` with the limit it breaks. After the yes: the frame is
+  pulled, made fetchable (the bucket), edited with "<instruction>. Keep everything else in the
+  frame exactly as it is...", filed on the wall with `metadata.edit_clip = {stage: frame,
+  source, instruction, at}`, and the result names it (`frame: gen:<id>`) with the next call.
+- Stage `video`: `_approved_frame` refuses a missing frame, an image this tool did not make, a
+  frame of another clip and a frame made with a different instruction (the instruction is
+  compared whitespace-collapsed; the frame's own is echoed in the refusal). Then the model's
+  limits, then the quote off the measured clip. The token binds stage, source, instruction,
+  frame, model, keep_audio and project.
+- `kling-o1` is the default; `kling-o1-pro` and `flux-3` are named explicitly. For FLUX.3 the
+  quote carries `frame_steers: false`: the frame was a preview of the instruction, the model
+  never sees it.
+- Verified: tests/test_mcp_edit_clip.py (38) -- the table, prices and every limit; the wire
+  bodies; a real ffmpeg frame pull; every refusal before a quote; the frame gate; a changed
+  model after the yes refused; and the conversation on the REAL ledger and wall with only fal's
+  wire, the bucket and the frame pull stood in for: the video cannot be bought first, the frame
+  costs 10 credits, a frame does not approve a different instruction, the video costs 242 for
+  8s, the same yes again starts and charges nothing. Over the real stdio server with real
+  clips: the frame quote measured each clip and listed the models (a 360x640 clip and a 13s
+  clip each got Kling's `cannot` and FLUX.3's price), the video stage was refused without a
+  frame, and an approved frame ran the real ffmpeg pull and stopped at "the studio's bucket is
+  not configured" (that worktree has no R2) with nothing spent. **No live fal call was made**:
+  the Kling prompt wording around `@Image1` in particular is unproven until a real edit.
+- To add a model: re-read the findings table, add a `MODELS` row with its limits, price and
+  how it takes the frame (`"reference"` or None), and a `video_body` branch if its wire differs.
+  Luma Ray 3.2's `start_image_url` is the one worth a live look next.
 
 ## 8. Alongside every step
 

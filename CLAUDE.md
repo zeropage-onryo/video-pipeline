@@ -148,7 +148,8 @@ venv/bin/python -m src.mcp_server   # stdio; Claude Desktop launches this itself
 # a SIGNING SECRET is needed, QUOTE_SIGNING_SECRET, or nothing can be approved),
 # plus cancel_job (stops one; the money follows fal's own answer), assemble_clips
 # (joins gen:<id> clips into one MP4 on this server, free, filed on the wall),
-# import_file (a file from ~/Downloads, ~/Desktop or data/ -> asset:<id>; studio only), and
+# import_file (a file from ~/Downloads, ~/Desktop or data/ -> asset:<id>; studio only),
+# edit_clip (a clip changed by instruction: ONE frame as a still first, then the clip), and
 # image_models / video_models / effects / elements /
 # renders / images_for / prompt_craft, and PROJECTS (projects / project /
 # project_chat / create_project / save_chat; project_id on a render files it there).
@@ -1725,7 +1726,23 @@ is yours, in Resolve, by hand.
   own container's mime now (`effects.VIDEO_MIMES`), not always video/mp4. Left out that day:
   BiRefNet video (billed per compute second), BEN v2 video (a per-megapixel price with no
   rule for counting a video's megapixels) and Wan VACE outpainting (priced per output second
-  at a forced resolution; re-generates at 16fps, capped ~15s). **Projects reach it too (2026-10-08,
+  at a forced resolution; re-generates at 16fps, capped ~15s). **`edit_clip` (2026-10-10, step
+  2c) changes something IN a clip by instruction, in TWO spends**, each a signed quote:
+  `stage="frame"` pulls one frame with ffmpeg here (free) and edits it as a still
+  (`clip_edit.FRAME_EFFECT` = `nano-banana-edit`, 10 credits), and its quote lists what the
+  whole clip would cost on every model, or why a model cannot take this clip;
+  `stage="video"` runs the whole clip and takes ONLY the `gen:<id>` of a frame stage 1 made
+  from this clip with this instruction (`mcp_server._approved_frame` reads the wall row's
+  `metadata.edit_clip`) -- the dear half cannot be bought without the cheap half having been
+  made to look at. `src/clip_edit.py` is the dated model table: `kling-o1` (default, $0.126/s;
+  3-10.05s, each side 720-2160px, 24-60fps, mp4/mov; the approved frame goes in as `@Image1`),
+  `kling-o1-pro` ($0.168/s) and `flux-3` ($0.03/s; mp4 under 15s and 50MB; instruction only,
+  so `frame_steers` is false and the quote says so). They are deliberately NOT `EFFECTS` rows
+  (that would make them one `apply_effect` call away, no frame); `effects.run` gained `row` /
+  `endpoint_body` / `extra` so they still take its hold, cap, generations row and wall record.
+  The survey of all sixteen fal instruction editors, and why Kling O3, Wan 2.7, HappyHorse,
+  Luma Ray 3.2, id-v2v, Gemini Omni, Grok, Bernini-R and the VACE apps are not wired, is in
+  the task doc. **Projects reach it too (2026-10-08,
   Mike's ask: make projects, revisit the ones made in the studio, pull their reference images
   and chats).** `projects` lists the account's projects (`projects.list_projects`), `project`
   reopens one -- brief, look, `learned` (its memory), its scenes, every reference photo those
