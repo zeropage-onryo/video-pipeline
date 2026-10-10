@@ -179,31 +179,43 @@ MCP_APP, MCP_SESSIONS = mcp_mount.build(
 )
 
 
+def init_tables() -> None:
+    """Every table the app reads or writes, created if missing, and the
+    two seeds that ride with them. Safe to run twice; the lifespan runs
+    it through db.run_init."""
+    db.init_db()
+    preprod.init()
+    entities.init()
+    autonomy.init()
+    winners.init()
+    inspiration.init()   # seeds the researched accounts if empty
+    evalstore.init()     # golden set seeded from eval_cases.json
+    workflows.init()     # saved node graphs for /ui Workflows
+    workflows.seed_default()  # "Prompt enhancement" starter canvas
+    render_assets.init()  # generated_assets, owned (merged 2026-09-02)
+    cut_store.init()      # timelines / timeline_heads / cut_media (Assemble v0)
+    cut_moments.init()    # media_index / media_moments (the index, phase 2)
+    spend.init()          # llm_calls, the LLM meter (2026-09-04)
+    ledger.init()         # credit_lots / credit_entries, the prepaid ledger
+    billing_core.init()   # credit_schedules, a yearly plan's unreleased months
+    generative.init()    # generations log the render caps count
+    accounts_mod.init()  # users / identities / accounts / members
+    settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
+    fal_requests.init()  # fal's queue receipts, persisted at submit
+    assistant_store.init()  # the pill's persona, project and Keep clicks
+    mcp_connections.init()  # who connected Claude, for the account menus' panel
+    quote_redemptions.init()  # which studio quotes the MCP has spent
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     with db.connection_pool():
-        db.init_db()
-        preprod.init()
-        entities.init()
-        autonomy.init()
-        winners.init()
-        inspiration.init()   # seeds the researched accounts if empty
-        evalstore.init()     # golden set seeded from eval_cases.json
-        workflows.init()     # saved node graphs for /ui Workflows
-        workflows.seed_default()  # "Prompt enhancement" starter canvas
-        render_assets.init()  # generated_assets, owned (merged 2026-09-02)
-        cut_store.init()      # timelines / timeline_heads / cut_media (Assemble v0)
-        cut_moments.init()    # media_index / media_moments (the index, phase 2)
-        spend.init()          # llm_calls, the LLM meter (2026-09-04)
-        ledger.init()         # credit_lots / credit_entries, the prepaid ledger
-        billing_core.init()   # credit_schedules, a yearly plan's unreleased months
-        generative.init()    # generations log the render caps count
-        accounts_mod.init()  # users / identities / accounts / members
-        settings_mod.init()  # the Dev Studio tunables (gate/threshold/k)
-        fal_requests.init()  # fal's queue receipts, persisted at submit
-        assistant_store.init()  # the pill's persona, project and Keep clicks
-        mcp_connections.init()  # who connected Claude, for the account menus' panel
-        quote_redemptions.init()  # which studio quotes the MCP has spent
+        # One start at a time (2026-10-10): two of these inits side by
+        # side deadlock in Postgres, and the stdio MCP server runs nine of
+        # the same ones against this database whenever Claude Desktop
+        # starts. db.run_init takes the lock that server takes, and runs
+        # the block again if it is still picked as a deadlock's victim.
+        db.run_init(init_tables)
         # A deploy restarts this process mid-render and app/jobs.py's
         # threads die with it (2026-09-26: #121 and #135 orphaned). The
         # sweep reattaches to any fal job whose worker stopped beating and

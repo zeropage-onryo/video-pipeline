@@ -1546,6 +1546,24 @@ is yours, in Resolve, by hand.
   job registry rather than grow a second one; the rule exists so the LIBRARY layer imports
   without the web app, and a process entry point is not that. `app/jobs.py` is stdlib-only, so
   it costs nothing.
+  **Two starts at once used to kill one (found and fixed 2026-10-10).** Claude Desktop launches
+  every local server TWICE within seconds (it drops the first, which keeps running its init),
+  and `main()` runs nine module inits against the live database in each. An init holds a
+  ShareLock on its table (`CREATE INDEX IF NOT EXISTS` takes one even when the index exists,
+  and two ShareLocks do not conflict) and then wants `own_table`'s UPDATE or an ALTER on it, so
+  two inits wait on each other and Postgres refuses the second: `DeadlockDetected`, "Server
+  disconnected". The desktop log held eleven since 2026-09-05, about half of all double
+  launches, on `videos`, `shoot_concepts`, then `creative_projects` -- the statement moves with
+  the init order, and 16 of the 24 inits the app runs deadlock against a copy of themselves. So
+  the fix is around the init, not in one: `db.run_init(steps, dsn)` holds a TRANSACTION-level
+  advisory lock (`pg_try_advisory_xact_lock`, per schema, on its own connection; a session lock
+  is not safe behind Supabase's transaction pooler) while `steps` runs, starts without it after
+  `INIT_LOCK_WAIT_S` (20s: a line on stderr, never a dead start), and runs `steps` again (three
+  attempts) on a deadlock. `mcp_server.main` and the web lifespan (`app.main.init_tables`) both
+  use it; a new process entry point wraps its inits the same way, and no init() changed. Not
+  covered: a CLI's own `init_db()` and a web request in flight can still be one side of a
+  deadlock -- the start under `run_init` is the side that runs again. `tests/test_init_race.py`
+  is the race, through the real entry point.
   **TWO DOORS SINCE 2026-09-24, and which one you came through decides whose
   board you read** (`app/mcp_auth.py`, `app/mcp_mount.guarded`). The static
   `ZEROPAGE_MCP_TOKEN` is the OPERATOR's key: compared with

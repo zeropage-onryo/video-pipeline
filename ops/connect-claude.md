@@ -39,6 +39,20 @@ Quit Claude Desktop **completely** (⌘Q — closing the window is not
 enough) and reopen it. Both servers' tools appear under the connector
 icon.
 
+### If a server shows "Server disconnected" right after a start
+
+Claude Desktop launches each local server twice within a few seconds
+and keeps the second. Until 2026-10-10 the two copies could deadlock
+each other's table setup in Postgres and one of them died -- about half
+of all starts, and registering both entries doubled the copies. The
+server now takes a lock around that setup, so two entries are fine. A
+start that has to wait for another one takes a few seconds longer.
+
+If it still happens, the reason is in
+`~/Library/Logs/Claude/mcp-server-zeropage.log` (or
+`mcp-server-zeropage-board.log`): the last traceback there is the thing
+to fix, and a line starting `note:` says when the lock could not be taken.
+
 ## Why stdio and not a tunnel
 
 The desktop app launches this process itself and talks to it over a

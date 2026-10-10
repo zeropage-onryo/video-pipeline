@@ -50,10 +50,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Callable, Iterator, Optional, Sequence
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -774,7 +776,6 @@ def drop_account_keys_table(conn: psycopg.Connection) -> bool:
         return False
     remaining = conn.execute("SELECT COUNT(*) FROM account_keys").fetchone()[0]
     if remaining:
-        import sys
         print(f"note: account_keys still holds {remaining} row(s); BYOK is gone, "
               f"so delete them on purpose and the table is dropped at the next "
               f"init", file=sys.stderr)
@@ -816,6 +817,137 @@ def init_db(dsn: Optional[str] = None) -> None:
         add_scout_instagram_column(conn)
         # BYOK removed (2026-09-26): the key table goes once it is empty
         drop_account_keys_table(conn)
+
+
+# --------------------------------------------------------------------------
+# init, one start at a time
+# --------------------------------------------------------------------------
+
+# Every init() here is idempotent, and almost none is safe beside a copy
+# of itself (found 2026-10-10: Claude Desktop launches the stdio MCP
+# server twice within seconds, and eleven starts since 2026-09-05 had
+# died on `psycopg.errors.DeadlockDetected`). The shape is the same in every
+# module that owns a table: one transaction runs CREATE INDEX IF NOT
+# EXISTS -- which takes a ShareLock on the table even when the index is
+# already there, and ShareLock does not conflict with itself, so two
+# starts both get it -- and then own_table's UPDATE (RowExclusiveLock) or
+# an ALTER TABLE (AccessExclusiveLock), each of which waits for the OTHER
+# start's ShareLock. Sixteen of the twenty-four module inits the app
+# runs deadlocked against themselves that way when measured, so it is
+# fixed once, around the whole init, and not statement by statement.
+#
+# The lock is a TRANSACTION-level advisory lock held on its own
+# connection while the inits run on theirs: a session-level
+# pg_advisory_lock is not safe behind a transaction-mode pooler
+# (Supabase's), where the session that took it is not the session that
+# would release it. Keyed per schema, so two test schemas in one database
+# do not wait on each other.
+INIT_LOCK_KEY = 20261010
+# How long a start waits for another start's init before going ahead
+# without the lock. A normal init is a few seconds; this has to stay
+# well under the 60s a desktop client gives `initialize`.
+INIT_LOCK_WAIT_S = 20.0
+INIT_LOCK_POLL_S = 0.2
+# The whole init, again, when Postgres picks it as a deadlock's victim:
+# the backstop for a start that could not take the lock, and for the
+# processes that never take it (a CLI's own init, a request in flight).
+INIT_ATTEMPTS = 3
+INIT_RETRY_PAUSE_S = 0.5
+
+
+def _init_note(text: str) -> None:
+    # stderr, always: on the stdio MCP server stdout IS the protocol
+    print(f"note: {text}", file=sys.stderr)
+
+
+def _end_init_lock(conn: Optional[psycopg.Connection]) -> None:
+    """End the lock's transaction, which is what releases it. Never
+    raises: an init that succeeded must not fail on the way out because
+    the connection that only held a lock has gone away."""
+    if conn is None:
+        return
+    try:
+        conn.rollback()
+    except psycopg.Error:
+        pass
+    try:
+        conn.close()
+    except psycopg.Error:
+        pass
+
+
+def _take_init_lock(dsn: Optional[str], wait: float) -> Optional[psycopg.Connection]:
+    """The connection holding the init lock, or None when it was not
+    taken -- the holder outlasted `wait`, or the lock could not be asked
+    for at all. Polled with pg_try_ rather than blocked on, so the wait
+    is bounded here and a refusal never aborts a transaction. Each
+    refused try ends its transaction before sleeping: behind a
+    transaction pooler an open one pins a server connection, and a start
+    that is only waiting should not hold one. For the same pooler,
+    prepare_threshold=None: psycopg prepares a statement it has run five
+    times, and a prepared statement lives on ONE server connection -- the
+    sixth poll would ask a different one for it and lose the lock to an
+    error exactly when there is somebody to wait for."""
+    conn = None
+    try:
+        conn = psycopg.connect(resolve_dsn(dsn), connect_timeout=10,
+                               prepare_threshold=None)
+        deadline = time.monotonic() + max(0.0, wait)
+        while True:
+            row = conn.execute(
+                "SELECT pg_try_advisory_xact_lock("
+                "%s::int, hashtext(coalesce(current_schema(), '')))",
+                (INIT_LOCK_KEY,),
+            ).fetchone()
+            if row and row[0]:
+                return conn         # transaction left open: that IS the lock
+            conn.rollback()
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(INIT_LOCK_POLL_S)
+    except psycopg.Error as exc:
+        _init_note(f"could not take the schema-init lock ({type(exc).__name__}); "
+                   f"starting without it")
+        _end_init_lock(conn)
+        return None
+    _init_note(f"another start has held the schema-init lock for {wait:g}s; "
+               f"starting without it")
+    _end_init_lock(conn)
+    return None
+
+
+@contextmanager
+def init_lock(dsn: Optional[str] = None, *, wait: Optional[float] = None) -> Iterator[bool]:
+    """Hold the schema-init lock for the block. Yields whether it was
+    taken; the block runs either way -- a hung holder, or a lock that
+    cannot be asked for, is a line on stderr and never a dead start."""
+    conn = _take_init_lock(dsn, INIT_LOCK_WAIT_S if wait is None else wait)
+    try:
+        yield conn is not None
+    finally:
+        _end_init_lock(conn)
+
+
+def run_init(steps: Callable[[], Any], dsn: Optional[str] = None, *,
+             wait: Optional[float] = None) -> Any:
+    """Run `steps` -- everything a process inits at start -- one start at
+    a time, and again if Postgres still names it a deadlock's victim.
+
+    What a process entry point wraps its init calls in (the stdio MCP
+    server's main, the web app's lifespan). `steps` must be safe to run
+    twice, which every init() already is. Any other error is raised as
+    it comes.
+    """
+    for attempt in range(1, INIT_ATTEMPTS + 1):
+        try:
+            with init_lock(dsn, wait=wait):
+                return steps()
+        except psycopg.errors.DeadlockDetected:
+            if attempt >= INIT_ATTEMPTS:
+                raise
+            _init_note(f"schema init deadlocked with another process (attempt "
+                       f"{attempt} of {INIT_ATTEMPTS}); running it again")
+            time.sleep(INIT_RETRY_PAUSE_S * attempt)
 
 
 # --------------------------------------------------------------------------
