@@ -228,7 +228,8 @@ def respond(conversation, *, client, brand, grounding, image_refs=(),
     offered = {t.get("name") for t in tools or []}
     config.system_instruction = instructions(
         brand, with_tools=bool(tools), assistant=assistant, maker=bool(output),
-        with_skills=skills.TOOL in offered, with_plan=make_plan.TOOL in offered)
+        with_skills=skills.TOOL in offered, with_plan=make_plan.TOOL in offered,
+        with_effects="apply_effect" in offered)
     contents = _contents(conversation, grounding, image_refs,
                          notes=(assistant_brain.link_note(links),
                                 OUTPUT_NOTES.get(output or "", ""),
@@ -322,7 +323,20 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
             name, args = fc.name, dict(fc.args or {})
             if guide_tools.is_write(name):
                 # The turn ends on the FIRST write: the card is the answer.
-                clean = guide_tools.check_args(name, args)
+                try:
+                    clean = guide_tools.check_args(name, args)
+                except guide_tools.Refused as exc:
+                    # An effect is held to a table of exact names, and the
+                    # refusal lists the legal ones: the model gets it back
+                    # as the call's result and may ask again, inside the
+                    # same read budget. Every other refused write still
+                    # fails the turn -- a URL in a proposal is not a typo.
+                    if name != guide_tools.EFFECT_TOOL or len(runs) >= MAX_TOOL_CALLS:
+                        raise
+                    runs.append({"tool": name, "args": args, "ok": False})
+                    parts.append(types.Part.from_function_response(
+                        name=name, response={"result": f"error: {exc}"[:12000]}))
+                    continue
                 if name == guide_tools.PLAN_TOOL:
                     # a plan of one step is that step's own tool
                     single = make_plan.collapse(clean)
@@ -365,6 +379,9 @@ def _respond_with_tools(client, brain, config, contents, tools, run_tool, *,
         if proposal["tool"] == guide_tools.PLAN_TOOL:
             # the plan's card lists the steps; this is the line above it
             message = proposal["args"]["summary"]
+        if proposal["tool"] == guide_tools.EFFECT_TOOL:
+            # the effect's card shows what it acts on and the price
+            message = guide_tools.effect_line(proposal["args"])
         if proposal["tool"] == guide_tools.SHEET_TOOL:
             # the step card's own words: who is saved, and what is drawn
             who = proposal["args"].get("name") or "this character"
@@ -485,7 +502,8 @@ def _parse_reply(text: str):
 
 
 def instructions(brand, with_tools: bool = False, assistant=None, maker: bool = False,
-                 with_skills: bool = False, with_plan: bool = False):
+                 with_skills: bool = False, with_plan: bool = False,
+                 with_effects: bool = False):
     root = Path(__file__).resolve().parent.parent
     text = (root / "prompts/creative_guide.txt").read_text()
     if with_tools:
@@ -495,6 +513,9 @@ def instructions(brand, with_tools: bool = False, assistant=None, maker: bool = 
     if with_plan:
         # only where make_plan is offered (the composer; src/make_plan.py)
         text += "\n\n" + (root / "prompts/creative_guide_plan.txt").read_text()
+    if with_effects:
+        # only where apply_effect is offered (the composer; src/effects.py)
+        text += "\n\n" + (root / "prompts/creative_guide_effects.txt").read_text()
     if with_skills:
         # the shelf's index, only where load_skill is offered (src/skills.py)
         from . import skills

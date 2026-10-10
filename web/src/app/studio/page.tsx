@@ -82,6 +82,7 @@ import {
   cancelJob,
   drawKeyframes,
   getAssets,
+  getEffects,
   getCapabilities,
   getConceptDetail,
   createAsset,
@@ -93,6 +94,7 @@ import {
   recallActiveProject,
   rememberActiveProject,
   runCreativeGuide,
+  runEffect,
   runGuideAction,
   runImage,
   runScenes,
@@ -102,6 +104,7 @@ import {
   type Asset,
   type AssetHit,
   type Capabilities,
+  type EffectsCatalogue,
   type GuideReply,
   type Job,
   type Preset,
@@ -134,6 +137,7 @@ import {
   loadGenerateMode,
   saveGenerateMode,
   type GenerateMode,
+  isEffectTool,
   isMake,
   isPlanTool,
   loadImageModel,
@@ -171,6 +175,8 @@ import {
   type Prices,
 } from "@/lib/make-plan";
 import { failLine, madeStatus } from "@/lib/made-state";
+import { begin, candidates, requestOf, type Effect, type EffectState } from "@/lib/effects";
+import { EffectGallery } from "@/components/studio/effect-gallery";
 import type { PlanHandlers } from "@/components/studio/make-plan-card";
 import { ComposerStream, type Live } from "@/components/studio/composer/turns";
 import { creditsText } from "@/lib/render-choice";
@@ -370,6 +376,9 @@ function Composer() {
   // the skill shelf (GET /api/skills), and the one picked for the next send
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skill, setSkill] = useState<Skill | null>(null);
+  // the effects table (GET /api/effects), and whether its gallery is open
+  const [fx, setFx] = useState<EffectsCatalogue | null>(null);
+  const [fxOpen, setFxOpen] = useState(false);
   const [slashAt, setSlashAt] = useState(0);
   // progress per running send, by made id -- page state, never saved: a
   // save per tick would be a PUT a second
@@ -404,6 +413,9 @@ function Composer() {
     getSkills()
       .then((r) => setSkills(r.items))
       .catch(() => setSkills([]));
+    getEffects()
+      .then(setFx)
+      .catch(() => setFx(null));
     // the picker lists elements only; a render handed over from the
     // Assets wall ("Use in a shot") needs the wider scope to resolve
     getAssets(undefined, attachId?.startsWith("generated-") ? "all" : "elements")
@@ -633,7 +645,9 @@ function Composer() {
           toast(why, "err");
           return { madeId, status: "failed", conceptId, image: null, detail: why };
         }
-        patchMade(madeId, { status: "done", conceptId, image, detail: job.detail || "" });
+        // its id on the Assets wall, so an effect can name it (lib/effects.ts)
+        const asset = (job as unknown as { asset?: string | null }).asset ?? null;
+        patchMade(madeId, { status: "done", conceptId, image, asset, detail: job.detail || "" });
         return { madeId, status: "done", conceptId, image, detail: job.detail || "" };
       }
       const timeline = detail?.timeline ?? detail?.shots?.[0]?.timeline ?? null;
@@ -667,6 +681,35 @@ function Composer() {
     [patchMade, toast, finishProject],
   );
 
+  /* An effect's job, finished: the still or the clip it made lands on its
+     turn, named by its render id so a later effect can act on it. */
+  const finishEffect = useCallback(
+    (madeId: string, job: Job) => {
+      polling.current.delete(madeId);
+      setLive((l) => {
+        const n = { ...l };
+        delete n[madeId];
+        return n;
+      });
+      announceBalanceChange();
+      const out = typeof job.output === "string" ? job.output : "";
+      if (job.status !== "done" || !out) {
+        const why = job.error || "The effect was not made. Nothing was charged.";
+        patchMade(madeId, { status: "failed", detail: why });
+        toast(why, "err");
+        return;
+      }
+      const extra = job as unknown as { media?: string; asset?: string | null };
+      patchMade(madeId, {
+        status: "done",
+        detail: job.detail || "",
+        asset: extra.asset ?? null,
+        ...(extra.media === "video" ? { clip: out, image: null } : { image: out, clip: null }),
+      });
+    },
+    [patchMade, toast],
+  );
+
   /* A send left running -- the page was left, or reloaded, mid-way -- is
      picked up again: its job id is on the turn, the job registry still
      holds it (or has finished it). A job the server no longer knows is a
@@ -683,16 +726,19 @@ function Composer() {
       polling.current.add(m.id);
       const id = m.id;
       const out = m.output;
+      const isEffect = !!m.effect;
       pollJob(m.jobId, (j) => tick(id, j), () => false)
         .then(async (job) => {
-          if (job) await finish(id, out, job);
+          if (!job) return;
+          if (isEffect) finishEffect(id, job);
+          else await finish(id, out, job);
         })
         .catch(() => {
           polling.current.delete(id);
           patchMade(id, { status: "failed", detail: "That run was lost (the server restarted while it ran)." });
         });
     }
-  }, [ready, thread, patchMade, tick, finish]);
+  }, [ready, thread, patchMade, tick, finish, finishEffect]);
 
   /* Stop: the wait ends at once and the turn says so. The server is
      asked to cancel too, but nothing waits on its answer -- a job that
@@ -828,9 +874,11 @@ function Composer() {
   const conversationOf = (turns: Turn[]) =>
     turns
       .filter((m) => !m.failed)
-      .map(({ role, content, made, plan }) => ({
+      .map(({ role, content, made, plan, effect }) => ({
         role,
-        content: made
+        content: effect
+          ? `${content}\n[effect ${effect.label} — ${made ? madeStatus(made) : "waiting for approval"}]`
+          : made
           ? `${content}\n[made ${made.output} from the prompt: "${made.prompt ?? content}" — ${madeStatus(made)}]`
           : plan
             ? `${content}\n[plan: ${plan.steps.map((s) => `${s.n} ${s.do} — ${s.status}`).join("; ")}]`
@@ -1199,6 +1247,67 @@ function Composer() {
     onStop: () => stopPlan(id),
   });
 
+  /* ── AN EFFECT (lib/effects.ts; item 3) ──
+     Change something that already exists. What there is to act on: the
+     images attached to the box, then the thread's results, newest first. */
+  const fxCandidates = useMemo(
+    () =>
+      candidates(
+        [...uploads.map((u) => u.url), ...picked],
+        thread
+          .filter((t) => t.made && madeStatus(t.made) === "done")
+          .map((t) => ({ image: t.made?.clip ? null : t.made?.image, clip: t.made?.clip, asset: t.made?.asset })),
+      ),
+    [uploads, picked, thread],
+  );
+  // a pick from the gallery: a card in the thread, and nothing has run
+  function startEffect(item: Effect) {
+    const state = begin(item, fxCandidates, newMadeId());
+    setThread((all) => [...all, { role: "assistant", content: item.label, effect: state }]);
+    setFxOpen(false);
+  }
+  const changeEffect = (next: EffectState) =>
+    setThread((all) => all.map((t) => (t.effect?.id === next.id && !isRunning(t) ? { ...t, effect: next } : t)));
+  const isRunning = (t: Turn) => t.made?.status === "running";
+  /* The card's Approve: the click that spends, at the price it showed. */
+  async function approveEffect(id: string, credits: number, charged: boolean) {
+    const turn = threadRef.current.find((t) => t.effect?.id === id);
+    const state = turn?.effect;
+    if (!state || busy || (turn?.made && isRunning(turn))) return;
+    const madeId = newMadeId();
+    const made: Made = {
+      id: madeId,
+      output: "image",
+      refs: state.sources.map((x) => x.thumb ?? "").filter(drawable),
+      status: "running",
+      detail: `${state.label}…`,
+      prompt: state.prompt,
+      effect: state.effect,
+      model: state.effect,
+    };
+    setBusy(true);
+    setThread((all) =>
+      all.map((t) => (t.effect?.id === id && t.effect ? { ...t, made, effect: { ...t.effect, paid: { credits, charged } } } : t)),
+    );
+    polling.current.add(madeId);
+    try {
+      const started = await runEffect({ ...requestOf(state), expect_credits: credits });
+      patchMade(madeId, { jobId: started.job_id });
+      const job = await waitForJob(started.job_id, (j) => tick(madeId, j));
+      finishEffect(madeId, job);
+    } catch (e) {
+      // refused before anything ran (a price that moved, a source that is
+      // gone): the card goes back to waiting and prices itself again
+      polling.current.delete(madeId);
+      setThread((all) =>
+        all.map((t) => (t.effect?.id === id && t.effect ? { ...t, made: undefined, effect: { ...t.effect, paid: undefined } } : t)),
+      );
+      toast(e instanceof Error ? e.message : "That did not go through.", "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /* Make from the brief: the person's own click on the card the brain
      wrote, so it rides on their turn. */
   async function makeBrief() {
@@ -1293,6 +1402,22 @@ function Composer() {
           const step: Turn = { role: "assistant", content: reply.message, reply, looked };
           setThread((all) => [...all, step]);
           if (generate === "auto") await runSheet(step);
+        } else if (proposal && isEffectTool(proposal.tool)) {
+          // AN EFFECT (lib/effects.ts): the brain named the effect, its
+          // options and its words; what it acts on is bound here. Its card
+          // waits for Approve beside its price, whatever the mode -- the
+          // price is only known once the card has asked for it.
+          const args = proposal.args as { effect?: unknown; options?: unknown; prompt?: unknown };
+          const item = fx?.items.find((e) => e.id === args.effect);
+          if (!item) {
+            setThread((all) => [...all, { role: "assistant", content: reply.message, looked }]);
+          } else {
+            const state = begin(item, fxCandidates, newMadeId(), {
+              options: args.options && typeof args.options === "object" ? (args.options as Record<string, unknown>) : null,
+              prompt: typeof args.prompt === "string" ? args.prompt : "",
+            });
+            setThread((all) => [...all, { role: "assistant", content: reply.message, reply, looked, effect: state }]);
+          }
         } else if (proposal && isPlanTool(proposal.tool)) {
           // A PLAN (lib/make-plan.ts): several makes in a row, as a
           // checklist. With Ask first on it waits for Start; with it off it
@@ -1360,6 +1485,9 @@ function Composer() {
     } else if (c.id === "animate") {
       const lastImage = [...thread].reverse().find((t) => t.made?.output === "image" && t.made.status === "done" && t.made.image);
       if (lastImage?.made) animate(lastImage.made);
+      return;
+    } else if (c.id === "effects") {
+      setFxOpen(true);
       return;
     } else if (c.id === "ref") {
       fileInput.current?.click();
@@ -1615,7 +1743,9 @@ function Composer() {
   const brainLabel = brains.find((b) => b.id === brain)?.label ?? "Model";
   const imageModelLabel = imageModels.find((m) => m.id === imageModel)?.label ?? "Model";
   const modelLabel = (id?: string) =>
-    id === SHEET_MODEL ? "Element sheet · Nano Banana Pro" : imageModels.find((m) => m.id === id)?.label;
+    id === SHEET_MODEL
+      ? "Element sheet · Nano Banana Pro"
+      : (imageModels.find((m) => m.id === id)?.label ?? fx?.items.find((e) => e.id === id)?.label);
 
   return (
     <section className="view" style={{ paddingTop: 0 }}>
@@ -1655,6 +1785,10 @@ function Composer() {
                 onApproveSheet: (i) => void approveSheet(i),
                 sheetLine,
                 plan: planHandlers,
+                effectItem: (effectId) => fx?.items.find((e) => e.id === effectId),
+                effectExempt: !!fx?.exempt,
+                onEffectChange: changeEffect,
+                onEffectApprove: (id, credits, charged) => void approveEffect(id, credits, charged),
                 onToggleFrame: toggleFrame,
                 onKeep: keepFrames,
               }}
@@ -1780,6 +1914,18 @@ function Composer() {
 
             <div className="zc-field">
               <AnimatePresence>
+                {fxOpen && fx ? (
+                  <EffectGallery
+                    key="effects"
+                    effects={fx.items}
+                    categories={fx.categories}
+                    ready={fx.ready}
+                    exempt={fx.exempt}
+                    candidates={fxCandidates}
+                    onPick={startEffect}
+                    onClose={() => setFxOpen(false)}
+                  />
+                ) : null}
                 {slashItems ? (
                   <SlashMenu
                     key="slash"

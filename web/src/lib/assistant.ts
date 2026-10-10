@@ -14,6 +14,7 @@
 import { apiFetch } from "@/lib/api";
 import { GUARDED_HEADERS, type GuideReply } from "@/lib/studio-api";
 import type { Plan } from "@/lib/make-plan";
+import type { EffectState } from "@/lib/effects";
 import type { Made } from "@/lib/composer";
 import { decodeMascot, encodeMascot, nameOf } from "@/lib/mascot";
 
@@ -171,6 +172,10 @@ export type Turn = {
   /** the composer: a plan the brain proposed -- its steps and where each
    *  one stands (lib/make-plan.ts). Each step's result is its own turn. */
   plan?: Plan;
+  /** the composer: an effect on its way to a result (lib/effects.ts) --
+   *  what it is, what it acts on, its options and words. The result is
+   *  this turn's `made`. */
+  effect?: EffectState;
   /** the composer: the proposal's confirm card has been decided */
   decided?: "done" | "skipped";
   /** the composer (2026-10-02): this user turn was a SEND, and what it made

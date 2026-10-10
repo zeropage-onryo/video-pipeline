@@ -47,8 +47,9 @@ export function resultOf(job: FeedJob): Result {
   if (job.kind === "cut" && typeof job.ref_id === "string" && job.ref_id) return { to: "cut", id: job.ref_id };
   if (job.kind === "sheet") return { to: "elements" };
   if (typeof job.ref_id === "number" && job.ref_id > 0 && SCENE_KINDS.has(job.kind)) return { to: "scene", id: job.ref_id };
-  // a Director node's render answers with the file, which is on the wall
-  if (job.kind === "render" && job.output) return { to: "assets" };
+  // a Director node's render answers with the file, which is on the wall;
+  // so does an effect from the composer
+  if ((job.kind === "render" || job.kind === "effect") && job.output) return { to: "assets" };
   return null;
 }
 

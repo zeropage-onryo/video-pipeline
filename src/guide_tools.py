@@ -65,7 +65,9 @@ WRITE_LABELS = {
 # the board's closed set above is unchanged for every other caller.
 # load_skill (2026-10-10, src/skills.py) is a READ like the other two: it
 # hands back one of the studio's recipes as text and makes nothing.
-LOCAL_READ = ("find_references", "search_footage", "load_skill")
+# list_effects (2026-10-10) reads the effects table (src/effects.py): what
+# each effect takes and makes, and the legal values of its options.
+LOCAL_READ = ("find_references", "search_footage", "load_skill", "list_effects")
 LOCAL_WRITE = ("keep_references",)
 LOCAL_TOOLS = LOCAL_READ + LOCAL_WRITE
 WRITE_LABELS["keep_references"] = "Keep these references and attach them to the composer"
@@ -258,6 +260,63 @@ PROJECT_SPECS = (
 PLAN_TOOL = make_plan.TOOL
 WRITE_LABELS[PLAN_TOOL] = make_plan.LABEL
 
+# AN EFFECT (2026-10-10, item 3 of docs/tasks/task-studio-agent.md): change
+# something that already exists -- edit a still, animate one with a template
+# or a camera move, upscale or add sound to a clip (src/effects.py). A make
+# like the others: proposed here, run by the STUDIO through its own priced
+# card and POST /api/effects/run. The brain names the effect, its options
+# and its prompt, never what it acts on: the studio binds the source (what
+# is attached to the box, else the newest result that fits), so no id or
+# address is ever the model's to invent.
+EFFECT_TOOL = "apply_effect"
+EFFECTS_READ = "list_effects"
+WRITE_LABELS[EFFECT_TOOL] = "Apply this effect"
+EFFECT_SPECS = (
+    {
+        "name": EFFECTS_READ,
+        "description": (
+            "Read the studio's effects: without `effect`, one line per effect -- what it "
+            "takes (a still or a clip), what it makes, whether it needs a prompt, and its "
+            "options; with `effect`, every legal value of that effect's options (the "
+            "template names, the camera moves, the sizes). Costs nothing. Call it before "
+            "apply_effect whenever you need a template or move by name -- never guess one."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"effect": {"type": "string",
+                                      "description": "Optional: one effect's id, for its "
+                                                     "options in full."}},
+        },
+        "write": False,
+    },
+    {
+        "name": EFFECT_TOOL,
+        "description": (
+            "Change something that already exists, with one of the studio's effects: edit "
+            "a still by instruction, cut out its background, animate a still with a "
+            "template or a named camera move, upscale or smooth a clip, add sound to a "
+            "clip, give a clip a new shape. Call it ONLY when the person asked for that "
+            "change in this turn. You name the effect, its options and (where it takes "
+            "one) the prompt; you never name what it acts on -- the studio applies it to "
+            "what is attached to the box, else to the newest result that fits, and shows "
+            "the person which. It waits for their Approve beside its price. Options must "
+            "be values list_effects returned."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "effect": {"type": "string", "description": "The effect's id, from list_effects."},
+                "prompt": {"type": "string",
+                           "description": "What to change, or what it sounds like -- only "
+                                          "for an effect that takes a prompt."},
+                "options": {"type": "object",
+                            "description": "The effect's options by name, with values "
+                                           "exactly as list_effects gives them."},
+            },
+            "required": ["effect"],
+        },
+        "write": True,
+    },
+)
+
 MAX_TOOL_CALLS = 6      # read calls per turn; a Guide answer, not a crawl
 
 _URL = re.compile(r"(?i)\b(?:https?|ftp)://|\bwww\.|\.(?:jpe?g|png|webp|gif)(?:\?|$)")
@@ -274,7 +333,7 @@ HIDDEN_WITH_LOCAL = frozenset({"images_for"})
 
 def is_write(name: str) -> bool:
     return (name in WRITE_TOOLS or name in LOCAL_WRITE or name in MAKE_TOOLS
-            or name in PROJECT_TOOLS or name == PLAN_TOOL)
+            or name in PROJECT_TOOLS or name in (PLAN_TOOL, EFFECT_TOOL))
 
 
 def is_local(name: str) -> bool:
@@ -290,7 +349,7 @@ def is_project(name: str) -> bool:
 def is_make(name: str) -> bool:
     """A make tool: proposed by the model, run by the STUDIO (the
     composer's own send), never by this module. A plan is several of them."""
-    return name in MAKE_TOOLS or name == PLAN_TOOL
+    return name in MAKE_TOOLS or name in (PLAN_TOOL, EFFECT_TOOL)
 
 
 def step_note(name: str, args: Optional[dict] = None) -> str:
@@ -326,7 +385,7 @@ def check_args(name: str, args: dict) -> dict:
     named `*_url`: a model told "no URLs" puts one in `title` next.
     """
     if (name not in TOOLS and name not in LOCAL_TOOLS and name not in MAKE_TOOLS
-            and name not in PROJECT_TOOLS and name != PLAN_TOOL):
+            and name not in PROJECT_TOOLS and name not in (PLAN_TOOL, EFFECT_TOOL)):
         raise Refused(f"`{name}` is not reachable from the Guide")
     if name == PLAN_TOOL:
         # every step goes back through this function under its own tool's
@@ -358,6 +417,8 @@ def check_args(name: str, args: dict) -> dict:
         k = args.get("k")
         args = {"query": str(args["query"])[:300],
                 "k": k if isinstance(k, int) and not isinstance(k, bool) else 8}
+    if name in (EFFECT_TOOL, EFFECTS_READ):
+        return _check_effect(name, args)
     if name == "load_skill":
         from . import skills
         wanted = skills.clean_name(args.get("name"))
@@ -400,6 +461,69 @@ def check_args(name: str, args: dict) -> dict:
         if not args.get("candidate_id"):
             raise Refused("`reference` needs a candidate_id from images_for")
     return args
+
+
+def _check_effect(name: str, args: dict) -> dict:
+    """An effect call held to the table (src/effects.py): a name that is
+    not an effect, an option that is not legal, a prompt where none is
+    taken -- each refused with the table's own words, which say what IS
+    legal, so the next call can be right."""
+    from . import effects
+    which = str(args.get("effect") or "").strip()
+    try:
+        if name == EFFECTS_READ:
+            if which:
+                effects.spec(which)
+            return {"effect": which}
+        effects.spec(which)
+        options = args.get("options") if isinstance(args.get("options"), dict) else {}
+        return {"effect": which,
+                "options": effects.check_options(which, options),
+                "prompt": effects.check_prompt(which, str(args.get("prompt") or ""))}
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+
+
+def effect_line(args: dict) -> str:
+    """What an effect proposal says above its card: the effect, the look or
+    move picked, and the words it was given."""
+    from . import effects
+    row = effects.EFFECTS.get(args.get("effect") or "") or {}
+    picked = [str(v).replace("_", " ") for k, v in (args.get("options") or {}).items()
+              if k in ("effect_scene", "effect", "camera_movement", "aspect_ratio")]
+    line = " · ".join([row.get("label") or "Effect"] + picked)
+    return f"{line}: {args['prompt']}" if args.get("prompt") else line
+
+
+def _takes(row: dict) -> str:
+    lo, hi = row["sources"]["min"], row["sources"]["max"]
+    what = "clip" if row["takes"] == "video" else "still"
+    return f"one {what}" if hi == 1 else f"{lo} to {hi} {what}s"
+
+
+def effects_for_model(effect: str = "") -> str:
+    """What list_effects hands the model: ids, what each takes and makes,
+    and option values. No prices -- the card shows the price -- and no
+    vendor pages."""
+    from . import effects
+
+    def head(row: dict) -> str:
+        makes = "a clip" if row["output"] == "video" else "an image"
+        return (f"{row['id']} -- {row['label']}: takes {_takes(row)}, makes {makes}; "
+                f"prompt {row['prompt']}")
+
+    if effect:
+        row = effects.catalogue(effect=effect)[0]
+        lines = [f"{head(row)}. {row['note']}"]
+        for opt, view in row["options"].items():
+            need = "required" if view["required"] else f"default {view['default']}"
+            lines.append(f"- {opt} ({need}): " + ", ".join(str(v) for v in view["values"]))
+        return "\n".join(lines)
+    lines = ["The studio's effects (call again with `effect` for one effect's option values):"]
+    for row in effects.catalogue():
+        opts = ", ".join(f"{k} ({v['count']})" for k, v in row["options"].items()) or "none"
+        lines.append(f"- {head(row)}; options: {opts}")
+    return "\n".join(lines)
 
 
 async def specs(client) -> list[dict[str, Any]]:
@@ -554,8 +678,9 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
                                    if makes is None or s["name"] in makes]
         if makes is None:
             # the composer, which is handed every make, may also be handed
-            # several of them in a row
-            tool_specs = tool_specs + [dict(make_plan.SPEC)]
+            # several of them in a row -- and the effects (item 3), with the
+            # read that lists them
+            tool_specs = tool_specs + [dict(make_plan.SPEC)] + [dict(s) for s in EFFECT_SPECS]
 
     attachments: dict = {}
 

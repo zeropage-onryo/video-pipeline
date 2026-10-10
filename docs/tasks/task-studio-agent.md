@@ -43,7 +43,7 @@ then **"go"** on the batch below.
 |---|---|---|
 | 1. Skills | built 2026-10-10 | see "As built" below |
 | 2. Plan with step cards | built 2026-10-10 | see "As built" below |
-| 3. Effects in chat | not started | `effects.py` is on main; the credit quote came with #200 |
+| 3. Effects in chat | built 2026-10-10 | see "As built" below |
 | 4. "Continue" actions on results | not started | depends on 3 for upscale and edit |
 | 5. Draft, then finish | not started | fal's draft price has to be checked first |
 
@@ -165,3 +165,60 @@ Known limits:
 - Plain failure wording is applied to the still route. Keyframes, sheets and Queue renders still
   show their adapters' own text.
 - The dock shows a plan's summary line and nothing else; a plan is run from the composer.
+
+## Item 3 -- Effects in chat: as built (2026-10-10)
+
+`app/api.py` (`/api/effects`, `/effects/quote`, `/effects/run`), `guide_tools.EFFECT_SPECS`,
+`prompts/creative_guide_effects.txt`, `web/src/lib/effects.ts`,
+`web/src/components/studio/effect-gallery.tsx` and `effect-step.tsx`; the `CLAUDE.md` entry
+"EFFECTS IN THE CHAT" is the description of record.
+
+- **Thirteen effects, four tabs,** all from `src/effects.py`, the table the Claude Desktop
+  connector already used: edit an image by instruction (three models) or cut out its
+  background; animate a still with a Kling or PixVerse template (98 and 154 looks) or a named
+  camera move (20); and finish a clip -- upscale or smooth it, add sound, give it a new shape,
+  remove its background.
+- **`/effects` opens a gallery above the box.** Browsing runs nothing. Each row says what it
+  takes, what it gives and what it costs from; a row with nothing to act on yet is greyed
+  with the reason.
+- **A pick puts a card in the thread.** It shows what it will act on (what is attached to the
+  box, else the newest result that fits), its choices, its words, and Approve beside the
+  price. The price is asked from the server whenever a choice changes, and Approve sends that
+  number back: the effect runs at the price shown or is refused.
+- **The brain can propose one** from a plain sentence ("remove the background", "give it a
+  slow camera move"). It looks the exact template and camera names up first, and its options
+  and words land on the same card, still editable. It never picks what the effect acts on.
+- **Results chain.** A still, and what an effect made, each carry their render id, so the
+  next effect can act on them: still -> template clip -> sound on that clip was walked.
+- **Effects always ask.** The Auto pill does not cover them.
+- **Failure** reads as one plain sentence with "Nothing was charged", and the card offers
+  Approve again.
+- Found and fixed on the way: a clip an effect made read "Not made" (the rule that a still
+  with no image is a failure did not know about clips); the effect job's result wrote over
+  the job's own `kind`; a finished card said "Pricing..." after a reload.
+
+Checked: `tests/test_effects_studio.py`, a new case in `tests/test_pipeline_tabs.py`,
+`web/tests/effects.test.mjs` and new cases in `made-state`, `job-feed` and `skills`; then in a
+browser against the real routes, checks, quote, job registry and Assets rows with the
+provider and the model stubbed in the server process: the gallery and its tabs, a Kling
+template on a still, sound on the clip that made (priced from the clip's measured length), a
+failed run and its Approve again, the brain's two paths, a reload, and 375px. **No real model
+or provider call was made.** Unmeasured: whether the live brain reaches for an effect only
+when asked, and every effect's real output.
+
+The look: the design-first rule says a new look goes on a canvas before code. The gallery was
+built out of parts Mike already picked -- the slash menu's panel and the still step card --
+and is shown to him at this stop. If he wants a different look, it changes before merge.
+
+Known limits:
+- No preview per template: 252 template names are words in a list with a search box.
+  Higgsfield and Runway show a thumbnail or a loop for each; that needs media made per template.
+- An effect is not a plan step, and the dock does not offer effects.
+- **What an effect can act on is what this conversation holds:** images attached to the box,
+  and results in the thread. A clip rendered from the Queue is on the Assets wall but the
+  composer cannot pick it yet, so "Finish a clip" works today only on a clip an effect made
+  here. Item 4's actions on the Assets wall are where that closes.
+- Each row is called by the effects table's own label, which names the model
+  ("Add sound (MMAudio)").
+- Lip sync, relight and frame interpolation by RIFE / FILM are still out of the table, for the
+  reason `src/effects.py` gives: a price or an input could not be verified.

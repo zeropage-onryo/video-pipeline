@@ -32,6 +32,7 @@ test('what an answer used: each tool once, a skill by its title, nothing that fa
 
 test('the caption says the skill first, and is what it always was without one', () => {
   assert.equal(lookedLine(['board', 'stats']), 'looked at board, stats');
+  assert.equal(lookedLine(['list_effects']), 'looked at the effects');
   assert.equal(lookedLine(['skill:Multi-shot scene']), 'used the Multi-shot scene skill');
   assert.equal(lookedLine(['skill:Mood board', 'find_references']),
     'used the Mood board skill · looked at find_references');

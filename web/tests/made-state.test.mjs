@@ -13,6 +13,15 @@ test('a still that finished with nothing drawn is a failure, whatever the job sa
   assert.equal(madeStatus({ status: 'stopped', output: 'image' }), 'stopped');
 });
 
+test('an effect that turned a still into a clip made something', () => {
+  // its record holds a clip and no image; reading it as "nothing drawn"
+  // put Not made over a clip that was sitting on the Assets wall
+  const clip = { status: 'done', output: 'image', image: null, clip: '/renders/fal/x.mp4' };
+  assert.equal(undrawn(clip), false);
+  assert.equal(madeStatus(clip), 'done');
+  assert.equal(madeStatus({ status: 'done', output: 'image', image: null, clip: null }), 'failed');
+});
+
 test('a provider\'s raw words never reach the line, a plain sentence does', () => {
   const seenLive = 'image render skipped: HTTP Error 403: Forbidden -- {"detail":"User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}';
   assert.equal(failLine(seenLive), NOT_MADE);

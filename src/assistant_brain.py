@@ -308,7 +308,7 @@ SEARCH_SPEC = {
 
 # load_skill is published by guide_tools.session beside these three (its
 # spec is built off the shelf, src/skills.py) and dispatched below.
-LOCAL_READ = ("find_references", "search_footage", "load_skill")
+LOCAL_READ = ("find_references", "search_footage", "load_skill", "list_effects")
 LOCAL_WRITE = ("keep_references",)
 LOCAL_SPECS = (FIND_SPEC, KEEP_SPEC, SEARCH_SPEC)
 WRITE_LABELS = {"keep_references": "Keep these references and attach them to the composer"}
@@ -532,6 +532,9 @@ def run_local(name: str, args: dict, *, brand: str = "", account_id=None,
     if name == "load_skill":
         from . import skills
         return skills.load_for_model(args.get("name"))
+    if name == "list_effects":
+        from . import guide_tools
+        return guide_tools.effects_for_model(args.get("effect") or "")
     raise ValueError(f"unknown local tool {name}")
 
 

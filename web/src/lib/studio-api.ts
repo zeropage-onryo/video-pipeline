@@ -7,6 +7,7 @@
 import { API_URL, ApiError, apiFetch } from "@/lib/api";
 import type { AssistantDirection, AssistantQuestion, ContactSheet } from "@/lib/assistant";
 import type { Skill } from "@/lib/skills";
+import type { Effect, OptionValue } from "@/lib/effects";
 
 export { ApiError };
 
@@ -802,6 +803,28 @@ export const getPresets = () =>
 
 /* ── skills (the brain's recipes; lib/skills.ts) ── */
 export const getSkills = () => apiFetch<{ items: Skill[] }>("/skills");
+
+/* ── effects (src/effects.py; lib/effects.ts) ── */
+export type EffectsCatalogue = {
+  items: Effect[];
+  categories: { id: string; label: string }[];
+  /** the server can run them */
+  ready: boolean;
+  /** this account is not charged */
+  exempt: boolean;
+};
+export const getEffects = () => apiFetch<EffectsCatalogue>("/effects");
+export type EffectRequest = { effect: string; sources: string[]; prompt: string; options: Record<string, OptionValue> };
+export type EffectQuote = { effect: string; label: string; output: string; credits: number; charged: boolean };
+/** what it costs, in credits; spends nothing */
+export const quoteEffect = (body: EffectRequest) =>
+  apiFetch<EffectQuote>("/effects/quote", { method: "POST", body: JSON.stringify(body) });
+/** the click on the priced card: `expect_credits` is what that card showed */
+export const runEffect = (body: EffectRequest & { expect_credits: number }) =>
+  apiFetch<{ job_id: number; credits: number; charged: boolean }>("/effects/run", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 
 /* ── the account switch and sign-out live at the API root ── */
 /** POST /brand/{slug} THROUGH THE PROXY (API_URL is empty in production, so

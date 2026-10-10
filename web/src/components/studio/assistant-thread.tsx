@@ -305,7 +305,7 @@ export function AssistantThreadProvider({ children }: { children: ReactNode }) {
   // effect writes exactly that.
   const finishProject = useCallback((written: ComposerDraft["written"]) => {
     // what was made stays, and so does the plan that made it
-    setTurns((ts) => ts.filter((t) => !!t.made || !!t.plan));
+    setTurns((ts) => ts.filter((t) => !!t.made || !!t.plan || !!t.effect));
     setStage("");
     setDraftState({ ...EMPTY_DRAFT, written });
   }, []);

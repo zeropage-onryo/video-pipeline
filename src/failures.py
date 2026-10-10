@@ -49,7 +49,8 @@ _CAUSES = (
 )
 
 # what is said for each thing that can fail to be made
-_NOUNS = {"The clip": ("the video service", "the video model")}
+_NOUNS = {"The clip": ("the video service", "the video model"),
+          "The effect": ("the effects service", "the model")}
 _DEFAULT_NOUNS = ("the image service", "the image model")
 
 

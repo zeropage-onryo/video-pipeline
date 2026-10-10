@@ -51,11 +51,14 @@ export function lookedOf(runs: ToolRun[] | null | undefined, shelf: Skill[]): st
   return out;
 }
 
+/* a read tool whose own name is not a word a person would say */
+const TOOL_WORDS: Record<string, string> = { list_effects: "the effects" };
+
 /** The caption: "used the Mood board skill · looked at board". "" for nothing. */
 export function lookedLine(looked: string[] | null | undefined): string {
   const all = looked ?? [];
   const skills = all.filter((l) => l.startsWith(SKILL_MARK)).map((l) => l.slice(SKILL_MARK.length));
-  const tools = all.filter((l) => !l.startsWith(SKILL_MARK) && l !== SKILL_TOOL);
+  const tools = all.filter((l) => !l.startsWith(SKILL_MARK) && l !== SKILL_TOOL).map((l) => TOOL_WORDS[l] ?? l);
   const parts: string[] = [];
   if (skills.length) parts.push(`used the ${skills.join(" + ")} skill${skills.length > 1 ? "s" : ""}`);
   if (tools.length) parts.push(`looked at ${tools.join(", ")}`);

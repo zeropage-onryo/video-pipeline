@@ -2397,6 +2397,52 @@ is yours, in Resolve, by hand.
   and offers Approve again), for threads saved before as well, and `failLine` keeps an old
   thread's raw text off the line. Applied to the still route only so far; keyframes, sheets
   and Queue renders still report their adapters' own text.
+- **EFFECTS IN THE CHAT: A GALLERY THAT RUNS NOTHING, AND A PRICED CARD THAT DOES (2026-10-10,
+  item 3 of `docs/tasks/task-studio-agent.md`).** `src/effects.py` (the dated table the studio
+  MCP surface already spends through) now has the studio's own door. `GET /api/effects` is the
+  gallery, a PROJECTION of that table (`api._effect_view`: label, a one-line blurb from
+  `EFFECT_BLURBS`, what it takes and gives, its legal options, and a from-price in credits or
+  `null` when the price hangs on a clip's length) under four tabs (`EFFECT_CATEGORY_LABELS`:
+  Edit an image / Animate a still / Camera moves / Finish a clip). `POST /api/effects/quote`
+  prices ONE request and spends nothing; `POST /api/effects/run` is the click that spends and
+  takes `expect_credits`, the number the card showed -- absent is 400 `missing_price`, a price
+  that moved is 409 `price_changed` with the new one, so an effect runs at the price shown or
+  not at all. No signed token: the token's content hash is a scene's, and an effect has no
+  scene. Both routes go through `api._effect_request`, which runs every check the MCP's
+  `run_effect` runs (`effects.spec` / `check_options` / `check_prompt` / `check_sources`, a
+  clip measured by `effects.probe_video` before it is priced) and the same `effects.run`
+  (hold, generations row, settle, Assets wall), with `source="composer"`. **A source is named
+  the way the composer holds it:** `gen:<id>` for a render on the wall -- the ONLY way a clip
+  is named -- or a reference path (an upload, an element photo, a still on this machine's
+  disk, read by `imagery.render_bytes`, which opens nothing outside `data/renders`). At most
+  `EFFECT_SOURCES_MAX` (4). So that a result can be named, `/api/generate/run` now returns
+  `asset: "gen:<id>"` for a still and the effect job returns the same for what it made.
+  **A job's result is merged onto the job**, so the effect job answers `media` (image|video)
+  and never `kind` -- `kind` is the job's own and the activity tray reads it.
+  **The brain has two tools for it** (`guide_tools.EFFECT_SPECS`, published only to a composer
+  maker turn, never to the dock's stills-only turn): `list_effects` (a read; the exact
+  template and camera-move names) and `apply_effect {effect, options?, prompt?}` (a make: the
+  turn ends on it). It never names what the effect acts on -- the studio binds it to what is
+  attached to the box, else the newest result that fits, and the card shows which. A call
+  `_check_effect` refuses (an unknown effect, a made-up template) is handed back to the model
+  as the tool's error instead of failing the turn, bounded by `MAX_TOOL_CALLS`.
+  `prompts/creative_guide_effects.txt` is the rule: only on an ask in this turn, look names up
+  rather than invent them, never state a price. **On the page** (`web/src/lib/effects.ts`,
+  pure, node-tested): `/effects` in the slash menu opens `effect-gallery.tsx` above the box --
+  browsing is free, a row whose source is missing is disabled with the reason ("Needs a clip:
+  animate a still first, then finish the clip it makes") -- and a pick, or the brain's call, puts
+  `effect-step.tsx` in the thread: the source thumbs, each option as a select (a search box
+  over twelve values; a required one starts on "Pick one"), the words, the live quote, and
+  Approve beside the credits. The card is the still step card's look (`still-step.css`) with
+  choices on it. `Turn.effect` holds the state and, once approved, `paid` (what Approve was
+  pressed at -- a finished card is never re-priced); the result is the turn's `made` with
+  `effect`, `asset`, and `clip` for a video (`made-state.undrawn` counts a clip as drawn).
+  A failed effect says `failures.plain(err, "The effect")` and the card offers Approve again;
+  an effect turn has no "Reuse prompt" / "Try again", its card is the retry. Effects are
+  Ask-first ALWAYS: the Auto pill does not cover them, since the card is where the choices
+  are made. Not built: effects as plan steps, effects in the dock, a preview per template, and picking a
+  clip the conversation does not hold (a Queue render is on the Assets wall, and the composer
+  has no way to name it yet).
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so
