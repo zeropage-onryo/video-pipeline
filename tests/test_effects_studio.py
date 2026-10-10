@@ -173,12 +173,34 @@ def test_a_run_happens_at_the_price_the_card_showed_or_not_at_all(client, monkey
     job = _wait(client, started.json()["job_id"])
     assert job["status"] == "done", job
     assert job["output"] == "https://bucket.example/out.png"
-    assert job["asset"] == "gen:9" and job["kind"] == "image"
+    assert job["asset"] == "gen:9" and job["media"] == "image"
+    assert job["kind"] == "effect"       # the job's own kind is not written over
     (call,) = ran
     assert call["urls"] == ["https://bucket.example/src.jpg"]
     assert call["usd"] == effects.quote_usd("nano-banana-edit", call["options"])
     assert call["account_id"] == ACCOUNT and call["source"] == "composer"
     assert call["sources"] == ["/refs/can.jpg"] and call["prompt"] == "make the label blue"
+
+
+def test_a_render_on_this_machines_disk_is_read_by_its_own_guarded_reader(client, monkeypatch):
+    """A still a composer result points at as /renders/... (no bucket on a
+    dev box): opened only through imagery.render_bytes, which refuses any
+    path outside data/renders."""
+    from src import imagery
+    seen = []
+    monkeypatch.setattr(api, "_photo_bytes", lambda url: None)
+    monkeypatch.setattr(imagery, "render_bytes", lambda path: seen.append(path) or b"png")
+    monkeypatch.setattr(api, "_to_jpeg", lambda raw: raw)
+    monkeypatch.setattr(fal, "as_image_url", lambda value, **k: "https://bucket.example/s.jpg")
+    monkeypatch.setattr(effects, "run", lambda *a, **k: {"ok": True, "media_url": "/renders/o.png",
+                                                         "asset_id": 4})
+    for ref, read in (("/renders/nano/still.png", True), ("/etc/passwd", False)):
+        seen.clear()
+        body = {"effect": "remove-background", "sources": [ref]}
+        price = client.post("/api/effects/quote", json=body).json()["credits"]
+        job = _wait(client, client.post("/api/effects/run",
+                                        json={**body, "expect_credits": price}).json()["job_id"])
+        assert (job["status"] == "done") is read and bool(seen) is read
 
 
 def test_a_source_that_cannot_be_read_fails_the_job_before_any_spend(client, monkeypatch):

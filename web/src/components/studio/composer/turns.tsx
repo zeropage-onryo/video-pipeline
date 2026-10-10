@@ -25,6 +25,8 @@ import type { ContactSheet, Turn } from "@/lib/assistant";
 import { lookedLine } from "@/lib/skills";
 import { failLine, madeStatus } from "@/lib/made-state";
 import { PlanCard, type PlanHandlers } from "@/components/studio/make-plan-card";
+import { EffectStep } from "@/components/studio/effect-step";
+import type { Effect, EffectState } from "@/lib/effects";
 import { ContactSheetView } from "@/components/studio/contact-sheet";
 import { TypedText } from "@/components/studio/typed-text";
 import { SheetStep, StillStep, isSheetStep, isStillStep, lineIsPrompt } from "@/components/studio/still-step";
@@ -58,6 +60,12 @@ type Handlers = {
   sheetLine: string;
   /** a plan's card (lib/make-plan.ts), by the plan's id */
   plan: (planId: string) => PlanHandlers;
+  /** an effect's card (lib/effects.ts): the table's row for it, whether
+   *  this account is charged, a changed choice, and the click that spends */
+  effectItem: (effectId: string) => Effect | undefined;
+  effectExempt: boolean;
+  onEffectChange: (next: EffectState) => void;
+  onEffectApprove: (id: string, credits: number, charged: boolean) => void;
 };
 
 function Meta({ m, live, h }: { m: Made; live?: Live; h: Handlers }) {
@@ -108,7 +116,18 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
   if (state === "running") body = <RunningTile m={m} live={live} />;
   else if (state === "done" && m.output === "image") {
     const ratio = cssAspect(m.frame) ?? "4 / 5";
-    body = (
+    body = m.clip ? (
+      // an effect that made a clip: it plays where a still would be drawn,
+      // at its own shape, and is not a button (its controls are)
+      <div className="zc-tiles one">
+        <motion.div className="zc-tilewrap" {...tile(0)} style={{ maxWidth: 420 }}>
+          <div className="zc-tile on clip">
+            <video src={mediaSrc(m.clip)} controls muted loop playsInline preload="metadata" />
+          </div>
+          <span className="zc-label on">Clip 01</span>
+        </motion.div>
+      </div>
+    ) : (
       <div className="zc-tiles one">
         <motion.div className="zc-tilewrap" {...tile(0)} style={{ maxWidth: `calc(420px * (${ratio}))` }}>
           <button type="button" className="zc-tile on" style={{ aspectRatio: ratio }} onClick={() => h.onSelect(m.id, 1)}>
@@ -203,11 +222,19 @@ function MadeView({ m, live, h, turn }: { m: Made; live?: Live; h: Handlers; tur
               <Clapperboard strokeWidth={1.6} /> Open the canvas
             </Link>
           ) : null}
-          <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
-            <RotateCcw strokeWidth={1.6} /> Reuse prompt
-          </button>
+          {m.asset && /^gen:\d+$/.test(m.asset) ? (
+            <Link href={`/studio/assets?open=${m.asset.slice(4)}`} className="zc-act">
+              <ListVideo strokeWidth={1.6} /> See it in the Library
+            </Link>
+          ) : null}
+          {/* an effect has no prompt of the box's to reuse: its card holds its choices */}
+          {turn.effect ? null : (
+            <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
+              <RotateCcw strokeWidth={1.6} /> Reuse prompt
+            </button>
+          )}
         </div>
-      ) : state === "failed" || state === "stopped" ? (
+      ) : (state === "failed" || state === "stopped") && !turn.effect ? (
         <div className="zc-actions">
           <button type="button" className="zc-act" disabled={h.busy} onClick={() => h.onReuse(turn)}>
             <RotateCcw strokeWidth={1.6} /> Try again
@@ -272,7 +299,7 @@ export function ComposerStream({
               <div className="zc-reply">
                 {lookedLine(t.looked) ? <span className="zc-looked">{lookedLine(t.looked)}</span> : null}
                 {/* a still's step card carries its prompt; the line is the same words */}
-                {lineIsPrompt(t) || isSheetStep(t) ? null : <p>{t.content}</p>}
+                {lineIsPrompt(t) || isSheetStep(t) || (t.effect && !t.reply) ? null : <p>{t.content}</p>}
                 {t.reply?.sheet ? (
                   <ContactSheetView
                     sheet={t.reply.sheet}
@@ -318,6 +345,16 @@ export function ComposerStream({
                   />
                 ) : null}
                 {t.plan ? <PlanCard plan={t.plan} h={handlers.plan(t.plan.id)} /> : null}
+                {t.effect ? (
+                  <EffectStep
+                    turn={t}
+                    effect={handlers.effectItem(t.effect.effect)}
+                    busy={handlers.busy}
+                    exempt={handlers.effectExempt}
+                    onChange={handlers.onEffectChange}
+                    onApprove={(credits, charged) => handlers.onEffectApprove(t.effect?.id ?? "", credits, charged)}
+                  />
+                ) : null}
                 {isSheetStep(t) ? (
                   <SheetStep
                     turn={t}

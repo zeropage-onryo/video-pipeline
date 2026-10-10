@@ -4853,8 +4853,15 @@ def _effect_urls(req: dict, account_id: int) -> list[str]:
                                                   account_id=account_id)
             continue
         # a reference as the composer holds it: the same reader, and the
-        # same wall, as a still's own references (_collect_refs)
-        raw = _photo_bytes(ref.split("?")[0])
+        # same wall, as a still's own references (_collect_refs) -- plus a
+        # render still on this machine's disk, which only its own guarded
+        # reader opens (imagery.render_bytes refuses anything outside
+        # data/renders)
+        path = ref.split("?")[0]
+        raw = _photo_bytes(path)
+        if raw is None and path.startswith("/renders/"):
+            from src import imagery
+            raw = imagery.render_bytes(path)
         jpeg = _to_jpeg(raw) if raw else None
         url = fal.as_image_url(jpeg, account_id=account_id) if jpeg else None
         if not url:
@@ -4913,8 +4920,10 @@ def effects_run(body: EffectBody, account_id: int = Depends(auth.current_account
         if not res.get("ok"):
             print(f"  effect {req['effect']} was not made: {res.get('error')}", file=sys.stderr)
             raise RuntimeError(failures.plain(res.get("error"), "The effect"))
+        # `media`, never `kind`: a job's result is merged onto the job, and
+        # `kind` is the job's own ("effect"), which the activity tray reads
         return {"detail": f"{row['label']} · done", "output": res.get("media_url"),
-                "kind": row["output"],
+                "media": row["output"],
                 "asset": f"gen:{res['asset_id']}" if res.get("asset_id") else None}
 
     job = jobs.start("effect", f"effect · {row['label']}", work, account_id=account_id)
@@ -5130,6 +5139,9 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 pass
 
         notes = []
+        # the still's id on the Assets wall, when it was banked there: how
+        # a later effect names it (src/effects.py takes ids, never URLs)
+        asset = None
         if output == "image" and image_model != NANO_IMAGE_MODEL:
             label = fal.IMAGE_MODELS[image_model]["label"]
             jobs.progress(job, 0.7, f"rendering image via {label}")
@@ -5145,6 +5157,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 # a person asked for this still from the composer
                 approved=True, db_path=None, account_id=account_id)
             if result.get("ok"):
+                asset = result.get("asset_id")
                 preprod.set_shot_reference_image(
                     concept_id, shot["n"], result["media_url"], account_id=account_id)
                 note = f"image rendered on {label} → shot reference"
@@ -5160,6 +5173,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
                 db_path=None, account_id=account_id,
                 **({"aspect_ratio": aspect} if aspect else {}))
             if result.get("ok"):
+                asset = result.get("asset_id")
                 preprod.set_shot_reference_image(
                     concept_id, shot["n"], result["media_url"], account_id=account_id)
                 notes.append("image rendered → shot reference")
@@ -5188,7 +5202,7 @@ async def generate_run(request: Request, account_id: int = Depends(auth.current_
         if warnings:
             detail += f" · {len(warnings)} warning(s)"
         return {"ref_id": concept_id, "detail": detail, "output": enhanced,
-                "shot_n": shot["n"]}
+                "shot_n": shot["n"], **({"asset": f"gen:{asset}"} if asset else {})}
 
     job = jobs.start("generate", f"generate · {prompt[:60]}", work, account_id=account_id)
     return {"job_id": job["id"],

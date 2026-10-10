@@ -228,6 +228,25 @@ def test_generate_run_saves_a_real_one_shot_concept(tmp_db, hermetic_generate,
     assert job["output"].startswith("ENHANCED[")
 
 
+def test_a_composer_still_says_its_render_id_so_an_effect_can_name_it(tmp_db, hermetic_generate,
+                                                                     monkeypatch):
+    """An effect takes a render by id, never by address (src/effects.py), so
+    the still's job says which row on the Assets wall it became."""
+    monkeypatch.setattr("src.nano_banana.generate_from_prompt",
+                        lambda prompt, reference_image=None, db_path=None, **kw:
+                        {"ok": True, "media_url": "/renders/frame.png", "asset_id": 31})
+    job = wait_for_job(client.post("/api/generate/run", data={
+        "prompt": "the can", "output": "image"}).json()["job_id"])
+    assert job["status"] == "done" and job["asset"] == "gen:31"
+    # a still that was not banked on the wall names nothing
+    monkeypatch.setattr("src.nano_banana.generate_from_prompt",
+                        lambda prompt, reference_image=None, db_path=None, **kw:
+                        {"ok": True, "media_url": "/renders/frame.png"})
+    job = wait_for_job(client.post("/api/generate/run", data={
+        "prompt": "the can again", "output": "image"}).json()["job_id"])
+    assert job["status"] == "done" and "asset" not in job
+
+
 def test_generate_run_passes_an_allowed_image_aspect(tmp_db, hermetic_generate,
                                                     monkeypatch):
     """The composer's image shape (2026-10-02): an allowlisted aspect reaches

@@ -715,6 +715,17 @@
 .zc .zc-tile.running {
   cursor: default;
 }
+/* an effect's clip: its own shape, its own controls */
+.zc .zc-tile.clip {
+  aspect-ratio: auto;
+  display: block;
+}
+.zc .zc-tile.clip video {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  background: var(--void);
+}
 .zc .zc-tile img {
   position: absolute;
   inset: 0;

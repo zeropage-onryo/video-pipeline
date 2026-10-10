@@ -11,6 +11,7 @@ test('a finished job opens where its result lives, or nowhere', () => {
   assert.deepEqual(resultOf(job({ kind: 'cut', ref_id: 375 })), { to: 'scene', id: 375 });     // an Assemble
   assert.deepEqual(resultOf(job({ kind: 'sheet', output: '/characters/nova/sheet.jpg' })), { to: 'elements' });
   assert.deepEqual(resultOf(job({ ref_id: null, output: '/renders/x.png' })), { to: 'assets' });  // a Director node
+  assert.deepEqual(resultOf(job({ kind: 'effect', ref_id: null, output: '/renders/x.mp4' })), { to: 'assets' });  // an effect
   assert.equal(resultOf(job({ kind: 'guide' })), null);
   assert.equal(resultOf(job({ kind: 'index', ref_id: 5 })), null);
   assert.equal(resultOf(job({ status: 'failed', ref_id: 12 })), null);                       // nothing to open

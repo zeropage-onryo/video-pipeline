@@ -36,6 +36,7 @@
 import { API_URL } from "@/lib/api";
 import { followJob, type Job, type TimelinePart } from "@/lib/studio-api";
 import { PLAN_TOOL } from "@/lib/make-plan";
+import { EFFECT_TOOL } from "@/lib/effects";
 
 export type Output = "image" | "video";
 
@@ -50,7 +51,9 @@ export const MAKE_TOOLS: Record<string, Output> = { make_image: "image", make_vi
    never the confirm card, so every reader that asks "is this a make" says
    yes to it too. */
 export const isPlanTool = (tool?: string | null) => tool === PLAN_TOOL;
-export const isMake = (tool?: string | null) => !!tool && (tool in MAKE_TOOLS || tool === PLAN_TOOL);
+export const isEffectTool = (tool?: string | null) => tool === EFFECT_TOOL;
+export const isMake = (tool?: string | null) =>
+  !!tool && (tool in MAKE_TOOLS || tool === PLAN_TOOL || tool === EFFECT_TOOL);
 
 /* The Guide's element sheet (src/guide_tools.SHEET_TOOL, 2026-10-09): a
    step card like a still's, but its Approve saves the person in the
@@ -102,6 +105,12 @@ export type Made = {
   prompt?: string;
   /** IMAGE: which model drew it (an /image-models id) */
   model?: string;
+  /** AN EFFECT's result (lib/effects.ts): the effect that made it, a clip
+   *  when it made one, and the render's id on the Assets wall -- which is
+   *  how a later effect names it */
+  effect?: string;
+  clip?: string | null;
+  asset?: string | null;
 };
 
 export const newMadeId = () =>
@@ -138,6 +147,7 @@ export const BASE_COMMANDS: SlashCommand[] = [
   { id: "image", cmd: "image", desc: "Make stills", group: "make" },
   { id: "video", cmd: "video", desc: "Write video scenes", group: "make" },
   { id: "animate", cmd: "animate", desc: "Turn the last image into a shot", group: "use", needsImage: true },
+  { id: "effects", cmd: "effects", desc: "Change a still or a clip", group: "use" },
   { id: "ref", cmd: "ref", desc: "Attach a reference image", group: "use" },
   { id: "element", cmd: "element", desc: "Reference a saved element (@)", group: "use" },
 ];
@@ -240,6 +250,7 @@ export const cssAspect = (label?: string) => {
 
 /** the one-line summary under a finished result: "3 shots · 16:9 · 10s" */
 export function madeMeta(m: Made, modelLabel?: string): string {
+  if (m.clip) return ["1 clip", modelLabel].filter(Boolean).join(" · ");
   if (m.output === "image") return ["1 image", m.frame, modelLabel].filter(Boolean).join(" · ");
   const n = m.parts?.length ?? 0;
   return [

@@ -9,10 +9,11 @@
 
    Pure and import-free: tests/made-state.test.mjs runs this file as it is. */
 
-export type MadeLike = { status: string; output: string; image?: string | null; detail?: string };
+export type MadeLike = { status: string; output: string; image?: string | null; clip?: string | null; detail?: string };
 
-/** "done", and nothing was drawn */
-export const undrawn = (m: MadeLike) => m.status === "done" && m.output === "image" && !m.image;
+/** "done", and nothing was drawn. An effect that turned a still into a
+ *  clip made something: its record holds `clip` and no `image`. */
+export const undrawn = (m: MadeLike) => m.status === "done" && m.output === "image" && !m.image && !m.clip;
 
 /** The record's state as a person should read it. */
 export const madeStatus = <M extends MadeLike>(m: M): M["status"] | "failed" => (undrawn(m) ? "failed" : m.status);

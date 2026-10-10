@@ -1,0 +1,136 @@
+/* The effects gallery (effect-gallery.tsx): a panel above the composer's
+   box, where the slash menu opens. Prefixed fxg-; every colour is a studio
+   token (studio.css :root). */
+.fxg {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(560px, 100%);
+  max-height: min(520px, 70vh);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.6);
+  z-index: 21;
+  overflow: hidden;
+}
+.fxg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 14px 14px 8px 16px;
+}
+.fxg-head b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fxg-head span {
+  flex: 1;
+  font-size: 12px;
+  color: var(--bone-3);
+}
+.fxg .fxg-head button {
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--bone-2);
+  display: grid;
+  place-items: center;
+}
+.fxg .fxg-head button:hover {
+  background: var(--raise);
+  color: var(--text);
+}
+.fxg-head svg {
+  width: 14px;
+  height: 14px;
+}
+.fxg-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px;
+  overflow-x: auto;
+}
+.fxg .fxg-tabs button {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: transparent;
+  color: var(--bone-2);
+  font-family: var(--body);
+  font-size: 12.5px;
+}
+.fxg .fxg-tabs button[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
+  background: var(--signal-soft);
+  color: var(--text);
+}
+.fxg-note {
+  margin: 0 16px 8px;
+  font-size: 12.5px;
+  color: var(--warn);
+}
+.fxg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+}
+.fxg .fxg-list button {
+  width: 100%;
+  display: grid;
+  gap: 3px;
+  padding: 10px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+}
+.fxg .fxg-list button:hover:not(:disabled),
+.fxg .fxg-list button:focus-visible {
+  background: var(--raise);
+  outline: none;
+}
+.fxg .fxg-list button:disabled {
+  cursor: default;
+}
+.fxg .fxg-list button:disabled .fxg-name,
+.fxg .fxg-list button:disabled .fxg-blurb {
+  color: var(--dimmer);
+}
+.fxg-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.fxg-blurb {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--bone);
+}
+.fxg-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--bone-3);
+}
+.fxg-meta i {
+  font-style: normal;
+  color: var(--warn);
+}
+.fxg-meta em {
+  font-style: normal;
+  color: var(--bone-2);
+}
