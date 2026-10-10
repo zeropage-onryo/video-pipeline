@@ -8,6 +8,7 @@ import type { SlashCommand } from "@/lib/composer";
 
 const GROUP_LABEL: Record<SlashCommand["group"], string> = {
   make: "Commands",
+  skill: "Skills",
   camera: "Camera presets",
   use: "Use",
 };
@@ -44,6 +45,7 @@ export function SlashMenu({
               role="option"
               aria-selected={i === active}
               className="zc-slash-item"
+              title={c.hint}
               // mousedown, not click: the textarea's blur would close the
               // menu before a click landed
               onMouseDown={(e) => {

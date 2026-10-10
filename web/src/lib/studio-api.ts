@@ -6,6 +6,7 @@
    the Jinja shell calls, and Send to Queue only PICKS. */
 import { API_URL, ApiError, apiFetch } from "@/lib/api";
 import type { AssistantDirection, AssistantQuestion, ContactSheet } from "@/lib/assistant";
+import type { Skill } from "@/lib/skills";
 
 export { ApiError };
 
@@ -798,6 +799,9 @@ export async function waitForJob(
 export type Preset = { id: string; label: string; how: string };
 export const getPresets = () =>
   apiFetch<{ items: Preset[]; enhance_system: string }>("/presets");
+
+/* ── skills (the brain's recipes; lib/skills.ts) ── */
+export const getSkills = () => apiFetch<{ items: Skill[] }>("/skills");
 
 /* ── the account switch and sign-out live at the API root ── */
 /** POST /brand/{slug} THROUGH THE PROXY (API_URL is empty in production, so

@@ -63,7 +63,9 @@ WRITE_LABELS = {
 # is a WRITE and waits for the click like every other write here.
 # Published only when a turn asks for them (`session(local=True)`), so
 # the board's closed set above is unchanged for every other caller.
-LOCAL_READ = ("find_references", "search_footage")
+# load_skill (2026-10-10, src/skills.py) is a READ like the other two: it
+# hands back one of the studio's recipes as text and makes nothing.
+LOCAL_READ = ("find_references", "search_footage", "load_skill")
 LOCAL_WRITE = ("keep_references",)
 LOCAL_TOOLS = LOCAL_READ + LOCAL_WRITE
 WRITE_LABELS["keep_references"] = "Keep these references and attach them to the composer"
@@ -282,6 +284,17 @@ def is_make(name: str) -> bool:
     return name in MAKE_TOOLS
 
 
+def step_note(name: str, args: Optional[dict] = None) -> str:
+    """What the person reads once a read tool has run mid-turn. A skill
+    is named by its title: "looked at load_skill" says nothing to them."""
+    if name == "load_skill":
+        from . import skills
+        title = skills.title_of((args or {}).get("name"))
+        if title:
+            return f"read the {title} skill"
+    return f"looked at {name}"
+
+
 def available() -> bool:
     """Whether the `mcp` package is importable. The Guide degrades to
     its plain conversation when it is not, rather than 500ing."""
@@ -332,6 +345,12 @@ def check_args(name: str, args: dict) -> dict:
         k = args.get("k")
         args = {"query": str(args["query"])[:300],
                 "k": k if isinstance(k, int) and not isinstance(k, bool) else 8}
+    if name == "load_skill":
+        from . import skills
+        wanted = skills.clean_name(args.get("name"))
+        if not wanted:
+            raise Refused("`load_skill` takes one of: " + ", ".join(skills.names()))
+        args = {"name": wanted}
     if name == SHEET_TOOL:
         who = " ".join(str(args.get("name") or "").split())
         if not who:
@@ -473,7 +492,7 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
     open. Returns (specs, run_tool).
 
     `local=True` (the assistant pill) also publishes find_references /
-    keep_references, and works without the `mcp` package -- then the
+    keep_references and load_skill, and works without the `mcp` package -- then the
     assistant can still hunt references even where the board is not
     reachable. `run_tool.attachments` collects what a read tool left
     for the reply (the contact sheet).
@@ -506,6 +525,12 @@ def session(dsn: Optional[str] = None, account_id: Optional[int] = None,
         # contact-sheet hunt is published it is the only image search.
         tool_specs = [s for s in tool_specs if s.get("name") not in HIDDEN_WITH_LOCAL]
         tool_specs = tool_specs + [dict(s) for s in assistant_brain.LOCAL_SPECS]
+        # the skill shelf (2026-10-10): one read tool, and only when there
+        # is a skill to read
+        from . import skills
+        load = skills.load_spec()
+        if load:
+            tool_specs = tool_specs + [load]
         # projects are made through the Guide (2026-10-07): offered on the
         # same turns the assistant's own tools are, i.e. the pill and the
         # composer's brain -- never to a caller that asked for the board alone

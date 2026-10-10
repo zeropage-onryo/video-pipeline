@@ -2322,6 +2322,31 @@ is yours, in Resolve, by hand.
   Pro's was corrected to $0.03 for the first output megapixel plus $0.015 per further
   megapixel of input and output, so `image_usd` takes `references` and a FLUX.2 edit is
   priced dearer than a text draw (BACKLOG #23 has the detail).
+- **THE BRAIN HAS A SKILL SHELF (2026-10-10, Mike, after the Runway / Higgsfield / invideo
+  teardown: "take some out of the runway and higgsfield playbook first";
+  `docs/tasks/task-studio-agent.md`).** `src/skills.py` + `prompts/skills/<name>.md`. A skill is
+  a recipe for one KIND of work, where the playbooks in `prompts/stages` are one per STEP: five
+  on the shelf -- `character-sheet`, `single-shot`, `multi-shot`, `product-still`, `mood-board`
+  -- in the studio's own words (the pattern is Runway's slash skills and Higgsfield's skill
+  files; none of their text). The header is flat `key: value` lines (`name` = the file's stem,
+  `title`, `for`, optional `output` and `order`); a file without them is not on the shelf, and
+  an empty shelf publishes nothing. A skill reaches a turn two ways. **The brain loads it:**
+  `load_skill` is a READ tool (`guide_tools.LOCAL_READ`, published wherever the assistant's own
+  tools are, its `enum` built off the shelf), and the shelf's one-line index rides in the
+  instructions (`prompts/creative_guide_skills.txt`) only when that tool is offered. **The
+  person picks it:** the composer's `/` menu lists the shelf (`GET /api/skills`,
+  `web/src/lib/skills.ts`); a pick is a chip on the box, flips Image | Video to the skill's
+  `output`, and sends `skill=<name>` on THAT send only -- the recipe rides on the turn already
+  loaded (`skills.picked_note`, no tool round). Either way `reply.tool_runs` names it, so the
+  thread reads "used the Mood board skill" (`lookedOf` / `lookedLine`) and the person's bubble
+  carries the pick. A skill is guidance, never permission: a make still ends the turn as a
+  proposal, and what the person asked for outranks the recipe. A tool result from an earlier
+  turn is not sent again, so the brain loads a skill in the turn it does the work.
+  `tests/test_skills.py` holds that a recipe names only tools a Guide turn can be handed and
+  never an address. The character sheet is still DRAWN by the landing page's prompt
+  (2026-10-09); the skill decides only when, and with what name and outfit. Not built: sheet
+  layouts and styles, invented characters, per-model prompt dialects, a write tool for a
+  project's look.
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so
