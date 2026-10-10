@@ -1727,7 +1727,20 @@ is yours, in Resolve, by hand.
   clamped) and price rule; a clip source is a `gen:` video measured by ffprobe before it is
   priced, and one that cannot be measured is refused. Effects log under the image tool name
   (`fal`), so they share the stills' cap. Left out because a price or input could not be
-  verified: lip sync, relight, RIFE/FILM, PixVerse 8s. **Projects reach it too (2026-10-08,
+  verified: lip sync, relight, RIFE/FILM, PixVerse 8s. **Four clip-finishing rows were added
+  2026-10-10 (task-mcp-studio-v2 step 2b), each with its OWN `checked` date** and read off its
+  OpenAPI schema plus the `endpointBilling` record its fal page embeds (unit + price,
+  structured): `reframe` / `reframe-hq` (Luma Ray 2 Flash / Ray 2 Reframe, $0.06 / $0.20 per
+  second; a clip to a new shape by generation, `aspect_ratio` required, prompt optional; held
+  to 10.5s because Luma's own guide caps a reframe at 10s and fal's page states no limit),
+  `remove-video-background` (VEED, per started 30 frames: $0.0225 with edge refinement, $0.015
+  without; a transparent .webm) and `remove-video-background-pro` (Bria, $0.14 per second,
+  under 30s; Transparent or a flat colour; webm_vp9 / mp4_h264 / mov_proresks, with
+  Transparent + H.264 refused by the row's `check`). An effect's output is published under its
+  own container's mime now (`effects.VIDEO_MIMES`), not always video/mp4. Left out that day:
+  BiRefNet video (billed per compute second), BEN v2 video (a per-megapixel price with no
+  rule for counting a video's megapixels) and Wan VACE outpainting (priced per output second
+  at a forced resolution; re-generates at 16fps, capped ~15s). **Projects reach it too (2026-10-08,
   Mike's ask: make projects, revisit the ones made in the studio, pull their reference images
   and chats).** `projects` lists the account's projects (`projects.list_projects`), `project`
   reopens one -- brief, look, `learned` (its memory), its scenes, every reference photo those

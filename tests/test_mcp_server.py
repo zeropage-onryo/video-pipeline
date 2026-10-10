@@ -1450,6 +1450,35 @@ def test_a_finishing_pass_is_priced_off_the_measured_clip(monkeypatch):
     assert calls == []
 
 
+def test_a_reframe_is_quoted_in_credits_off_the_clips_length(monkeypatch, signed):
+    """Step 2b (2026-10-10): a clip to a new shape, priced per second of the
+    measured clip, quoted like every other spend -- and a clip past Luma's
+    10 seconds is refused before any quote."""
+    from src import effects, ledger, render_assets
+    calls = _stub_effect(monkeypatch)
+    monkeypatch.setattr(render_assets, "get", lambda i, dsn=None, **kw: {
+        "id": i, "media_kind": "video", "media_url": "https://r2/c.mp4", "output_path": ""})
+    length = {"seconds": 8.0}
+    monkeypatch.setattr(effects, "probe_video", lambda t: {
+        "seconds": length["seconds"], "width": 720, "height": 1280, "fps": 24.0})
+    args = dict(effect="reframe", sources=["gen:3"], options={"aspect_ratio": "16:9"},
+                prompt="open sky above the roofline")
+    q = mcp_server.run_effect(**args)
+    assert q["needs_approval"] and q["quote"]["usd"] == 0.48
+    assert q["quote"]["credits"] == ledger.charge_credits(0.48) == 116
+    out = mcp_server.run_effect(**args, quote_token=q["quote"]["quote_token"])
+    assert out["ok"] and calls[0]["opts"] == {"aspect_ratio": "16:9"}
+    assert calls[0]["prompt"] == "open sky above the roofline" and calls[0]["usd"] == 0.48
+    with pytest.raises(ValueError, match="stale_content"):       # another shape after the yes
+        mcp_server.run_effect(**{**args, "options": {"aspect_ratio": "1:1"}},
+                              quote_token=q["quote"]["quote_token"])
+    length["seconds"] = 14.0
+    with pytest.raises(ValueError, match="takes clips up to"):
+        mcp_server.run_effect(**args)
+    with pytest.raises(ValueError, match="needs `aspect_ratio`"):
+        mcp_server.run_effect("reframe-hq", sources=["gen:3"])
+
+
 def test_a_clip_source_must_be_a_render_on_the_wall(monkeypatch):
     from src import render_assets
     monkeypatch.setattr(render_assets, "get", lambda i, dsn=None, **kw: {

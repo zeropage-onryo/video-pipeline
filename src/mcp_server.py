@@ -373,7 +373,8 @@ DESCRIPTIONS = {
     "effects": (
         "The effects `apply_effect` can run -- image edits, one-click video "
         "templates on a still, named camera moves on a still, and clip "
-        "finishing (upscale, smoother motion, added sound) -- with what each "
+        "finishing (upscale, smoother motion, added sound, re-framing to a new "
+        "shape, background removal) -- with what each "
         "takes (an image or a clip, how many, whether it needs a prompt), its "
         "options and how it is priced. `category` narrows the list "
         "(image_edit, video_effect, camera, finish); long option lists are "
@@ -421,8 +422,8 @@ DESCRIPTIONS = {
     "apply_effect": (
         "SPENDS CREDITS. Apply one effect from `effects` to sources named by "
         "id: for an image effect, images by the reference ids below; for a "
-        "clip effect, a video `gen:<id>` from `renders` (it is measured before "
-        "it is priced). `options` takes the names and values `effects` lists, "
+        "clip effect, a video `gen:<id>` from `renders` or an `asset:<id>` clip "
+        "you imported (it is measured before it is priced). `options` takes the names and values `effects` lists, "
         "e.g. {\"effect_scene\": \"bullet_time_360\"}; anything else is refused "
         "with the legal set. `prompt` is required, optional or refused per "
         f"effect. {_APPROVAL} {_REFERENCE_IDS} {_PROJECT_FILING} After the yes "
