@@ -3655,6 +3655,69 @@ def build_server(dsn: Optional[str] = None, name: str = "zeropage-ideas",
 # for the case stdio genuinely cannot serve: something that is not
 # Claude Desktop, talking to this pipeline over a network.
 
+# THE DROPPED COPY (2026-10-11). Claude Desktop starts this process, ends
+# its stdin within a millisecond and starts another two seconds later,
+# which is the one it keeps. The first was not killed: it ran the whole
+# table setup -- 15s against the live database -- before the transport
+# read EOF, and since the setups take turns (db.run_init) the kept copy
+# sat behind it and answered `initialize` in ~30s instead of ~17. A
+# process whose stdin has already been hung up, with nothing left to
+# read, has nobody to serve; it should leave before it connects.
+#
+# The check must not CONSUME anything. mcp 2.x serves the wire from its
+# own duplicate of fd 0 (mcp/server/stdio.py, _claim_fd), not through
+# sys.stdin, so one byte read or peeked here is a request the kept copy
+# never sees. poll() only looks. Measured on macOS, where Node hands a
+# child a socketpair and a shell hands it a pipe:
+#
+#   the other end closed, nothing written   POLLHUP, 0 bytes   -> leave
+#   open, nothing written yet               nothing            -> serve
+#   open, a request already written         POLLIN,  n bytes   -> serve
+#   a request written, THEN closed          POLLHUP, n bytes   -> serve it
+#
+# Everything else -- a terminal, /dev/null (POLLNVAL on macOS), a file,
+# no poll() on the platform, any error at all -- reads as "serve". A wrong
+# exit is worse than the slow start this fixes: the desktop would show
+# "Server disconnected".
+
+def hung_up(fd: int) -> bool:
+    """True only when the other end of `fd` has gone AND nothing is left
+    to read on it. Reads nothing; never raises."""
+    try:
+        import array
+        import fcntl
+        import select
+        import termios
+
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        events = poller.poll(0)
+        if not events:
+            return False
+        flags = events[0][1]
+        if flags & select.POLLNVAL or not flags & select.POLLHUP:
+            return False
+        pending = array.array("i", [0])
+        fcntl.ioctl(fd, termios.FIONREAD, pending)
+        return pending[0] == 0
+    except Exception:           # no poll() here, not a descriptor, anything
+        return False
+
+
+def stdin_dropped() -> bool:
+    """Whether whoever launched this process has already let go of it.
+
+    Only when sys.stdin really is fd 0 -- the one case in which the
+    transport reads fd 0. Anything else (stdin replaced by a test runner
+    or an embedder, no stdin at all) is not this function's to judge."""
+    try:
+        if sys.stdin is None or sys.stdin.buffer.fileno() != 0:
+            return False
+    except Exception:
+        return False
+    return hung_up(0)
+
+
 def main(argv=None) -> int:
     import argparse
 
@@ -3708,6 +3771,13 @@ def main(argv=None) -> int:
         # against a fresh database, where both crashed on a missing table.
         generative.init(dsn)
         cut_store.init(dsn)
+
+    # Nobody to serve: leave before connecting (see THE DROPPED COPY).
+    if stdin_dropped():
+        print("note: stdin was already closed with nothing to read, so there "
+              "is nobody to serve; exiting without touching the database",
+              file=sys.stderr)
+        return 0
 
     # One start at a time (2026-10-10). Claude Desktop launches this
     # process twice within seconds on every start and drops the first, and

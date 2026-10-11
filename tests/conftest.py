@@ -223,6 +223,20 @@ def no_network(monkeypatch, request):
     monkeypatch.setattr(socket, "create_connection", blocked)
 
 
+@pytest.fixture(autouse=True)
+def stdin_is_open(monkeypatch):
+    """The stdio MCP server's main() leaves at once when its stdin has
+    already been hung up (src/mcp_server.py, THE DROPPED COPY). Whether
+    the TEST RUNNER's fd 0 is a hung-up pipe is a fact about how the
+    suite was launched -- a CI step, a background job, `-s` -- and not
+    about the code, so no test asks the real one: main() serves unless a
+    test says otherwise. tests/test_mcp_dropped_copy.py checks the real
+    thing on descriptors it makes and in real processes."""
+    from src import mcp_server
+
+    monkeypatch.setattr(mcp_server, "stdin_dropped", lambda: False)
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Every module-level path that names somewhere this project WRITES on the

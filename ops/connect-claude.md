@@ -59,19 +59,23 @@ each other's table setup in Postgres and one of them died -- about half
 of all starts. The server now takes a lock around that setup, so the
 copies take turns instead.
 
-Taking turns is slow against the live database. Measured 2026-10-10 from
-this Mac: one copy's table setup takes about 15 seconds, so the copy
-Desktop keeps answers after about 30 (it waits for the dropped copy to
-finish first). With `zeropage` alone that worked on every start tried.
-With `--board` as well there are four copies in the queue, about a
-minute in all, which has not been tried and is probably longer than
-Desktop waits -- so add `zeropage-board` only when you need the board
-tools, and if it shows "Server disconnected", that is the likely reason.
+One copy's table setup takes about 15 seconds against the live database
+(measured 2026-10-10 from this Mac), and on that day the copy Desktop
+keeps answered after about 30, because it waited for the dropped copy to
+finish its setup first. Since 2026-10-11 the dropped copy notices that
+nobody is listening and leaves without doing the setup, so a start
+should be back to one setup, about 17 seconds, and `--board` as well
+should mean two in a row, about 32. Those two figures are expected, not
+yet measured against the live database.
 
-If it still happens, the reason is in
+If a server does disconnect, the reason is in
 `~/Library/Logs/Claude/mcp-server-zeropage.log` (or
 `mcp-server-zeropage-board.log`): the last traceback there is the thing
-to fix, and a line starting `note:` says when the lock could not be taken.
+to fix. Two lines starting `note:` are worth knowing. "starting without
+it" means the lock could not be taken. "nobody to serve" is the dropped
+copy leaving, which is normal once per start; if it is the LAST thing in
+the log before "Server disconnected", the kept copy left by mistake and
+that is a bug in the check (`stdin_dropped` in `src/mcp_server.py`).
 
 ## Why stdio and not a tunnel
 
