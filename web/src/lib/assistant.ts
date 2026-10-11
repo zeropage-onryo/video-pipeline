@@ -169,6 +169,9 @@ export type Turn = {
   looked?: string[];
   /** the composer: the skill this message was sent with, by title */
   skill?: string;
+  /** a still step the PAGE wrote (a Variation): the references the first
+   *  draw was held to, sent again with whatever the box holds now */
+  held?: string[];
   /** the composer: a plan the brain proposed -- its steps and where each
    *  one stands (lib/make-plan.ts). Each step's result is its own turn. */
   plan?: Plan;

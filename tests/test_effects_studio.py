@@ -185,10 +185,12 @@ def test_a_run_happens_at_the_price_the_card_showed_or_not_at_all(client, monkey
 def test_a_render_on_this_machines_disk_is_read_by_its_own_guarded_reader(client, monkeypatch):
     """A still a composer result points at as /renders/... (no bucket on a
     dev box): opened only through imagery.render_bytes, which refuses any
-    path outside data/renders."""
+    path outside data/renders. The one reader every reference goes through
+    (`_photo_bytes`) does it, so the same still works as a reference and
+    as an element's first photo too."""
     from src import imagery
     seen = []
-    monkeypatch.setattr(api, "_photo_bytes", lambda url: None)
+    monkeypatch.setattr(api, "_resolve_asset_photo", lambda url: None)
     monkeypatch.setattr(imagery, "render_bytes", lambda path: seen.append(path) or b"png")
     monkeypatch.setattr(api, "_to_jpeg", lambda raw: raw)
     monkeypatch.setattr(fal, "as_image_url", lambda value, **k: "https://bucket.example/s.jpg")

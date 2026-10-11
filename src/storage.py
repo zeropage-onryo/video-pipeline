@@ -338,6 +338,34 @@ def signed_url_for_key(key: str, ttl: Optional[int] = None) -> Optional[str]:
     return url
 
 
+DOWNLOAD_TTL_SECONDS = 300
+
+
+def download_url_for_key(key: str, filename: str, ttl: int = DOWNLOAD_TTL_SECONDS) -> Optional[str]:
+    """A short-lived presigned GET that the browser SAVES instead of
+    opening (2026-10-10): `Content-Disposition: attachment` is asked of
+    the bucket itself, so the bytes go bucket -> browser and never through
+    this server or the studio's proxy. Not memoised like
+    `signed_url_for_key`: it is one click, not a tile drawn twelve times.
+
+    `filename` must already be plain ASCII (the caller builds it); a quote
+    or a control character in it would break out of the header value.
+    None when R2 is not configured or the signing fails.
+    """
+    if not configured() or not key:
+        return None
+    safe = "".join(c for c in filename if c.isalnum() or c in "._-") or "download"
+    try:
+        return _client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket(), "Key": key,
+                    "ResponseContentDisposition": f'attachment; filename="{safe}"'},
+            ExpiresIn=ttl,
+        )
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
 def upload_bytes(data: bytes, key: str, content_type: Optional[str] = None) -> str:
     """Put bytes at a key and return the public URL -- `upload_file`
     without the temp file. The derivative path makes its thumbnail in

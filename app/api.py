@@ -1539,6 +1539,75 @@ def global_search(q: str = "", limit: int = 5, account_id: int = Depends(auth.cu
     return out
 
 
+# Registered BEFORE /assets/{category}/{item_id} on purpose: that route would
+# otherwise take "generated" for a category and answer for these two.
+def _download_name(row: dict) -> str:
+    """`zeropage-<what made it>-<id>.<ext>`, plain ASCII: the name the
+    browser saves a render under."""
+    import re
+    from urllib.parse import urlparse
+    suffix = Path(urlparse(row.get("media_url") or "").path).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{2,5}", suffix or ""):
+        suffix = ".mp4" if row.get("media_kind") == "video" else ".png"
+    label = re.sub(r"[^a-z0-9]+", "-", str(row.get("provider") or "render").lower()).strip("-")
+    return f"zeropage-{label or 'render'}-{row['id']}{suffix}"
+
+
+@router.get("/assets/generated/{asset_id}")
+def asset_get_generated(asset_id: int, account_id: int = Depends(auth.current_account_id)):
+    """One render on the wall, for a page that was handed only its id (the
+    composer's `?on=gen:<id>`, 2026-10-10): what it is, a tile to draw and
+    the `ref` an effect names it by. 404 for a removed render or another
+    account's."""
+    from src import media
+    row = render_assets.get(asset_id, account_id=account_id)
+    if not row or row.get("deleted_at"):
+        return _error(404, "not_found", "no such generated asset")
+    url, kind = row["media_url"], row["media_kind"]
+    full = media.url_for(url, account_id)
+    # the small derivative when one exists; a still is its own tile, a clip
+    # with no poster has none
+    thumb = media.thumb_url_for(url, account_id) or (full if kind == "image" else None)
+    return {"id": asset_id, "ref": f"gen:{asset_id}", "kind": kind, "url": full,
+            "thumb": thumb, "label": row.get("provider") or "",
+            "prompt": row.get("prompt") or ""}
+
+
+@router.get("/assets/generated/{asset_id}/download")
+def asset_download_generated(asset_id: int, account_id: int = Depends(auth.current_account_id)):
+    """Save a render to the person's computer (2026-10-10). The wall's
+    button only ever OPENED the file: a browser ignores `download` on a
+    link to another origin, and the bucket is one. So the bucket is asked
+    to send it as an attachment -- a 302 to a five-minute presigned URL,
+    the bytes going bucket -> browser -- and a machine with no bucket
+    serves its own file. 404 for a removed render, another account's, or
+    one whose file is nowhere."""
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    from src import media, storage
+    row = render_assets.get(asset_id, account_id=account_id)
+    if not row or row.get("deleted_at"):
+        return _error(404, "not_found", "no such generated asset")
+    name = _download_name(row)
+    if storage.configured():
+        for key in dict.fromkeys(k for k in (media.master_key(row["media_url"], account_id),
+                                             media.legacy_key(row["media_url"])) if k):
+            if storage.key_exists(key):
+                url = storage.download_url_for_key(key, name)
+                if url:
+                    return RedirectResponse(url, status_code=302)
+    # this machine's own copy: only ever a file under data/renders
+    root = (Path(__file__).resolve().parent.parent / "data" / "renders").resolve()
+    local = Path(row.get("output_path") or "")
+    try:
+        target = local.resolve() if local.is_absolute() else (root.parent.parent / local).resolve()
+    except OSError:
+        target = None
+    if target and root in target.parents and target.is_file():
+        return FileResponse(str(target), filename=name)
+    return _error(404, "no_file", "that render's file is not in the studio's storage")
+
+
 @router.get("/assets/{category}/{item_id}")
 def asset_detail(category: str, item_id: int, account_id: int = Depends(auth.current_account_id)):
     asset = next((i for i in _assets_all(account_id)
@@ -1664,6 +1733,13 @@ async def _save_uploaded_photos(base_dir: Path, slug: str, photos,
     return saved[0].name, len(saved)
 
 
+
+# What the page is told when an element was saved and its photos could not
+# be read by the model just now (no key, a busy model, a refusal): the
+# element is real and usable, so the line says that and no provider's
+# words (2026-10-10; the raw error is in the log).
+NOT_DESCRIBED = "the photos are saved, but could not be described just now"
+
 @router.post("/assets/locations")
 async def asset_create_location(request: Request, account_id: int = Depends(auth.current_account_id)):
     """Save a space's photos and describe it (vision) -- the describe is
@@ -1702,7 +1778,7 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
     description = None
     api_key = _gemini_key(account_id)
     if not api_key:
-        note = "GEMINI_API_KEY is not set, so the photos were not described"
+        note = NOT_DESCRIBED
     else:
         try:
             from google import genai
@@ -1717,7 +1793,9 @@ async def asset_create_location(request: Request, account_id: int = Depends(auth
                                  photo_count=len(all_photos), account_id=account_id)
             described = True
         except Exception as e:
-            note = f"saved {len(saved)} photo(s) but could not describe the space: {e}"
+            # the model's own words go to the log, never to the page
+            print(f"  could not describe location {slug}: {e}", file=sys.stderr)
+            note = NOT_DESCRIBED
 
     chunk = ingest_asset_chunk("location", slug, slug,
                                {"description": description or {}},
@@ -1774,9 +1852,10 @@ async def _create_entity(kind: str, request: Request, account_id: int):
     chunk = ingest_asset_chunk(kind, slug, name, {
         label: field, "notes": notes, "description": description},
         project=accounts.slug_of(account_id))
-    note = None if vision["ok"] else (
-        f"photos saved but not described: {vision['error']}" if count
-        else "no photos to describe")
+    if not vision["ok"] and count:
+        # the model's own words go to the log, never to the page
+        print(f"  could not describe {kind} {slug}: {vision['error']}", file=sys.stderr)
+    note = None if vision["ok"] else (NOT_DESCRIBED if count else "no photos to describe")
     sheet_job = _maybe_sheet_job(form, "characters" if kind == "character" else "props",
                                  slug, name, detail=field, notes=notes,
                                  account_id=account_id, photos=fresh)
@@ -2380,9 +2459,17 @@ def _photo_bytes(url: str) -> Optional[bytes]:
             return target.read_bytes()
         except OSError:
             return None
+    from src import imagery
     if str(url or "").startswith(("http://", "https://")):
-        from src import imagery
         return imagery.fetch_image_bytes(url)
+    # a render still on THIS machine's disk (2026-10-10): a box with no
+    # bucket names its own renders /renders/..., and a still made a minute
+    # ago is the commonest thing to carry on from -- as a reference, an
+    # effect's source, an element's first photo. Only through the guarded
+    # reader, which opens nothing outside data/renders.
+    path = str(url or "").split("?")[0]
+    if path.startswith("/renders/"):
+        return imagery.render_bytes(path)
     return None
 
 
@@ -4853,15 +4940,8 @@ def _effect_urls(req: dict, account_id: int) -> list[str]:
                                                   account_id=account_id)
             continue
         # a reference as the composer holds it: the same reader, and the
-        # same wall, as a still's own references (_collect_refs) -- plus a
-        # render still on this machine's disk, which only its own guarded
-        # reader opens (imagery.render_bytes refuses anything outside
-        # data/renders)
-        path = ref.split("?")[0]
-        raw = _photo_bytes(path)
-        if raw is None and path.startswith("/renders/"):
-            from src import imagery
-            raw = imagery.render_bytes(path)
+        # same wall, as a still's own references (_collect_refs)
+        raw = _photo_bytes(ref.split("?")[0])
         jpeg = _to_jpeg(raw) if raw else None
         url = fal.as_image_url(jpeg, account_id=account_id) if jpeg else None
         if not url:

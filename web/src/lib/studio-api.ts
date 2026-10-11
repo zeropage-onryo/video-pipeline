@@ -295,6 +295,24 @@ export const organizeGenerated = (id: number, body: { folder?: string; starred?:
     body: JSON.stringify(body),
   });
 
+/** GET /api/assets/generated/{id} — one render on the wall, for a page
+ *  handed only its id (the composer's `?on=`): what it is, a tile, and the
+ *  `ref` an effect names it by. 404 for a removed one or another account's. */
+export type RenderInfo = {
+  id: number;
+  ref: string;
+  kind: "image" | "video";
+  url: string;
+  thumb: string | null;
+  label: string;
+  prompt: string;
+};
+export const getRender = (id: number) => apiFetch<RenderInfo>(`/assets/generated/${id}`);
+/** GET /api/assets/generated/{id}/download — a link that SAVES the file:
+ *  the server answers with a redirect to the bucket asking for an
+ *  attachment (or serves its own copy). An href, never a fetch. */
+export const renderDownloadHref = (id: number) => `${API_URL}/api/assets/generated/${id}/download`;
+
 /* ── the board and the queue ── */
 export type KeyframeQuote = { stills: number; each: number; credits: number };
 export type Concept = {

@@ -17,6 +17,8 @@ export function EffectGallery({
   ready,
   exempt,
   candidates,
+  on,
+  tab: startTab,
   onPick,
   onClose,
 }: {
@@ -27,10 +29,16 @@ export function EffectGallery({
   exempt: boolean;
   /** what there is to act on, for each effect's "needs…" line */
   candidates: Candidate[];
+  /** opened ON one result ("this still"): the header says so */
+  on?: string;
+  /** the tab to open on */
+  tab?: string;
   onPick: (effect: Effect) => void;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState(categories[0]?.id ?? "");
+  const [tab, setTab] = useState(
+    (startTab && categories.some((c) => c.id === startTab) ? startTab : categories[0]?.id) ?? "",
+  );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -52,7 +60,7 @@ export function EffectGallery({
     >
       <div className="fxg-head">
         <b>Effects</b>
-        <span>Browsing is free. A pick shows its price before anything runs.</span>
+        <span>{on ? `On ${on}. ` : "Browsing is free. "}A pick shows its price before anything runs.</span>
         <button type="button" aria-label="Close effects" onClick={onClose}>
           <X strokeWidth={1.8} />
         </button>
