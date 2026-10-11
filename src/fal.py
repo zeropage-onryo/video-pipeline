@@ -678,6 +678,32 @@ def model_spec(model: str) -> dict:
     return spec
 
 
+def draft_resolution(model: str) -> Optional[str]:
+    """The resolution a DRAFT of this model renders at (2026-10-11,
+    src/drafts.py): its cheapest tier, when that is STRICTLY cheaper than
+    the tier it renders at by default. None otherwise -- a model whose
+    default is already its cheapest (LTX), one flat rate (Kling, Veo), or a
+    lower tier at the same price (Seedance 2.0's 480p): a draft that saves
+    nothing is not offered. Read off `prices`, so a re-checked table moves
+    this with it. An unknown model has no draft.
+
+    Today that is Wan 3.0 and Seedance 2.5, both at 480p; their rate cards
+    were read again on 2026-10-11 and match the table ($0.05 / $0.10 /
+    $0.20 and $0.2205 / $0.4730 / $1.164 per second at 480p / 720p /
+    1080p)."""
+    spec = VIDEO_MODELS.get(model)
+    if not spec or "resolution" not in (spec.get("params") or ()):
+        return None
+    prices, tiers = spec["prices"], list(spec["resolutions"])
+    cheapest = min(tiers, key=lambda r: (prices[r], tiers.index(r)))
+    return cheapest if prices[cheapest] < prices[spec["default_resolution"]] else None
+
+
+def is_draft(model: str, resolution: Optional[str]) -> bool:
+    """Was a clip of `model` at `resolution` a draft?"""
+    return bool(resolution) and draft_resolution(model) == resolution
+
+
 def model_for_platform(platform: str) -> str:
     """The fal model a shot planned for `platform` renders on."""
     model = PLATFORM_MODELS.get((platform or "").lower())

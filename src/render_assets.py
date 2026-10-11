@@ -289,6 +289,20 @@ def organize(id: int, dsn: Optional[str] = None, *, account_id: Optional[int],
         return bool(cur.rowcount)
 
 
+def link(id: int, dsn: Optional[str] = None, *, account_id: Optional[int],
+         concept_id: int, shot_n=None) -> bool:
+    """File one of this account's renders under a scene's shot (2026-10-11):
+    a draft's finished clip is made by the effects door, which knows no
+    scene, and belongs to the shot it was finished onto. Returns whether a
+    row of this account's was changed."""
+    with db.connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE generated_assets SET concept_id = %s, shot_n = %s "
+            "WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
+            (concept_id, shot_n, id, account_id))
+        return bool(cur.rowcount)
+
+
 def soft_delete(id: int, dsn: Optional[str] = None, *,
                 account_id: Optional[int]) -> bool:
     """Take a render off the wall. The row and the file stay -- see

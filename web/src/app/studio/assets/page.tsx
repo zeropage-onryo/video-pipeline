@@ -402,6 +402,18 @@ export default function AssetsPage() {
                     "no project"
                   )}
                 </dd>
+                {open.draft ? (
+                  <>
+                    <dt>draft</dt>
+                    <dd>
+                      Rendered at {open.draft.frame}, the cheap tier.{" "}
+                      <Link href="/studio/queue" className="underline">
+                        Finish it in the Queue
+                      </Link>{" "}
+                      to upscale it onto its shot.
+                    </dd>
+                  </>
+                ) : null}
                 <dt>folder</dt>
                 <dd>
                   <form

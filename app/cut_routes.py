@@ -122,17 +122,23 @@ def cut_ready(brand: Optional[str] = None,
     """Concepts whose every slot has a clip, not archived -- the scenes
     that left the Queue by being rendered. Each carries the head
     version's export, if there is one."""
+    from src import drafts
     rows = preprod.list_concepts(100, account_id=account_id, brand=brand, lean=True)
-    ready = []
+    ready, index = [], None
     for c in rows:
         if c.get("archived_at"):
             continue
         slots = cut_assemble.clip_slots(c)
         if not slots or not all(s["media_url"] for s in slots):
             continue
+        if index is None:               # one read of the wall for the whole listing
+            index = cut_assemble._asset_index(account_id, None)
         ready.append({"concept_id": c["id"], "title": c.get("title") or f"Concept #{c['id']}",
                       "brand": c.get("brand"), "clips": len(slots),
-                      "poster": (c.get("shots") or [{}])[0].get("reference_image")})
+                      "poster": (c.get("shots") or [{}])[0].get("reference_image"),
+                      # the shots still on a cheap draft clip, each named by
+                      # the render id Finish takes (src/drafts.py)
+                      "drafts": drafts.in_concept(c, account_id=account_id, index=index)})
     exports = cut_store.latest_exports(
         [cut_store.project_for_concept(r["concept_id"]) for r in ready], account_id=account_id)
     for r in ready:
@@ -140,7 +146,9 @@ def cut_ready(brand: Optional[str] = None,
         r["export"] = ({"timeline_id": head["timeline_id"], "version": head["version"],
                         "url": _mint(head.get("export_url"), account_id)} if head else None)
     return {"ready": ready, "ffmpeg": bool(cut_sources.ffmpeg_bin()),
-            "captions_burn": cut_render.can_burn_captions()}
+            "captions_burn": cut_render.can_burn_captions(),
+            # what finishing a draft runs, so no page keeps its own copy
+            "finish": {"effect": drafts.FINISH_EFFECT, "options": dict(drafts.FINISH_OPTIONS)}}
 
 
 # --------------------------------------------------------------------------

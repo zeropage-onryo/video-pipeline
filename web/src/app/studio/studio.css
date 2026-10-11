@@ -3076,6 +3076,17 @@ select.zin {
   gap: 6px;
   flex-wrap: wrap;
 }
+/* a rendered scene's draft clips, each with its Finish (src/drafts.py) */
+.scdrafts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.scdrafts .tag.on {
+  border-color: var(--signal);
+  color: var(--text);
+}
 .scsel {
   display: inline-flex;
   align-items: center;

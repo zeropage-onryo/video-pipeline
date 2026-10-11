@@ -1251,9 +1251,15 @@ def _project_of(meta: dict, linked: dict, filed_titles: dict) -> tuple:
 
 
 def _generated_assets(account_id: Optional[int]) -> list:
-    from src import media
+    from src import drafts, media
     items = []
-    for rendered in render_assets.list_all(account_id=account_id):
+    rows = render_assets.list_all(account_id=account_id)
+    try:
+        # the clips that are a cheap draft still sitting on their shot
+        drafted = drafts.on_the_wall(rows, account_id=account_id)
+    except Exception:                                       # noqa: BLE001
+        drafted = {}                # a label, never a reason to lose the wall
+    for rendered in rows:
         url = rendered["media_url"]
         kind = rendered["media_kind"]
         meta = {
@@ -1261,7 +1267,7 @@ def _generated_assets(account_id: Optional[int]) -> list:
             "model": rendered["model"],
             "type": kind,
         }
-        for key in ("ratio", "duration", "references", "source", "framing",
+        for key in ("ratio", "duration", "resolution", "references", "source", "framing",
                     "prompt_image", "project_id"):
             if rendered["metadata"].get(key) is not None:
                 meta[key] = rendered["metadata"][key]
@@ -1282,6 +1288,9 @@ def _generated_assets(account_id: Optional[int]) -> list:
             "folder": rendered.get("folder"),
             "starred": bool(rendered.get("starred")),
             "created_at": rendered.get("created_at"),
+            # a clip rendered at its model's cheapest tier that is still
+            # the clip on its shot (src/drafts.py): {"frame", "model"} or None
+            "draft": drafted.get(rendered["id"]),
         })
     return items
 
@@ -1435,6 +1444,9 @@ def media_list(q: Optional[str] = None, category: Optional[str] = None,
                     "folder": asset.get("folder"),
                     "starred": bool(asset.get("starred")),
                     "poster": asset.get("poster") if media_kind == "video" else None,
+                    # {"frame", "model"} when this clip is a cheap draft of
+                    # its shot (src/drafts.py), else None
+                    "draft": asset.get("draft"),
                 })
             items.append(row)
     items.sort(key=lambda x: x["ts"], reverse=True)
@@ -1568,9 +1580,12 @@ def asset_get_generated(asset_id: int, account_id: int = Depends(auth.current_ac
     # the small derivative when one exists; a still is its own tile, a clip
     # with no poster has none
     thumb = media.thumb_url_for(url, account_id) or (full if kind == "image" else None)
+    from src import drafts
     return {"id": asset_id, "ref": f"gen:{asset_id}", "kind": kind, "url": full,
             "thumb": thumb, "label": row.get("provider") or "",
-            "prompt": row.get("prompt") or ""}
+            "prompt": row.get("prompt") or "",
+            "concept_id": row.get("concept_id"),
+            "draft": drafts.on_the_wall([row], account_id=account_id).get(asset_id)}
 
 
 @router.get("/assets/generated/{asset_id}/download")
@@ -4859,6 +4874,9 @@ class EffectBody(BaseModel):
     options: dict = {}
     # /effects/run only: the credits the card showed the person
     expect_credits: Optional[int] = None
+    # FINISH a draft (src/drafts.py): the one source is a scene's draft
+    # clip, and what the upscale makes is put on that shot in its place
+    finish: bool = False
 
 
 def _effect_view(name: str) -> dict:
@@ -4917,9 +4935,15 @@ def _effect_request(account_id: int, body: EffectBody) -> dict:
         local = clip.get("output_path") or ""
         probe = effects.probe_video(local if local and Path(local).is_file() else clip["media_url"])
     usd = effects.quote_usd(name, opts, probe)
+    target = None
+    if body.finish:
+        from src import drafts
+        if name != drafts.FINISH_EFFECT:
+            raise ValueError(f"a draft is finished with {drafts.FINISH_EFFECT}, nothing else")
+        target = drafts.finish_target(named[0] if named else "", account_id=account_id)
     return {"effect": name, "row": row, "options": opts, "prompt": prompt, "sources": named,
             "probe": probe, "usd": usd, "credits": ledger.charge_credits(usd),
-            "charged": not ledger.credit_exempt(account_id)}
+            "charged": not ledger.credit_exempt(account_id), "finish": target}
 
 
 def _effect_urls(req: dict, account_id: int) -> list[str]:
@@ -4961,7 +4985,11 @@ def effects_quote(body: EffectBody, account_id: int = Depends(auth.current_accou
     return {"effect": req["effect"], "label": req["row"]["label"], "output": req["row"]["output"],
             "options": req["options"], "credits": req["credits"], "charged": req["charged"],
             **({"clip": {k: req["probe"][k] for k in ("seconds", "width", "height")}}
-               if req["probe"] else {})}
+               if req["probe"] else {}),
+            # a finish says where the finished clip will go
+            **({"finish": {k: req["finish"][k] for k in ("concept_id", "shot_n", "part",
+                                                         "label", "title")}}
+               if req["finish"] else {})}
 
 
 @router.post("/effects/run")
@@ -4994,17 +5022,37 @@ def effects_run(body: EffectBody, account_id: int = Depends(auth.current_account
         except ValueError as e:
             raise RuntimeError(str(e)) from e
         jobs.progress(job, 0.3, f"running {row['label']}")
+        target = req["finish"]
         res = effects.run(req["effect"], urls, req["prompt"], req["options"], usd=req["usd"],
                           sources=req["sources"], probe=req["probe"],
-                          account_id=account_id, source="composer")
+                          account_id=account_id, source="queue" if target else "composer",
+                          extra=({"finish_of": req["sources"][0],
+                                  "concept_id": target["concept_id"],
+                                  "shot_n": target["shot_n"], "part": target["part"]}
+                                 if target else None))
         if not res.get("ok"):
             print(f"  effect {req['effect']} was not made: {res.get('error')}", file=sys.stderr)
             raise RuntimeError(failures.plain(res.get("error"), "The effect"))
-        # `media`, never `kind`: a job's result is merged onto the job, and
-        # `kind` is the job's own ("effect"), which the activity tray reads
-        return {"detail": f"{row['label']} · done", "output": res.get("media_url"),
+        done = {"detail": f"{row['label']} · done", "output": res.get("media_url"),
+                # `media`, never `kind`: a job's result is merged onto the job,
+                # and `kind` is the job's own ("effect"), which the tray reads
                 "media": row["output"],
                 "asset": f"gen:{res['asset_id']}" if res.get("asset_id") else None}
+        if target:
+            # the finished clip takes the draft's place on its shot. It was
+            # paid for and is on the wall whatever happens here, so a shot
+            # that has gone is said on the job, never a failed job
+            from src import drafts
+            try:
+                drafts.attach(target, res["media_url"], res.get("asset_id"),
+                              account_id=account_id)
+                done.update(detail=f"{target['label']} finished", finished=True,
+                            ref_id=target["concept_id"])
+            except Exception as e:                          # noqa: BLE001
+                print(f"  finished clip not attached to {target['label']}: {e}", file=sys.stderr)
+                done.update(detail="Finished and in your Library, but its shot is gone, "
+                                   "so it was not put on the scene.", finished=False)
+        return done
 
     job = jobs.start("effect", f"effect · {row['label']}", work, account_id=account_id)
     return {"job_id": job["id"], "credits": req["credits"], "charged": req["charged"]}
