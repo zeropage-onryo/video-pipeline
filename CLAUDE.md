@@ -1567,7 +1567,15 @@ is yours, in Resolve, by hand.
   use it; a new process entry point wraps its inits the same way, and no init() changed. Not
   covered: a CLI's own `init_db()` and a web request in flight can still be one side of a
   deadlock -- the start under `run_init` is the side that runs again. `tests/test_init_race.py`
-  is the race, through the real entry point.
+  is the race, through the real entry point. **Checked against the live database the same day**
+  (13 starts from the main checkout, alone, in Desktop's sequence and two at the same instant:
+  none died, the lock was taken every time, nothing on stderr) -- **and it is slow there:** a
+  warm init is 12 connections and 168 statements, ~15s from the Mac (0.5s on a local Postgres),
+  so the copy Desktop keeps answers `initialize` in ~30s because it waits out the dropped copy's
+  init first. Both entries registered would queue FOUR inits, about a minute: not verified, and
+  probably past what the client waits. Register `zeropage` alone until the dropped copy exits
+  without initing (its stdin is already closed; mcp 2.1.1 claims fd 0 for itself, so detect that
+  with `poll()`'s POLLHUP and never by reading or peeking `sys.stdin`).
   **TWO DOORS SINCE 2026-09-24, and which one you came through decides whose
   board you read** (`app/mcp_auth.py`, `app/mcp_mount.guarded`). The static
   `ZEROPAGE_MCP_TOKEN` is the OPERATOR's key: compared with
