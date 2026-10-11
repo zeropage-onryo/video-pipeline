@@ -1573,9 +1573,21 @@ is yours, in Resolve, by hand.
   warm init is 12 connections and 168 statements, ~15s from the Mac (0.5s on a local Postgres),
   so the copy Desktop keeps answers `initialize` in ~30s because it waits out the dropped copy's
   init first. Both entries registered would queue FOUR inits, about a minute: not verified, and
-  probably past what the client waits. Register `zeropage` alone until the dropped copy exits
-  without initing (its stdin is already closed; mcp 2.1.1 claims fd 0 for itself, so detect that
-  with `poll()`'s POLLHUP and never by reading or peeking `sys.stdin`).
+  probably past what the client waits. **The dropped copy now leaves without initing
+  (2026-10-11):** `main()` asks `mcp_server.stdin_dropped()` before it touches the database and
+  returns 0 when fd 0 has been hung up with nothing left to read -- `hung_up(fd)`: `poll()` says
+  POLLHUP and FIONREAD says 0 bytes. It only LOOKS: mcp 2.x serves the wire from its own
+  duplicate of fd 0 (`_claim_fd`), not through `sys.stdin`, so a check that read or peeked
+  would swallow the kept copy's `initialize` (tried as a mutation: the server never answers).
+  A request written and then closed is served; a terminal, /dev/null, an open silent pipe, a
+  replaced `sys.stdin` and any error all read as "serve", because a wrong exit is "Server
+  disconnected". With a Node parent in Desktop's sequence on a local schema the dropped copy
+  now exits in ~1s having created 0 tables (27 before) and the kept copy still answers; so the
+  kept copy has nobody to wait for and two entries are two inits, not four. The live timing
+  after this change (expected ~17s, and ~32s for the second of two entries) is NOT yet
+  measured. conftest pins `stdin_dropped` off for the suite -- the test runner's own fd 0 is
+  not the code's business -- and `tests/test_mcp_dropped_copy.py` checks the real thing on
+  descriptors it makes and in real processes.
   **TWO DOORS SINCE 2026-09-24, and which one you came through decides whose
   board you read** (`app/mcp_auth.py`, `app/mcp_mount.guarded`). The static
   `ZEROPAGE_MCP_TOKEN` is the OPERATOR's key: compared with
