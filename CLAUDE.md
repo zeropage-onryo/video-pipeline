@@ -2493,6 +2493,47 @@ is yours, in Resolve, by hand.
   environment variable); both element routes say `api.NOT_DESCRIBED` and log the rest. Not
   built: actions on a scene beyond its three (its keyframes are the Queue's priced button and a
   plan's step), image upscale (the table has none), a Variation count above one.
+- **DRAFT, THEN FINISH (2026-10-11, item 5 of `docs/tasks/task-studio-agent.md`; Runway's and
+  Higgsfield's cheap-draft-first).** `src/drafts.py`. A scene renders shot by shot, so a wrong
+  guess at full price is paid once per shot. **A draft is not a new kind of render**: it is
+  the Queue's ordinary approve at the picked model's cheapest resolution, and it exists only
+  where that tier is STRICTLY cheaper than the one the model renders at by default --
+  `fal.draft_resolution(model)`, read off `VIDEO_MODELS["prices"]`, so a re-checked table moves
+  it. Today that is Wan 3.0 and Seedance 2.5 (480p; rate cards re-read 2026-10-11 and
+  unchanged); LTX's default is already its floor, Kling and Veo have one rate, and Seedance
+  2.0's 480p costs what its 720p does, so none of them offers one. The catalogue carries it
+  (`providers._fal_models` -> `draft` on each model) and the Queue card shows **Draft first ·
+  480p · cheaper** under the renderer chip: it only moves the pick's frame
+  (`render-choice.withDraft`), the server prices the new pick like any other, and the one
+  priced button -- now reading "Draft · 3 shots · 636 cr" -- is still the only click that
+  spends (the A key included). Nothing is stored to say "draft": a clip's Assets row already
+  holds its model and resolution, and `drafts.of_row` / `in_concept` / `on_the_wall` read them;
+  a clip is called a draft only while it is STILL the clip on its shot. **Finish keeps the take
+  that was liked.** A second render at a higher resolution is a different clip (the models
+  take no seed; Seedance 2.5's schema has none), so finishing is item 3's `upscale` effect
+  (Topaz, 2x) run on the draft itself: `EffectBody.finish` on `/api/effects/quote` and `/run`
+  -- the same checks, the same price-shown-then-approved rule, the same hold; never a second
+  way to spend -- with `drafts.finish_target` proving the one source is, right now, the clip
+  on a shot of this account's scene (a clip since replaced is refused: finishing it would
+  overwrite the newer one), and `drafts.attach` putting the result on the part
+  (`timeline.attach_part`) or the shot in the draft's place and filing the new render under
+  the scene (`render_assets.link`). The draft stays on the wall. A finish whose shot has gone
+  is a DONE job that says so -- the clip was paid for and is in the Library. On the Queue's
+  "Ready to cut" card (`GET /api/cut/ready` lists each scene's `drafts` and what a finish
+  runs): "all drafts · 480p" and one **Finish shot NN** per draft, two clicks like the
+  keyboard's approve -- the first asks the price and shows it on the button, the second spends
+  at exactly that. The Library's rail says when a clip is a draft and points at the Queue.
+  **What it costs, said plainly:** the upscale is priced by `effects._topaz_usd` off the
+  clip's measured size, and a 480x854 draft doubles to 960x1708 -- above 1080 on its long
+  side, so the dearest tier ($0.08/s; 96 credits for five seconds). fal's page does not say
+  which dimension its tiers measure, and the table reads it the dear way so a quote is never
+  under the invoice. So on Wan 3.0 a five-second shot is 60 credits to draft and 96 to finish
+  -- more than its 120 at 720p outright, less than its 240 at 1080p: drafting pays when not
+  every take is kept, or when 1080p was the aim. On Seedance 2.5 it is 265 + 96 against 568
+  and 1,397. A finished clip is 960x1708, not native 1080p. Not built: a draft on a cheaper
+  sibling model (Veo Fast, a Kling standard tier -- each is a table row that has to be
+  checked first), re-rendering one shot at full resolution, finishing from the composer or the
+  connector, and a cut already made in the editor keeps the draft clips it was built from.
 - **ONE conversation, and it is saved (2026-10-02, Mike: "when I click out of the
   studio page the entire conversation, images that were generated goes away").** The
   Studio composer's Guide thread was React state in `web/src/app/studio/page.tsx`, so

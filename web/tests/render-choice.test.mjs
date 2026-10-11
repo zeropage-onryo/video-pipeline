@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { held, usable, firstUsable, defaultPick, pickFor, withModel, planFor, approveText, chipText, creditsText, legalDuration, specOf } from '../src/lib/render-choice.ts';
+import { held, usable, firstUsable, defaultPick, pickFor, withModel, planFor, approveText, chipText, creditsText, legalDuration, specOf, draftFrame, isDraft, withDraft } from '../src/lib/render-choice.ts';
 
 const choices = (values, d) => ({ kind: 'choices', values, default: d });
 const renderers = {
@@ -104,3 +104,35 @@ test('an exempt account still sees the price, marked not charged', () => {
   assert.equal(approveText(planFor(spec, pick, null, null), true), 'Approve · 1 shot · pricing…');
   assert.equal(approveText(planFor(spec, pick, null, { error: 'band' }), true), 'Approve · 1 shot · refused');
 });
+
+test('a draft is the same approve at the frame the catalogue names, and nothing else', () => {
+  const wan = {
+    id: 'wan3', label: 'wan3 (wan)', draft: '480p',
+    duration: { kind: 'range', min: 2, max: 10, default: 5 },
+    frame: { kind: 'choices', values: ['480p', '720p', '1080p'], default: '720p' },
+  };
+  const pick = { provider: 'fal', model: 'wan3', duration: 5, frame: '720p' };
+  assert.equal(draftFrame(wan), '480p');
+  assert.equal(isDraft(wan, pick), false);
+  const drafting = withDraft(wan, pick, true);
+  assert.deepEqual(drafting, { ...pick, frame: '480p' });
+  assert.equal(isDraft(wan, drafting), true);
+  // off again is the frame the model renders at by default, not whatever came before
+  assert.equal(withDraft(wan, { ...drafting }, false).frame, '720p');
+  assert.equal(withDraft(wan, { ...pick, frame: '1080p' }, false).frame, '720p');
+  // the button says which it is; the price is still the server's
+  const plan = { timed: true, n: 2, lengths: [5, 5], usd: 0.5, credits: 120, refused: '' };
+  assert.equal(approveText(plan, false, true), 'Draft · 2 shots · 120 cr');
+  assert.equal(approveText(plan, false, false), 'Approve · 2 shots · 120 cr');
+
+  // a model with no draft offers none, whatever is asked of it
+  const kling = { ...wan, id: 'kling', draft: null, frame: { kind: 'fixed', values: ['1080p'], default: '1080p' } };
+  assert.equal(draftFrame(kling), null);
+  assert.equal(isDraft(kling, { ...pick, frame: '1080p' }), false);
+  assert.deepEqual(withDraft(kling, pick, true), pick);
+  // a draft frame the card cannot pick is not a draft (a stale catalogue)
+  assert.equal(draftFrame({ ...wan, draft: '360p' }), null);
+  assert.equal(draftFrame(null), null);
+  assert.equal(isDraft(wan, null), false);
+});
+

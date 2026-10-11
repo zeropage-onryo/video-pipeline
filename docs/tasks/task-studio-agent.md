@@ -45,7 +45,7 @@ then **"go"** on the batch below.
 | 2. Plan with step cards | built 2026-10-10 | see "As built" below |
 | 3. Effects in chat | built 2026-10-10 | see "As built" below |
 | 4. "Continue" actions on results | built 2026-10-10 | see "As built" below |
-| 5. Draft, then finish | not started | fal's draft price has to be checked first |
+| 5. Draft, then finish | built 2026-10-11 | see "As built" below |
 
 ## The batch
 
@@ -273,4 +273,61 @@ Known limits:
 - Results on the dock and in a project's workspace do not have the row; it is the composer's.
 - "Price on the send button" is only ever a still's price. A scene is free to write, and a
   clip is bought in the Queue.
+
+## Item 5 -- Draft, then finish: as built (2026-10-11)
+
+`src/drafts.py`, `fal.draft_resolution`, the `finish` flag on the effects routes in
+`app/api.py`, `GET /api/cut/ready`'s `drafts`, the Draft toggle and Finish buttons in
+`web/src/app/studio/queue/page.tsx`; the `CLAUDE.md` entry "DRAFT, THEN FINISH" is the
+description of record.
+
+The precondition, done first: fal's rate cards were read again on 2026-10-11. Wan 3.0 is
+$0.05 / $0.10 / $0.20 per second at 480p / 720p / 1080p and Seedance 2.5 is $0.2205 / $0.4730 /
+$1.164, both as the table already had them. Seedance 2.5's schema takes 1080p and has no seed.
+
+- **Draft is the Queue's own approve at the model's cheapest resolution.** The card shows
+  "Draft first · 480p · cheaper" under the renderer; turning it on changes the price on the
+  one Approve button, which then reads "Draft · 3 shots · 636 credits". Nothing else spends.
+- **Offered only where it is really cheaper.** Today: Wan 3.0 and Seedance 2.5. The other
+  seven models have no lower-priced tier than the one they render at by default, so their
+  cards show no Draft.
+- **Finish keeps the take.** A drafted scene lands in "Ready to cut" marked "all drafts ·
+  480p" with a Finish button per shot. The first click shows the price; the second upscales
+  that clip (2x) and puts it on its shot in the draft's place. The draft stays in the Library.
+- **Finish is the upscale effect from item 3 with a target**, not a new way to spend: the same
+  quote, the same "runs at the price shown or not at all", the same hold.
+- The Library says when a clip is a draft and points at the Queue.
+
+What it costs, measured on the stub with the real price code (five-second shots):
+
+| | draft | finish | draft + finish | 720p outright | 1080p outright |
+|---|---|---|---|---|---|
+| Wan 3.0 | 60 | 96 | 156 | 120 | 240 |
+| Seedance 2.5 | 265 | 96 | 361 | 568 | 1,397 |
+
+So on Wan 3.0, drafting saves credits only when some takes are thrown away, or when 1080p was
+the aim. On Seedance 2.5 it saves on every shot. A finished clip is 960x1708, between 720p and
+1080p, not native 1080p.
+
+Checked: `tests/test_drafts.py`, a new case in `web/tests/render-choice.test.mjs`; then in a
+browser against the real Queue approve path (spend gate, cap, generations rows, clips attached
+to their parts, Assets rows) with only the provider's HTTP call replaced by a local test
+clip: the toggle and its price on Wan 3.0 (240 -> 120) and Seedance 2.5 (1,365 -> 636), no
+toggle on a model without a draft, a draft approved and rendered, the scene listed with its
+drafts, a Finish priced (96) then run, the finished clip on its shot and filed under the
+scene, and the Library's label. **No real render or upscale was made.**
+
+Known limits:
+- **The upscale's price is read the dear way.** fal prices Topaz by output size in three
+  tiers and does not say which dimension it measures. A portrait 480p draft doubles to
+  960x1708; the table treats that as "above 1080p" ($0.08 a second). If fal bills it as
+  "720p to 1080p" the real cost is a quarter of that, and the customer is still charged the
+  96. The first real finish is the check: compare fal's invoice line with the quote.
+- Two models have a draft. Cheaper sibling models (Veo Fast, a Kling standard tier) would
+  widen that, and each needs its table row checked first.
+- There is no "render this one shot again at full resolution". Finish is the upscale only.
+- Finish is on the Queue page. The composer and the claude.ai connector cannot finish a
+  draft, though the connector can already approve at the draft resolution.
+- A cut already made in the editor keeps the draft clips it was built from. Export again, or
+  swap the clip in the editor.
 

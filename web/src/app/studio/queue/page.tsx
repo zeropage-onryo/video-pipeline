@@ -43,6 +43,8 @@ import {
   clearJob,
   cutAssemble,
   cutReady,
+  quoteEffect,
+  runEffect,
   cutUploadMedia,
   drawKeyframes,
   fileLaneClip,
@@ -60,6 +62,8 @@ import {
   waitForJob,
   type Concept,
   type CutReady,
+  type DraftClip,
+  type FinishSpec,
   type Job,
   type LaneItem,
   type RenderChoice,
@@ -78,6 +82,9 @@ import {
   approveText,
   chipText,
   creditsText,
+  draftFrame,
+  isDraft,
+  withDraft,
   NOT_CHARGED,
   held,
   legalDuration,
@@ -134,6 +141,11 @@ export default function QueuePage() {
   const [cutOk, setCutOk] = useState(true);
   const [cutting, setCutting] = useState<Record<number, number>>({});
   const [beds, setBeds] = useState<Record<number, { handle?: string; name: string }>>({});
+  // finishing a draft (src/drafts.py): what a finish runs, the server's, and
+  // each draft clip's button -- unpriced, priced (the next click spends),
+  // or running -- by the clip's render id
+  const [finishSpec, setFinishSpec] = useState<FinishSpec | null>(null);
+  const [fin, setFin] = useState<Record<string, { state: "pricing" | "priced" | "running"; credits?: number }>>({});
   /* the keyboard (lib/verdict-keys.ts): the card the keys act on, whether
      its ring is showing (a key shows it, a click hides it -- the
      :focus-visible rule), and the card whose Approve the first A armed */
@@ -180,6 +192,7 @@ export default function QueuePage() {
         if (stale()) return;
         setReady(r.ready);
         setCutOk(r.ffmpeg);
+        setFinishSpec(r.finish ?? null);
       })
       .catch(() => {
         if (!stale()) setReady([]);
@@ -348,6 +361,47 @@ export default function QueuePage() {
     loadPending();
     toast(`${c.n} is back in the Queue`);
   };
+  /* FINISH a draft (src/drafts.py): upscale the take that was kept and put
+     it on its shot. Two clicks, like the keyboard's approve: the first asks
+     the server what it costs and shows it on the button, the second spends
+     at exactly that price (the route refuses a price that moved). */
+  const finishDraft = async (d: DraftClip) => {
+    const cur = fin[d.ref];
+    if (!finishSpec || cur?.state === "pricing" || cur?.state === "running") return;
+    const body = { effect: finishSpec.effect, sources: [d.ref], prompt: "", options: finishSpec.options, finish: true };
+    const forget = () =>
+      setFin((w) => {
+        const next = { ...w };
+        delete next[d.ref];
+        return next;
+      });
+    if (cur?.state !== "priced" || cur.credits == null) {
+      setFin((w) => ({ ...w, [d.ref]: { state: "pricing" } }));
+      try {
+        const q = await quoteEffect(body);
+        setFin((w) => ({ ...w, [d.ref]: { state: "priced", credits: q.credits } }));
+      } catch (e) {
+        forget();
+        toast(e instanceof Error ? e.message : "That draft cannot be finished", "err");
+      }
+      return;
+    }
+    setFin((w) => ({ ...w, [d.ref]: { state: "running", credits: cur.credits } }));
+    try {
+      const started = await runEffect({ ...body, expect_credits: cur.credits });
+      const job = await waitForJob(started.job_id);
+      announceBalanceChange();
+      if (job.status !== "done") throw new Error(job.error || "The clip was not finished. Nothing was charged.");
+      toast(job.detail || "Finished", "ok");
+      loadReady();
+    } catch (e) {
+      // a price that moved is asked again on the next click, never run
+      toast(e instanceof Error ? e.message : "That did not go through", "err");
+    } finally {
+      forget();
+    }
+  };
+
   const decide = async (c: Concept, what: "approve" | "reject" | "shot") => {
     setBusy((b) => ({ ...b, [c.id]: what }));
     setPopId(null);
@@ -569,7 +623,7 @@ export default function QueuePage() {
                   ? `${spec.id} renders ${spec.duration.min}-${spec.duration.max}s`
                   : cannotAfford(plan)
                     ? `Need ${plan.credits!.toLocaleString("en-US")} cr · have ${Math.max(balance!.available, 0).toLocaleString("en-US")}`
-                    : approveText(plan, exempt);
+                    : approveText(plan, exempt, isDraft(spec, pick));
     return { pick, locked, did, r, spec, quote, plan, disabled, label };
   };
 
@@ -976,6 +1030,7 @@ export default function QueuePage() {
                                       onClick={() => hold(c, { ...pick, frame: String(f) })}
                                     >
                                       {String(f)}
+                                      {String(f) === draftFrame(spec) ? " · draft" : ""}
                                     </button>
                                   ))}
                                 </div>
@@ -988,6 +1043,22 @@ export default function QueuePage() {
                     </Popover.Positioner>
                   </Popover.Portal>
                 </Popover.Root>
+
+                {pick && spec && draftFrame(spec) && !locked && !did ? (
+                  // Draft, then finish (src/drafts.py): the same approve at this
+                  // model's cheapest frame. It only changes the pick -- the priced
+                  // button below is still the one click that spends.
+                  <button
+                    type="button"
+                    aria-pressed={isDraft(spec, pick)}
+                    disabled={!!busy[c.id]}
+                    title={`Render at ${draftFrame(spec)} first: the cheapest ${spec.id} makes. Finish the take you keep from Ready to cut.`}
+                    className={`${pill(isDraft(spec, pick))} w-full`}
+                    onClick={() => hold(c, withDraft(spec, pick, !isDraft(spec, pick)))}
+                  >
+                    {isDraft(spec, pick) ? `Drafting at ${draftFrame(spec)} · tap for full quality` : `Draft first · ${draftFrame(spec)} · cheaper`}
+                  </button>
+                ) : null}
 
                 <div className="flex min-w-0 gap-2">
                   <button
@@ -1073,6 +1144,39 @@ export default function QueuePage() {
                       </span>
                     )}
                   </div>
+                  {item.drafts?.length ? (
+                    <div className="scdrafts">
+                      <span className="m" title="Rendered at the model's cheapest resolution. Finish upscales the take you keep and puts it on its shot.">
+                        {item.drafts.length === item.clips ? "all drafts" : `${item.drafts.length} of ${item.clips} drafts`} · {item.drafts[0].frame}
+                      </span>
+                      {item.drafts.map((d) => {
+                        const f = fin[d.ref];
+                        const n = String(d.part ?? d.shot_n).padStart(2, "0");
+                        return (
+                          <button
+                            key={d.ref}
+                            type="button"
+                            className={`tag${f?.state === "priced" ? " on" : ""}`}
+                            disabled={!finishSpec || f?.state === "pricing" || f?.state === "running"}
+                            title={
+                              f?.state === "priced"
+                                ? "Click again to finish it at this price"
+                                : "Upscale this draft and put it on its shot. The first click only shows the price."
+                            }
+                            onClick={() => void finishDraft(d)}
+                          >
+                            {f?.state === "running"
+                              ? `Finishing ${n}…`
+                              : f?.state === "pricing"
+                                ? "Pricing…"
+                                : f?.state === "priced" && f.credits != null
+                                  ? `Finish ${n} · ${creditsText(f.credits, exempt)}`
+                                  : `Finish shot ${n}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   <div className="scchoice">
                     <label className="scsel" title="An optional music bed — it ducks under the clips' own sound">
                       <Music size={11} />

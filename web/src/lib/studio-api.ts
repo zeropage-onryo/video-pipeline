@@ -238,6 +238,9 @@ export type MediaItem = {
   generated_id?: number;
   provider?: string | null;
   model?: string | null;
+  /** this clip is a cheap draft of its shot (src/drafts.py): the frame it
+   *  was rendered at. Finishing it is the Queue's "Ready to cut" button. */
+  draft?: { frame: string; model: string } | null;
   concept_id?: number | null;
   shot_n?: number | null;
   prompt?: string;
@@ -406,6 +409,8 @@ export type ModelSpec = {
   frame: Axis;
   verified?: string | null;
   price?: { kind: "per_second" | "flat" | "unknown"; usd?: number; usd_by_frame?: Record<string, number> };
+  /** the frame a draft renders at (src/drafts.py), or null: none offered */
+  draft?: string | null;
 };
 export type RendererSpec = {
   label: string;
@@ -596,10 +601,16 @@ export type CutReady = {
   clips: number;
   poster?: string | null;
   export: { timeline_id: number; version: number; url: string | null } | null;
+  /** the shots still on a cheap draft clip (src/drafts.py), each named by
+   *  the render id Finish takes */
+  drafts?: DraftClip[];
 };
+export type DraftClip = { shot_n: number; part: number | null; label: string; ref: string; frame: string; model: string };
+/** what finishing a draft runs: the effect and its options, the server's */
+export type FinishSpec = { effect: string; options: Record<string, OptionValue> };
 /** GET /api/cut/ready — scenes whose every shot has a clip, not archived. */
 export const cutReady = (brand?: string) =>
-  apiFetch<{ ready: CutReady[]; ffmpeg: boolean; captions_burn: boolean }>(
+  apiFetch<{ ready: CutReady[]; ffmpeg: boolean; captions_burn: boolean; finish?: FinishSpec }>(
     `/cut/ready${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`,
   );
 /** POST /api/cut/assemble — a job; its result carries mp4_url + version.
@@ -832,7 +843,15 @@ export type EffectsCatalogue = {
   exempt: boolean;
 };
 export const getEffects = () => apiFetch<EffectsCatalogue>("/effects");
-export type EffectRequest = { effect: string; sources: string[]; prompt: string; options: Record<string, OptionValue> };
+export type EffectRequest = {
+  effect: string;
+  sources: string[];
+  prompt: string;
+  options: Record<string, OptionValue>;
+  /** FINISH a draft: the one source is a scene's draft clip, and what the
+   *  upscale makes is put on that shot in its place (src/drafts.py) */
+  finish?: boolean;
+};
 export type EffectQuote = { effect: string; label: string; output: string; credits: number; charged: boolean };
 /** what it costs, in credits; spends nothing */
 export const quoteEffect = (body: EffectRequest) =>

@@ -178,6 +178,9 @@ def _fal_models() -> list[dict]:
                                   note=f"{name} takes no resolution field -- it "
                                        f"renders at {default_res}")),
             "verified": spec.get("checked"),
+            # the frame a DRAFT renders at, or None when this model has no
+            # cheaper tier than its default (src/drafts.py, 2026-10-11)
+            "draft": fal.draft_resolution(name),
         })
     return out
 
