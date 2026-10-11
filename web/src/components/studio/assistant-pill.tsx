@@ -64,7 +64,9 @@ import {
   DOCK,
   clampDock,
   loadDockHeight,
+  isCreatePage,
   loadPark,
+  restingPark,
   saveDockHeight,
   savePark,
   type Park,
@@ -330,12 +332,12 @@ export function AssistantPill() {
   useEffect(() => {
     const root = document.documentElement;
     const phoneNow = window.matchMedia(PHONE).matches;
-    const px = open ? dockH + 24 : park.small ? 110 : phoneNow ? 170 : 340;
+    const px = open ? dockH + 24 : park.small || isCreatePage(pathname) ? 110 : phoneNow ? 170 : 340;
     root.style.setProperty("--zpa-clear", `${px}px`);
     return () => {
       root.style.removeProperty("--zpa-clear");
     };
-  }, [open, dockH, park.small]);
+  }, [open, dockH, park.small, pathname]);
 
   /* The dock's handle: drag it (the height is set on the element while
      dragging, and kept on let-go) or press the arrow keys. */
@@ -643,9 +645,13 @@ export function AssistantPill() {
   // a floating pill over the timeline would be a second, competing one
   if (/^\/studio\/cut\/[^/]+/.test(pathname)) return null;
   // the Studio composer has the Guide IN its box, on this same thread
-  // (2026-10-02, the composer mock): a pill floating over the send button
-  // would be the same helper twice, so it stays off on that one page
-  if (pathname.replace(/\/$/, "") === "/studio") return null;
+  // (2026-10-02, the composer mock), so the creature does not float there at
+  // full size with its thoughts -- but it is there, small in its corner
+  // (2026-10-10, Mike's call; lib/creature.ts restingPark). A click opens the
+  // dock on the same thread; it cannot be made big on this page, and a drag
+  // keeps the size it rests at elsewhere.
+  const onCreate = isCreatePage(pathname);
+  const rest = restingPark(park, pathname);
 
   const pillLine = !project
     ? "Ask me anything"
@@ -773,12 +779,18 @@ export function AssistantPill() {
         ];
 
   const settingUp = setup || !persona;
-  const creatureLabel = park.small
+  const creatureLabel = onCreate
+    ? open
+      ? `Lower ${name}`
+      : `Open ${name}${unread ? ` — ${unread} new ${unread === 1 ? "answer" : "answers"}` : ""}`
+    : rest.small
     ? `Bring ${name} back`
     : open
       ? `Lower ${name}`
       : `Open ${name}${unread ? ` — ${unread} new ${unread === 1 ? "answer" : "answers"}` : ""}`;
-  const creatureTitle = park.small
+  const creatureTitle = onCreate
+    ? `${faceTitle} · click to ${open ? "lower the dock" : "talk"}`
+    : rest.small
     ? `${faceTitle} · click to bring me back`
     : `${faceTitle} · click to ${open ? "lower the dock" : "talk"}, double-click to make me small`;
   // one body, flown between the corner and the dock's seat
@@ -793,25 +805,26 @@ export function AssistantPill() {
         face={settingUp && docked ? "listening" : face}
         progress={progress}
         unread={open ? 0 : unread}
-        small={!docked && park.small}
+        small={!docked && rest.small}
         docked={docked}
         label={creatureLabel}
         title={creatureTitle}
-        park={park}
+        park={rest}
         onAct={() => {
-          if (park.small) movePark({ ...park, small: false });
+          if (rest.small && !onCreate) movePark({ ...park, small: false });
           else if (open) setOpen(false);
           else openDock();
         }}
         onSmall={() => {
+          if (onCreate) return;
           setOpen(false);
           movePark({ ...park, small: !park.small });
         }}
-        onDrop={movePark}
+        onDrop={(p) => movePark(onCreate ? { ...p, small: park.small } : p)}
       />
     </motion.div>
   );
-  const mode = open ? "dock" : park.small ? "small" : "full";
+  const mode = open ? "dock" : rest.small ? "small" : "full";
 
   return (
     <div
@@ -820,6 +833,7 @@ export function AssistantPill() {
       data-face={face}
       data-side={park.side}
       data-mode={mode}
+      data-create={onCreate ? "1" : undefined}
       style={{ "--zpa-y": `${park.y}px` } as CSSProperties}
     >
       <AnimatePresence initial={false}>
@@ -894,6 +908,7 @@ export function AssistantPill() {
                       >
                         <Settings2 strokeWidth={1.6} />
                       </button>
+                      {onCreate ? null : (
                       <button
                         type="button"
                         className="zpa-icon"
@@ -906,6 +921,7 @@ export function AssistantPill() {
                       >
                         <Minimize2 strokeWidth={1.6} />
                       </button>
+                      )}
                       <button type="button" className="zpa-icon" title="Lower the dock" aria-label="Lower the dock" onClick={() => setOpen(false)}>
                         <ChevronDown strokeWidth={1.6} />
                       </button>
@@ -1054,7 +1070,7 @@ export function AssistantPill() {
       </AnimatePresence>
       {open ? null : (
         <div className="zpa-rest">
-          {park.small ? null : <Thoughts lead={lead} ideas={ideas} busy={busy} name={name} />}
+          {rest.small ? null : <Thoughts lead={lead} ideas={ideas} busy={busy} name={name} />}
           {creature(false)}
         </div>
       )}
